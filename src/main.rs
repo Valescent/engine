@@ -1,3 +1,3 @@
-fn main() {
-    println!("Hello, world!");
+fn main() -> Result<(), engine::RunError> {
+    engine::run()
 }
