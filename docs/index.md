@@ -2,7 +2,7 @@
 
 <p class="lede">A voxel engine written in Rust, built one milestone at a time.</p>
 
-The engine is **pre-alpha**. [Version `0.0.1`](roadmap.md) is complete: a window, a static camera, and cubes drawn from a voxel set instead of hardcoded draw calls. Everything after it is still a plan.
+The engine is **pre-alpha**. [Version `0.0.1`](roadmap.md) is complete, and `0.0.2` adds a fly camera for inspecting the cube scene. Everything after that is still a plan.
 
 ## Start here
 

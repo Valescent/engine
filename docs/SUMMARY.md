@@ -8,6 +8,7 @@
 - [Conventions](dev/conventions.md)
 - [Roadmap](roadmap.md)
 - [v0.0.1 scope](dev/v0.0.1-scope.md)
+- [v0.0.2 scope](dev/v0.0.2-scope.md)
 
 # Architecture
 

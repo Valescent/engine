@@ -29,7 +29,7 @@ The engine is a voxel renderer, and voxel rendering stresses a graphics API in s
 - **Instanced or batched geometry.** Greedy meshing and LOD produce variable vertex counts that must be uploaded dynamically.
 - **Texture atlases and bind groups.** Block textures live in a single atlas, so bind group layout is stable and shared.
 - **GPU compute is optional but plausible.** The stretch goals include SVDAG compression and GPU raymarching, which need compute support.
-- **Frequent shader iteration.** Lighting, fog, water, and ambient occlusion all arrive as shader work in later milestones (roadmap v0.0.5).
+- **Frequent shader iteration.** Lighting, fog, water, and ambient occlusion all arrive as shader work in later milestones (roadmap v0.0.6).
 - **Portability is uncertain.** I want a native build now and a browser build is plausible later; I do not want to rewrite the renderer to get it.
 
 These requirements favor an API with explicit resource management, multi-backend support, and strong validation, rather than the lowest-level platform API on a single OS.

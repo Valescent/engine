@@ -27,7 +27,7 @@ Performance work in this engine has specific characteristics:
 - **Frame-shaped problems.** The unit of interest is a frame: 16.6 ms at 60 Hz, with a budget split between meshing, upload, and rendering. Averages hide the hitches that matter.
 - **Intermittent stalls.** Breaking a block rebuilds one chunk; if that rebuild lands on the main thread, a single spike is what breaks the experience. Statistical sampling over a long run smooths exactly that spike away.
 - **Two costs to separate.** Is a frame slow because the CPU is meshing and uploading, or because the GPU is fill-rate or draw-call bound? Only a tool that shows both timelines answers that.
-- **Worker threads.** Chunk generation and meshing move to worker threads in roadmap v0.0.4. Stalls caused by contention or queueing do not appear on a single main-thread profile.
+- **Worker threads.** Chunk generation and meshing move to worker threads in roadmap v0.0.5. Stalls caused by contention or queueing do not appear on a single main-thread profile.
 - **Invisible abstractions.** The wgpu decision (ADR-0002) promises to measure draw-call and abstraction overhead rather than assume it. That requires instrumentation at the encoder and pass level, not just a frame counter.
 - **Fast iteration.** I need to profile the build I am currently running, without recompiling with special flags, restarting, or replaying a capture.
 

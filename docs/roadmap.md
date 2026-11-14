@@ -5,11 +5,12 @@
 | Version | Name                  | Status |
 |---------|-----------------------|--------|
 | 0.0.1   | The Foundation        | [x]    |
-| 0.0.2   | Chunks and Meshes     | [ ]    |
-| 0.0.3   | Playable              | [ ]    |
-| 0.0.4   | Scale and Performance | [ ]    |
-| 0.0.5   | Atmosphere            | [ ]    |
-| 0.0.6   | Advanced Horizons     | [ ]    |
+| 0.0.2   | Camera                | [x]    |
+| 0.0.3   | Chunks and Meshes     | [ ]    |
+| 0.0.4   | Playable              | [ ]    |
+| 0.0.5   | Scale and Performance | [ ]    |
+| 0.0.6   | Atmosphere            | [ ]    |
+| 0.0.7   | Advanced Horizons     | [ ]    |
 
 ---
 
@@ -50,26 +51,60 @@ See [v0.0.1 scope](dev/v0.0.1-scope.md) for the concrete deliverables, technical
 
 ---
 
-## v0.0.2: Chunks and Meshes
+## v0.0.2: Camera
 
-**Status:** [ ]
-**Goal:** Replace per-cube draw calls with per-chunk meshes.
-**Summary:** Drawing each cube individually bottlenecks CPU and GPU. This is the core architectural shift of a voxel engine.
+**Status:** [x]
+**Goal:** Fly through the scene with keyboard and mouse.
+**Summary:** A movable camera makes the world inspectable and proves the frame time holds while the view changes.
+
+See [v0.0.2 scope](dev/v0.0.2-scope.md) for the concrete deliverables, technical shape, and acceptance checklist.
 
 ### Milestones
 
-#### 1. Single world mesh
-- [ ] Generate one vertex buffer for all visible faces
-- [ ] Upload once, render in a single draw call
+#### 1. Camera controller
+- [x] First-person fly camera with position, yaw, and pitch
+- [x] Pitch clamped to ±89°
+- [x] WASD movement relative to the view direction
+- [x] Mouse look with pointer capture; `Escape` releases the cursor
 
-#### 2. Chunks
-- [ ] Fixed-size chunks (e.g. 32×32×32)
+#### 2. Frame loop
+- [x] Delta-time movement independent of frame rate
+- [x] Continuous redraw while focused
+- [x] Frame-time logging while moving
+
+### Definition of Done
+- Fly smoothly through the cube scene with WASD and mouse
+- `Escape` releases the cursor without closing the window
+- Movement is frame-rate independent and the camera survives resizes
+- Frame time stays stable while moving
+
+### Non-Goals
+- Collision, gravity, jumping, walking
+- Voxel raycasting, block interaction
+- Chunks, meshing, textures, persistence
+
+---
+
+## v0.0.3: Chunks and Meshes
+
+**Status:** [ ]
+**Goal:** Split the world into chunks and stop emitting hidden faces.
+**Summary:** v0.0.1 draws one mesh for the whole world. Chunks make edits local and keep draw work proportional to the visible world.
+
+### Milestones
+
+#### 1. Chunks
+- [ ] Fixed-size chunks (32×32×32)
 - [ ] Each chunk owns its voxels and its mesh
-- [ ] Block change rebuilds only the affected chunk's mesh
+- [ ] Block change rebuilds only the affected chunk and any neighbour whose boundary faces changed
 
-#### 3. Face culling
+#### 2. Face culling
 - [ ] Only emit faces exposed to air
-- [ ] No faces between two solid blocks
+- [ ] No faces between two solid blocks, including across chunk boundaries
+
+#### 3. Per-chunk rendering
+- [ ] One vertex buffer per non-empty chunk
+- [ ] Empty chunks release their GPU buffers
 
 ### Definition of Done
 - World made of multiple chunks
@@ -82,7 +117,7 @@ See [v0.0.1 scope](dev/v0.0.1-scope.md) for the concrete deliverables, technical
 
 ---
 
-## v0.0.3: Playable
+## v0.0.4: Playable
 
 **Status:** [ ]
 **Goal:** Walk around, break and place blocks, persist the world.
@@ -90,8 +125,8 @@ See [v0.0.1 scope](dev/v0.0.1-scope.md) for the concrete deliverables, technical
 
 ### Milestones
 
-#### 1. Player controls and collision
-- [ ] First-person camera controller
+#### 1. Walking and collision
+- [ ] Add gravity and ground checks to the v0.0.2 camera controller
 - [ ] Swept AABB collision against voxel terrain
 
 #### 2. Block interaction
@@ -117,7 +152,7 @@ See [v0.0.1 scope](dev/v0.0.1-scope.md) for the concrete deliverables, technical
 
 ---
 
-## v0.0.4: Scale and Performance
+## v0.0.5: Scale and Performance
 
 **Status:** [ ]
 **Goal:** Large view distances at a smooth frame rate.
@@ -148,7 +183,7 @@ See [v0.0.1 scope](dev/v0.0.1-scope.md) for the concrete deliverables, technical
 
 ---
 
-## v0.0.5: Atmosphere
+## v0.0.6: Atmosphere
 
 **Status:** [ ]
 **Goal:** Make the world look good.
@@ -178,7 +213,7 @@ See [v0.0.1 scope](dev/v0.0.1-scope.md) for the concrete deliverables, technical
 
 ---
 
-## v0.0.6: Advanced Horizons
+## v0.0.7: Advanced Horizons
 
 **Status:** [ ]
 **Goal:** Turn the engine into a game-ready, procedurally generated world.

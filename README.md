@@ -2,7 +2,7 @@
 
 A voxel engine written in Rust.
 
-**Status: pre-alpha.** `0.0.1` is complete: a window, a static camera, and cubes drawn from a voxel set rather than hardcoded draw calls. Nothing in [`docs/roadmap.md`](docs/roadmap.md) past that is built yet.
+**Status: pre-alpha.** `0.0.1` is complete, and `0.0.2` adds a fly camera for inspecting the cube scene. Nothing in [`docs/roadmap.md`](docs/roadmap.md) past that is built yet.
 
 This is **source-available, not open source**. The code is under the [PolyForm Shield License 1.0.0](LICENSE): you may read, run, modify, and redistribute it, but not use it to provide a product that competes with it. PolyForm Shield is not OSI-approved.
 
@@ -22,7 +22,11 @@ cargo run
 
 ## Controls
 
-The camera is fixed. Press `Space` to add or remove the raised centre voxel.
+- `W` / `S` — move forward or back along the view direction
+- `A` / `D` — strafe left or right
+- Mouse — look around; click the window to capture the cursor
+- `Escape` — release the cursor
+- `Space` — add or remove the raised centre voxel
 
 ## Development
 

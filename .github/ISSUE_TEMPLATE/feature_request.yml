@@ -36,11 +36,12 @@ body:
       label: Which roadmap version does this belong to?
       options:
         - 0.0.1 The Foundation
-        - 0.0.2 Chunks and Meshes
-        - 0.0.3 Playable
-        - 0.0.4 Scale and Performance
-        - 0.0.5 Atmosphere
-        - 0.0.6 Advanced Horizons
+        - 0.0.2 Camera
+        - 0.0.3 Chunks and Meshes
+        - 0.0.4 Playable
+        - 0.0.5 Scale and Performance
+        - 0.0.6 Atmosphere
+        - 0.0.7 Advanced Horizons
         - Not on the roadmap
     validations:
       required: true
