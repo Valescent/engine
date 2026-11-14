@@ -1,0 +1,16 @@
+[book]
+title = "Valescent Engine"
+authors = ["Valescent"]
+description = "Documentation for Valescent Engine, a voxel engine written in Rust."
+language = "en"
+src = "docs"
+
+[build]
+build-dir = "book"
+create-missing = false
+
+[output.html]
+site-url = "/engine/"
+default-theme = "navy"
+git-repository-url = "https://github.com/Valescent/engine"
+edit-url-template = "https://github.com/Valescent/engine/edit/main/docs/{path}"

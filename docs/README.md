@@ -2,6 +2,8 @@
 
 Index and conventions for this folder. Keep this page current — it is the entry point when the docs folder grows past a handful of files.
 
+These files are also the source of the documentation site, built with mdBook (`book.toml`) and published to GitHub Pages. `SUMMARY.md` defines the site's navigation, so a new page is not on the site until it is listed there.
+
 ## Layout
 
 | Path | Contents |

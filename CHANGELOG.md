@@ -12,3 +12,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Repository scaffold: Cargo manifest, roadmap, architecture decision records, and PolyForm Shield 1.0.0 license.
 - Conventional Commits and changelog enforcement in continuous integration.
 - Release automation: one command bumps the version, tags it, and publishes a GitHub release.
+- Documentation site built with mdBook and published to GitHub Pages.
