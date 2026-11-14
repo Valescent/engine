@@ -41,19 +41,21 @@ See [`docs/dev/setup.md`](docs/dev/setup.md) for platform details and [`docs/dev
 | Path | Contents |
 |---|---|
 | `src/` | Library and binary crate. |
-| `docs/` | [Roadmap](docs/roadmap.md), [decision records](docs/README.md), development guide. |
+| `docs/` | [Roadmap](docs/roadmap.md), [decision records](docs/decisions/index.md), development guide. |
 | `scripts/` | Release tooling. |
 | `.github/` | CI, issue and pull request templates, Dependabot. |
 
 ## Documentation
 
-- [Roadmap](docs/roadmap.md) — versioned milestones, definitions of done, and non-goals.
-- [Architecture decision records](docs/README.md) — why the engine uses Rust, `wgpu`, `winit`, `glam`, and `bytemuck`.
-- [Changelog](CHANGELOG.md) — user-visible changes.
+The documentation site is published at **https://valescent.github.io/engine/**.
+
+- [Roadmap](docs/roadmap.md) - versioned milestones, definitions of done, and non-goals.
+- [Architecture decision records](docs/decisions/index.md) - why the engine uses Rust, `wgpu`, `winit`, `glam`, `bytemuck`, and Tracy.
+- [Changelog](CHANGELOG.md) - user-visible changes.
 
 ## Contributing
 
-Contributions are welcome. Read [`CONTRIBUTING.md`](CONTRIBUTING.md) first: commits follow [Conventional Commits](https://www.conventionalcommits.org), user-facing changes need a changelog entry, and contributions require accepting [`CLA.md`](CLA.md).
+Contributions are welcome. Read [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) first: commits follow [Conventional Commits](https://www.conventionalcommits.org), user-facing changes need a changelog entry, and contributions require accepting [`docs/CLA.md`](docs/CLA.md).
 
 ## License
 

@@ -4,8 +4,8 @@ Thanks for looking. This is a pre-alpha engine, so the highest-value contributio
 
 ## Before you start
 
-- **Open an issue first** for anything larger than a typo. It saves you from building something that conflicts with the [roadmap](docs/roadmap.md).
-- **Architectural changes need an ADR.** Follow the process in [`docs/README.md`](docs/README.md): copy `docs/decisions/0000-template.md`, fill it in, and link it from the pull request.
+- **Open an issue first** for anything larger than a typo. It saves you from building something that conflicts with the [roadmap](roadmap.md).
+- **Architectural changes need an ADR.** Follow the process in [`decisions/index.md`](decisions/index.md): copy `decisions/0000-template.md`, fill it in, and link it from the pull request.
 - **Check the roadmap's Non-Goals** for the version you are touching. Deferred work is deferred on purpose.
 
 ## Setup
@@ -17,7 +17,7 @@ git config core.hooksPath .githooks
 cargo run
 ```
 
-`rust-toolchain.toml` pins the compiler; `rustup` installs it automatically. Platform details are in [`docs/dev/setup.md`](docs/dev/setup.md).
+`rust-toolchain.toml` pins the compiler; `rustup` installs it automatically. Platform details are in [`dev/setup.md`](dev/setup.md).
 
 The hook validates commit messages locally. It uses [cocogitto](https://docs.cocogitto.io) when installed and falls back to a built-in check otherwise:
 
@@ -56,8 +56,8 @@ CI requires a `CHANGELOG.md` change in any push or pull request containing `feat
 
 ## Licensing
 
-Contributions are accepted under the [PolyForm Shield License 1.0.0](LICENSE) and require accepting [`CLA.md`](CLA.md). The CLA preserves the project's ability to relicense later; it does not take ownership of your work. Until the signing bot is configured, a maintainer will ask you to confirm acceptance in the pull request.
+Contributions are accepted under the [PolyForm Shield License 1.0.0](../LICENSE) and require accepting [`CLA.md`](CLA.md). The CLA preserves the project's ability to relicense later; it does not take ownership of your work. Until the signing bot is configured, a maintainer will ask you to confirm acceptance in the pull request.
 
 ## Code
 
-Read [`docs/dev/conventions.md`](docs/dev/conventions.md) before writing engine code. In short: no `unsafe`, no panics in library paths, no global mutable state, and measure before optimizing.
+Read [`dev/conventions.md`](dev/conventions.md) before writing engine code. In short: no `unsafe`, no panics in library paths, no global mutable state, and measure before optimizing.

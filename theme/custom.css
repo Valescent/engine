@@ -1,0 +1,437 @@
+/* Valescent Engine documentation theme.
+   Loaded after mdBook's own stylesheets, so it only has to state what differs. */
+
+:root {
+    --content-max-width: 760px;
+    --page-padding: 26px;
+    --sidebar-target-width: 288px;
+    --menu-bar-height: 56px;
+    --body-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial, sans-serif;
+    --mono-font: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+        "Liberation Mono", monospace;
+    --radius: 6px;
+}
+
+.light {
+    --bg: #ffffff;
+    --fg: #17181d;
+    --muted: #5c5f6e;
+    --rule: #e6e7ec;
+
+    --sidebar-bg: #f8f8fa;
+    --sidebar-fg: #3c3f4a;
+    --sidebar-non-existant: #9a9dab;
+    --sidebar-active: #4b45c6;
+    --sidebar-active-bg: #ecebfb;
+    --sidebar-hover: #f0f0f4;
+    --sidebar-spacer: #e4e5eb;
+
+    --links: #4b45c6;
+    --inline-code-color: #453fa8;
+    --code-bg: #f6f6f9;
+    --code-border: #e6e7ee;
+
+    --quote-bg: #f7f7fb;
+    --quote-border: #e2e3ea;
+
+    --table-border-color: #e4e5ec;
+    --table-header-bg: #f5f5f9;
+    --table-alternate-bg: #fafafc;
+
+    --searchbar-border-color: #d7d8e2;
+    --searchbar-bg: #ffffff;
+    --searchbar-fg: #17181d;
+    --searchbar-shadow-color: #4b45c6;
+    --searchresults-header-fg: #6a6d7c;
+    --searchresults-border-color: #e4e5ec;
+    --searchresults-li-bg: #fafafc;
+    --search-mark-bg: #ffe28a;
+
+    --theme-popup-bg: #ffffff;
+    --theme-popup-border: #e4e5ec;
+    --theme-hover: #f4f4f8;
+
+    --icons: #6b6e7c;
+    --icons-hover: #17181d;
+
+    --scrollbar: #c9cad4;
+    --scrollbar-hover: #a9abb8;
+    --scrollbar-active: #8a8c9b;
+
+    --color-scheme: light;
+    --footnote-highlight: #d8d6ff;
+    --overlay-bg: rgba(23, 24, 29, 0.35);
+    --sidebar-header-border-color: #4b45c6;
+}
+
+.navy,
+.coal,
+.ayu,
+.rust {
+    --bg: #0e0f13;
+    --fg: #e6e7ee;
+    --muted: #a0a3b1;
+    --rule: #23252d;
+
+    --sidebar-bg: #131419;
+    --sidebar-fg: #b9bcc9;
+    --sidebar-non-existant: #6d7080;
+    --sidebar-active: #b4b2ff;
+    --sidebar-active-bg: #1e1f2b;
+    --sidebar-hover: #191a21;
+    --sidebar-spacer: #262833;
+
+    --links: #b4b2ff;
+    --inline-code-color: #c9c7ff;
+    --code-bg: #16171d;
+    --code-border: #262832;
+
+    --quote-bg: #16171d;
+    --quote-border: #262832;
+
+    --table-border-color: #242631;
+    --table-header-bg: #181a22;
+    --table-alternate-bg: #13141a;
+
+    --searchbar-border-color: #2c2e3a;
+    --searchbar-bg: #17181f;
+    --searchbar-fg: #e6e7ee;
+    --searchbar-shadow-color: #b4b2ff;
+    --searchresults-header-fg: #a0a3b1;
+    --searchresults-border-color: #242631;
+    --searchresults-li-bg: #16171d;
+    --search-mark-bg: #4a3d12;
+
+    --theme-popup-bg: #15161c;
+    --theme-popup-border: #2c2e3a;
+    --theme-hover: #1c1d25;
+
+    --icons: #9a9dad;
+    --icons-hover: #e6e7ee;
+
+    --scrollbar: #3a3c48;
+    --scrollbar-hover: #4d4f5d;
+    --scrollbar-active: #6a6c7b;
+
+    --color-scheme: dark;
+    --footnote-highlight: #34327a;
+    --overlay-bg: rgba(0, 0, 0, 0.55);
+    --sidebar-header-border-color: #b4b2ff;
+}
+
+/* ---- Page ------------------------------------------------------------- */
+
+.content {
+    font-family: var(--body-font);
+    font-size: 1.0625rem;
+    line-height: 1.68;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+}
+
+.content main {
+    max-width: 70ch;
+}
+
+.content h1,
+.content h2,
+.content h3,
+.content h4 {
+    font-family: var(--body-font);
+    color: var(--fg);
+    line-height: 1.25;
+    letter-spacing: -0.018em;
+}
+
+.content h1 {
+    font-size: 2.25rem;
+    font-weight: 680;
+    letter-spacing: -0.028em;
+    margin: 0 0 0.7em;
+}
+
+.content p.lede {
+    font-size: 1.125rem;
+    line-height: 1.6;
+    color: var(--muted);
+    max-width: 60ch;
+    margin: 0 0 1.5em;
+}
+
+.content h2 {
+    font-size: 1.4375rem;
+    font-weight: 640;
+    margin: 2.6em 0 0.75em;
+    padding-top: 0.9em;
+    border-top: 1px solid var(--rule);
+}
+
+.content h1 + h2 {
+    border-top: 0;
+    padding-top: 0;
+    margin-top: 1.8em;
+}
+
+.content h3 {
+    font-size: 1.125rem;
+    font-weight: 640;
+    margin: 2em 0 0.5em;
+}
+
+.content h4 {
+    font-size: 1rem;
+    font-weight: 650;
+    margin: 1.6em 0 0.4em;
+}
+
+.content p,
+.content li {
+    color: var(--fg);
+}
+
+.content p {
+    margin: 0.9em 0;
+}
+
+.content strong {
+    font-weight: 640;
+}
+
+.content a {
+    color: var(--links);
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-decoration-color: color-mix(in srgb, var(--links) 35%, transparent);
+    text-underline-offset: 0.18em;
+}
+
+.content a:hover {
+    text-decoration-color: currentColor;
+}
+
+.content ul,
+.content ol {
+    padding-left: 1.4em;
+}
+
+.content li {
+    margin: 0.35em 0;
+}
+
+.content li::marker {
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.content hr {
+    border: 0;
+    border-top: 1px solid var(--rule);
+    margin: 2.8em 0;
+}
+
+.content img {
+    max-width: 100%;
+    border-radius: var(--radius);
+}
+
+/* ---- Code ------------------------------------------------------------- */
+
+.content code {
+    font-family: var(--mono-font);
+    font-size: 0.875em;
+    background: var(--code-bg);
+    color: var(--inline-code-color);
+    border: 1px solid var(--code-border);
+    border-radius: 4px;
+    padding: 0.1em 0.34em;
+}
+
+.content pre {
+    background: var(--code-bg);
+    border: 1px solid var(--code-border);
+    border-radius: var(--radius);
+    padding: 0.95rem 1.1rem;
+    line-height: 1.6;
+    overflow-x: auto;
+}
+
+.content pre code {
+    background: none;
+    border: 0;
+    border-radius: 0;
+    padding: 0;
+    color: var(--fg);
+    font-size: 0.875em;
+}
+
+.content .hljs {
+    background: transparent;
+}
+
+/* ---- Tables ----------------------------------------------------------- */
+
+.content table {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    border-collapse: collapse;
+    border: 0;
+    margin: 1.6em 0;
+    font-size: 0.9375rem;
+}
+
+.content table th,
+.content table td {
+    border: 1px solid var(--table-border-color);
+    padding: 0.55em 0.8em;
+    text-align: left;
+    vertical-align: top;
+}
+
+.content table th {
+    background: var(--table-header-bg);
+    font-weight: 620;
+}
+
+.content table tr:nth-child(2n) {
+    background: var(--table-alternate-bg);
+}
+
+/* ---- Callouts --------------------------------------------------------- */
+
+.content blockquote {
+    margin: 1.6em 0;
+    padding: 0.7em 1.1em;
+    background: var(--quote-bg);
+    border-left: 1px solid var(--quote-border);
+    border-radius: 0 var(--radius) var(--radius) 0;
+    color: var(--fg);
+}
+
+.content blockquote p:first-child {
+    margin-top: 0;
+}
+
+.content blockquote p:last-child {
+    margin-bottom: 0;
+}
+
+/* ---- Sidebar ---------------------------------------------------------- */
+
+.sidebar {
+    font-family: var(--body-font);
+    font-size: 0.875rem;
+    background: var(--sidebar-bg);
+    border-right: 1px solid var(--rule);
+}
+
+.sidebar .chapter {
+    padding: 1.1rem 0.75rem 2rem;
+}
+
+.sidebar .chapter-item {
+    margin: 1px 0;
+    list-style: none;
+}
+
+.sidebar .chapter-link-wrapper {
+    display: block;
+}
+
+.sidebar .chapter a {
+    display: block;
+    padding: 0.4rem 0.65rem;
+    border-radius: 4px;
+    color: var(--sidebar-fg);
+    text-decoration: none;
+    line-height: 1.4;
+}
+
+.sidebar .chapter a:hover {
+    background: var(--sidebar-hover);
+    color: var(--fg);
+}
+
+.sidebar .chapter a.active,
+.sidebar .chapter-item.active > .chapter-link-wrapper > a {
+    background: var(--sidebar-active-bg);
+    color: var(--sidebar-active);
+    font-weight: 600;
+}
+
+.sidebar .chapter a strong {
+    display: none;
+}
+
+.sidebar .part-title {
+    margin: 1.9rem 0 0.35rem;
+    padding: 0 0.65rem;
+    color: var(--muted);
+    font-size: 0.6875rem;
+    font-weight: 650;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+}
+
+.sidebar .chapter:first-child .part-title:first-child {
+    margin-top: 0;
+}
+
+/* ---- Chrome ----------------------------------------------------------- */
+
+.menu-bar {
+    background: var(--bg);
+    border-bottom: 1px solid var(--rule);
+}
+
+.menu-bar .icon-button {
+    color: var(--icons);
+}
+
+.menu-bar .icon-button:hover {
+    color: var(--icons-hover);
+}
+
+.searchbar {
+    border-radius: var(--radius);
+}
+
+.searchresults-outer {
+    border-radius: var(--radius);
+}
+
+.nav-chapters {
+    color: var(--muted);
+}
+
+.nav-chapters:hover {
+    color: var(--links);
+}
+
+:focus-visible {
+    outline: 2px solid var(--links);
+    outline-offset: 2px;
+    border-radius: 2px;
+}
+
+::selection {
+    background: var(--footnote-highlight);
+}
+
+/* ---- Narrow screens --------------------------------------------------- */
+
+@media (max-width: 900px) {
+    .content {
+        font-size: 1rem;
+    }
+
+    .content h1 {
+        font-size: 1.9rem;
+    }
+
+    .content h2 {
+        font-size: 1.3125rem;
+    }
+}
