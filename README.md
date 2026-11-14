@@ -2,7 +2,7 @@
 
 A voxel engine written in Rust.
 
-**Status: pre-alpha.** `0.0.1` is the foundation milestone: a window, a camera, and cubes drawn from a voxel set rather than hardcoded draw calls. Nothing in [`docs/roadmap.md`](docs/roadmap.md) past that is built yet.
+**Status: pre-alpha.** `0.0.1` is complete: a window, a static camera, and cubes drawn from a voxel set rather than hardcoded draw calls. Nothing in [`docs/roadmap.md`](docs/roadmap.md) past that is built yet.
 
 This is **source-available, not open source**. The code is under the [PolyForm Shield License 1.0.0](LICENSE): you may read, run, modify, and redistribute it, but not use it to provide a product that competes with it. PolyForm Shield is not OSI-approved.
 
@@ -19,6 +19,10 @@ git clone https://github.com/Valescent/engine
 cd engine
 cargo run
 ```
+
+## Controls
+
+The camera is fixed. Press `Space` to add or remove the raised centre voxel.
 
 ## Development
 

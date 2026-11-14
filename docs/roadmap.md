@@ -4,7 +4,7 @@
 
 | Version | Name                  | Status |
 |---------|-----------------------|--------|
-| 0.0.1   | The Foundation        | [ ]    |
+| 0.0.1   | The Foundation        | [x]    |
 | 0.0.2   | Chunks and Meshes     | [ ]    |
 | 0.0.3   | Playable              | [ ]    |
 | 0.0.4   | Scale and Performance | [ ]    |
@@ -15,9 +15,11 @@
 
 ## v0.0.1: The Foundation
 
-**Status:** [ ]
+**Status:** [x]
 **Goal:** Voxels on screen, driven by data instead of hardcoded draw calls.
 **Summary:** Before you can have a world, you need a cube. Establish the rendering pipeline and core math.
+
+See [v0.0.1 scope](dev/v0.0.1-scope.md) for the concrete deliverables, technical shape, and acceptance checklist.
 
 ### Milestones
 
@@ -28,14 +30,14 @@
 - [x] Choose a math library
 
 #### 2. Render a single cube
-- [ ] `draw_cube(position)` (12 triangles or 6 quads)
-- [ ] Textured or flat-colored cube on screen
-- [ ] Basic camera (position, look direction, projection)
+- [x] `draw_cube(position)` (12 triangles or 6 quads)
+- [x] Textured or flat-colored cube on screen
+- [x] Basic camera (position, look direction, projection)
 
 #### 3. Basic voxel storage
-- [ ] Store voxels in a `HashSet<IVec3>`
-- [ ] Add/remove voxels at runtime
-- [ ] Rendering reflects changes immediately
+- [x] Store voxels in a `HashSet<IVec3>`
+- [x] Add/remove voxels at runtime
+- [x] Rendering reflects changes immediately
 
 ### Definition of Done
 - Window renders cubes from the voxel set

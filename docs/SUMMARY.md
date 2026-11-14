@@ -7,6 +7,7 @@
 - [Setup](dev/setup.md)
 - [Conventions](dev/conventions.md)
 - [Roadmap](roadmap.md)
+- [v0.0.1 scope](dev/v0.0.1-scope.md)
 
 # Architecture
 

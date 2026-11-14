@@ -10,7 +10,7 @@ The site is built with mdBook. `book.toml` configures it, `SUMMARY.md` defines t
 |---|---|
 | `index.md` | Landing page for the site. |
 | `roadmap.md` | Versioned milestones and their status. |
-| `dev/` | Development setup and code conventions. |
+| `dev/` | Development setup, code conventions, and milestone scope. |
 | `decisions/` | Architecture decision records, indexed in [`decisions/index.md`](decisions/index.md). |
 | `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `CLA.md` | Project policy. |
 
@@ -20,4 +20,4 @@ Add new top-level folders only when a real document needs them, for example `gui
 
 - **Links are relative.** Use `dev/setup.md`, not `/docs/dev/setup.md`, so the same link works on GitHub and in the book.
 - **One title per page.** The `#` heading is the title; do not repeat the page name in a subtitle.
-- **Roadmap stays flat.** Milestones live in one `roadmap.md`; per-version files are not worth the navigation cost until the file becomes unmanageable.
+- **Roadmap stays flat.** Milestones live in one `roadmap.md`; per-version files are not worth the navigation cost until the file becomes unmanageable. A scope page may expand one milestone's deliverables, but the roadmap remains the status source of truth.
