@@ -1,6 +1,10 @@
 [default]
 extend-ignore-re = ["(?m)^\\s*//\\s*spellchecker:disable-line.*$"]
 
+[type.css.extend-words]
+# mdBook ships this misspelled CSS variable name; renaming it breaks the theme.
+existant = "existant"
+
 [default.extend-words]
 Valescent = "Valescent"
 valescent = "valescent"
