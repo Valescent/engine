@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Fly camera: WASD movement, mouse look with cursor capture, delta-time updates, and frame-time logging.
+
 ## [0.0.1] - 2026-11-14
 
 ### Added
@@ -18,4 +22,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - v0.0.1 foundation: a `winit` window with a `wgpu` renderer, depth buffering, and a static perspective camera.
 - Voxel scene stored in a `HashSet<IVec3>` and rebuilt as a single mesh on change.
 - `Space` toggles the raised centre voxel at runtime.
-- Fly camera: WASD movement, mouse look with cursor capture, delta-time updates, and frame-time logging.
