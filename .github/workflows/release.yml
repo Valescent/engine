@@ -1,0 +1,94 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, without the leading v (e.g. 0.0.1)'
+        required: true
+      dry_run:
+        description: 'Bump and commit without tagging, pushing, or publishing'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    name: Bump and tag
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump version
+        id: bump
+        run: |
+          scripts/release.sh "${{ inputs.version }}" ${{ inputs.dry_run && '--dry-run' || '' }}
+          echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: Publish
+    needs: bump
+    if: >-
+      (github.event_name == 'push' || needs.bump.result == 'success')
+      && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "name=v${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out the tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.tag.outputs.name }}
+          fetch-depth: 0
+
+      - name: Verify the tag matches the manifest
+        run: |
+          tag="${{ steps.tag.outputs.name }}"
+          manifest="v$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
+          if [ "$tag" != "$manifest" ]; then
+            echo "::error::Tag $tag does not match Cargo.toml version $manifest"
+            exit 1
+          fi
+
+      - name: Extract release notes
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          scripts/changelog-notes.sh "${TAG#v}" > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::error::No CHANGELOG.md section for $TAG"
+            exit 1
+          fi
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.name }}
+        run: gh release create "$TAG" --title "$TAG" --notes-file notes.md --verify-tag
