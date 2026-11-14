@@ -15,4 +15,4 @@ default-theme = "light"
 preferred-dark-theme = "navy"
 additional-css = ["theme/custom.css"]
 git-repository-url = "https://github.com/Valescent/engine"
-edit-url-template = "https://github.com/Valescent/engine/edit/main/docs/{path}"
+edit-url-template = "https://github.com/Valescent/engine/edit/main/{path}"

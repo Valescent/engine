@@ -56,7 +56,7 @@ CI requires a `CHANGELOG.md` change in any push or pull request containing `feat
 
 ## Licensing
 
-Contributions are accepted under the [PolyForm Shield License 1.0.0](../LICENSE) and require accepting [`CLA.md`](CLA.md). The CLA preserves the project's ability to relicense later; it does not take ownership of your work. Until the signing bot is configured, a maintainer will ask you to confirm acceptance in the pull request.
+Contributions are accepted under the [PolyForm Shield License 1.0.0](https://github.com/Valescent/engine/blob/main/LICENSE) and require accepting [`CLA.md`](CLA.md). The CLA preserves the project's ability to relicense later; it does not take ownership of your work. Until the signing bot is configured, a maintainer will ask you to confirm acceptance in the pull request.
 
 ## Code
 
