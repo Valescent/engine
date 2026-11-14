@@ -2,7 +2,42 @@
 name = "engine"
 version = "0.0.1"
 edition = "2024"
+rust-version = "1.99.1"
+description = "A voxel engine written in Rust."
+repository = "https://github.com/Valescent/engine"
 license-file = "LICENSE"
 publish = false
 
 [dependencies]
+
+[lints.rust]
+unsafe_code = "deny"
+unreachable_pub = "warn"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+debug = "line-tables-only"
+
+[dev-dependencies]
+micropool = "0.4.2"
+rayon = "1.12.0"
+
+[[bench]]
+name = "pool_sim"
+harness = false

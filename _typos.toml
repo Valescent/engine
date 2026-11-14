@@ -1,0 +1,13 @@
+[default]
+extend-ignore-re = ["(?m)^\\s*//\\s*spellchecker:disable-line.*$"]
+
+[default.extend-words]
+Valescent = "Valescent"
+valescent = "valescent"
+bytemuck = "bytemuck"
+glam = "glam"
+wgpu = "wgpu"
+winit = "winit"
+cog = "cog"
+LOD = "LOD"
+LODs = "LODs"

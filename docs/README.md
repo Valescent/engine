@@ -8,6 +8,7 @@ Index and conventions for this folder. Keep this page current — it is the entr
 |---|---|
 | `roadmap.md` | Versioned milestones and their status. |
 | `decisions/` | Architecture Decision Records. One file per decision, numbered and immutable once accepted. |
+| `dev/` | Development setup and code conventions. |
 
 Add new top-level folders only when a real document needs them, for example `guides/` for how-to material or `specs/` for formats and protocols. Do not create empty placeholders.
 

@@ -1,0 +1,46 @@
+---
+name: Feature request
+description: Propose new behaviour or an engine capability.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [roadmap](https://github.com/Valescent/engine/blob/main/docs/roadmap.md) first — the version you are asking for may be planned, deferred, or an explicit non-goal.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you unable to do today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+
+  - type: dropdown
+    id: roadmap
+    attributes:
+      label: Which roadmap version does this belong to?
+      options:
+        - 0.0.1 The Foundation
+        - 0.0.2 Chunks and Meshes
+        - 0.0.3 Playable
+        - 0.0.4 Scale and Performance
+        - 0.0.5 Atmosphere
+        - 0.0.6 Advanced Horizons
+        - Not on the roadmap
+    validations:
+      required: true

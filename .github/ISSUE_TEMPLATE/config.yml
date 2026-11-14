@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Roadmap
+    url: https://github.com/Valescent/engine/blob/main/docs/roadmap.md
+    about: Check whether the work is already planned, deferred, or a non-goal.
+  - name: Security policy
+    url: https://github.com/Valescent/engine/blob/main/SECURITY.md
+    about: Report vulnerabilities privately, never in a public issue.
