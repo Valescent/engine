@@ -4,30 +4,34 @@
 //! the engine does lives here so it can be tested, benchmarked, and reused
 //! without a window.
 
+mod camera;
 mod renderer;
 mod voxel;
 
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use glam::camera::rh::{proj::directx, view::look_at_mat4};
-use glam::{IVec3, Mat4, Vec3};
+use glam::IVec3;
 use thiserror::Error;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalSize};
-use winit::event::{ElementState, WindowEvent};
+use winit::event::{DeviceEvent, DeviceId, ElementState, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::keyboard::{Key, NamedKey};
-use winit::window::{Window, WindowId};
+use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::window::{CursorGrabMode, Window, WindowId};
 
+use camera::Camera;
 use renderer::Renderer;
 pub use renderer::RendererError;
 use voxel::build_mesh;
 
 const WINDOW_TITLE: &str = concat!("Valescent Engine ", env!("CARGO_PKG_VERSION"));
 const TOGGLE_TARGET: IVec3 = IVec3::new(1, 1, 1);
+const MAX_FRAME_DELTA: Duration = Duration::from_millis(100);
+const FRAME_LOG_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Error)]
 pub enum RunError {
@@ -67,6 +71,13 @@ struct App {
     voxels: HashSet<IVec3>,
     camera: Camera,
     error: Option<RunError>,
+    pressed: HashSet<KeyCode>,
+    mouse_captured: bool,
+    focused: bool,
+    occluded: bool,
+    last_frame: Instant,
+    frame_accum: Duration,
+    frame_count: u32,
 }
 
 impl App {
@@ -77,6 +88,13 @@ impl App {
             voxels: initial_voxels(),
             camera: Camera::new(1.0),
             error: None,
+            pressed: HashSet::new(),
+            mouse_captured: false,
+            focused: true,
+            occluded: false,
+            last_frame: Instant::now(),
+            frame_accum: Duration::ZERO,
+            frame_count: 0,
         }
     }
 
@@ -99,6 +117,143 @@ impl App {
             window.request_redraw();
         }
         debug!(voxels = self.voxels.len(), "toggled voxel");
+    }
+
+    fn resize(&mut self, size: PhysicalSize<u32>) {
+        self.camera.set_aspect(size.width, size.height);
+        if let Some(renderer) = &mut self.renderer {
+            renderer.resize(size, &self.camera);
+        }
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+
+    fn redraw(&mut self) {
+        if self.occluded {
+            return;
+        }
+
+        let now = Instant::now();
+        let elapsed = now.saturating_duration_since(self.last_frame);
+        self.last_frame = now;
+
+        if self.focused {
+            self.record_frame(elapsed);
+
+            let delta_seconds = elapsed.min(MAX_FRAME_DELTA).as_secs_f32();
+            let forward_axis = axis(
+                self.pressed.contains(&KeyCode::KeyW),
+                self.pressed.contains(&KeyCode::KeyS),
+            );
+            let right_axis = axis(
+                self.pressed.contains(&KeyCode::KeyD),
+                self.pressed.contains(&KeyCode::KeyA),
+            );
+            self.camera.move_by(forward_axis, right_axis, delta_seconds);
+        }
+
+        if let Some(renderer) = &mut self.renderer {
+            renderer.set_camera(&self.camera);
+            renderer.render();
+        }
+        if self.focused
+            && let Some(window) = &self.window
+        {
+            window.request_redraw();
+        }
+    }
+
+    fn record_frame(&mut self, delta: Duration) {
+        self.frame_accum += delta;
+        self.frame_count += 1;
+        if self.frame_accum >= FRAME_LOG_INTERVAL {
+            let seconds = self.frame_accum.as_secs_f64();
+            let frames = f64::from(self.frame_count);
+            debug!(
+                fps = frames / seconds,
+                frame_ms = seconds * 1000.0 / frames,
+                "frame timing"
+            );
+            self.frame_accum = Duration::ZERO;
+            self.frame_count = 0;
+        }
+    }
+
+    fn handle_key(&mut self, event: &KeyEvent) {
+        let PhysicalKey::Code(code) = event.physical_key else {
+            return;
+        };
+
+        match event.state {
+            ElementState::Pressed => {
+                if event.repeat {
+                    return;
+                }
+                if code == KeyCode::Space {
+                    self.toggle_voxel();
+                } else if code == KeyCode::Escape {
+                    self.release_cursor();
+                } else if is_movement_key(code) {
+                    self.pressed.insert(code);
+                }
+            }
+            ElementState::Released => {
+                self.pressed.remove(&code);
+            }
+        }
+    }
+
+    fn capture_cursor(&mut self) {
+        if self.mouse_captured {
+            return;
+        }
+        let Some(window) = &self.window else {
+            return;
+        };
+
+        if let Err(locked_error) = window.set_cursor_grab(CursorGrabMode::Locked) {
+            debug!(%locked_error, "locked cursor grab unavailable; trying confined grab");
+            if let Err(error) = window.set_cursor_grab(CursorGrabMode::Confined) {
+                warn!(%error, "failed to capture the cursor");
+                return;
+            }
+        }
+        window.set_cursor_visible(false);
+        self.mouse_captured = true;
+        debug!("cursor captured");
+    }
+
+    fn release_cursor(&mut self) {
+        if self.mouse_captured {
+            debug!("cursor released");
+        }
+        if let Some(window) = &self.window {
+            if let Err(error) = window.set_cursor_grab(CursorGrabMode::None) {
+                warn!(%error, "failed to release the cursor");
+            }
+            window.set_cursor_visible(true);
+        }
+        self.mouse_captured = false;
+    }
+
+    fn set_focused(&mut self, focused: bool) {
+        self.focused = focused;
+        if focused {
+            self.last_frame = Instant::now();
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        } else {
+            self.pressed.clear();
+            self.release_cursor();
+        }
+    }
+
+    fn apply_mouse_look(&mut self, delta_x: f32, delta_y: f32) {
+        if self.mouse_captured && self.focused {
+            self.camera.look(delta_x, delta_y);
+        }
     }
 }
 
@@ -142,6 +297,7 @@ impl ApplicationHandler for App {
         info!(width = size.width, height = size.height, "window ready");
         self.window = Some(window.clone());
         self.renderer = Some(renderer);
+        self.last_frame = Instant::now();
         window.request_redraw();
     }
 
@@ -152,75 +308,55 @@ impl ApplicationHandler for App {
         event: WindowEvent,
     ) {
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                self.release_cursor();
+                event_loop.exit();
+            }
             WindowEvent::Resized(size) => self.resize(size),
-            WindowEvent::KeyboardInput { event, .. } => {
-                if event.state == ElementState::Pressed
-                    && !event.repeat
-                    && event.logical_key == Key::Named(NamedKey::Space)
-                {
-                    self.toggle_voxel();
+            WindowEvent::KeyboardInput { event, .. } => self.handle_key(&event),
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } => self.capture_cursor(),
+            WindowEvent::Focused(focused) => self.set_focused(focused),
+            WindowEvent::Occluded(occluded) => {
+                self.occluded = occluded;
+                if !occluded && let Some(window) = &self.window {
+                    window.request_redraw();
                 }
             }
-            WindowEvent::RedrawRequested => {
-                if let Some(renderer) = &mut self.renderer {
-                    renderer.render();
-                }
-            }
+            WindowEvent::RedrawRequested => self.redraw(),
             _ => {}
         }
     }
-}
 
-impl App {
-    fn resize(&mut self, size: PhysicalSize<u32>) {
-        self.camera.set_aspect(size.width, size.height);
-        if let Some(renderer) = &mut self.renderer {
-            renderer.resize(size, &self.camera);
-        }
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct Camera {
-    position: Vec3,
-    target: Vec3,
-    up: Vec3,
-    fov_y_radians: f32,
-    z_near: f32,
-    z_far: f32,
-    aspect: f32,
-}
-
-impl Camera {
-    fn new(aspect: f32) -> Self {
-        Self {
-            position: Vec3::new(6.0, 4.5, 7.0),
-            target: Vec3::new(1.0, 0.5, 1.0),
-            up: Vec3::Y,
-            fov_y_radians: std::f32::consts::FRAC_PI_3,
-            z_near: 0.1,
-            z_far: 100.0,
-            aspect,
+    #[allow(clippy::cast_possible_truncation)]
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: DeviceId,
+        event: DeviceEvent,
+    ) {
+        if let DeviceEvent::MouseMotion { delta } = event {
+            self.apply_mouse_look(delta.0 as f32, delta.1 as f32);
         }
     }
+}
 
-    fn set_aspect(&mut self, width: u32, height: u32) {
-        self.aspect = aspect_ratio(width, height);
-    }
-
-    fn view_projection(&self) -> Mat4 {
-        directx::perspective(self.fov_y_radians, self.aspect, self.z_near, self.z_far)
-            * look_at_mat4(self.position, self.target, self.up)
+fn axis(positive: bool, negative: bool) -> f32 {
+    match (positive, negative) {
+        (true, false) => 1.0,
+        (false, true) => -1.0,
+        _ => 0.0,
     }
 }
 
-#[allow(clippy::cast_precision_loss)]
-fn aspect_ratio(width: u32, height: u32) -> f32 {
-    width.max(1) as f32 / height.max(1) as f32
+fn is_movement_key(code: KeyCode) -> bool {
+    matches!(
+        code,
+        KeyCode::KeyW | KeyCode::KeyA | KeyCode::KeyS | KeyCode::KeyD
+    )
 }
 
 fn initial_voxels() -> HashSet<IVec3> {
@@ -238,4 +374,27 @@ fn initial_voxels() -> HashSet<IVec3> {
     ]
     .into_iter()
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mouse_look_requires_capture_and_focus() {
+        let mut app = App::new();
+        let initial = app.camera.view_projection();
+
+        app.apply_mouse_look(100.0, 0.0);
+        assert_eq!(app.camera.view_projection(), initial);
+
+        app.mouse_captured = true;
+        app.focused = false;
+        app.apply_mouse_look(100.0, 0.0);
+        assert_eq!(app.camera.view_projection(), initial);
+
+        app.focused = true;
+        app.apply_mouse_look(100.0, 0.0);
+        assert_ne!(app.camera.view_projection(), initial);
+    }
 }
