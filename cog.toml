@@ -1,0 +1,18 @@
+#:schema https://docs.cocogitto.io/cog-schema.json
+
+# Releases are cut from main only.
+branch_whitelist = ["main"]
+
+# Merge commits carry no conventional-commit meaning.
+ignore_merge_commits = true
+
+tag_prefix = "v"
+
+# Types that stay out of the generated changelog. Sections are curated by hand
+# in Unreleased; these types are never worth a reader's attention.
+[commit_types]
+style = { omit_from_changelog = true }
+test = { omit_from_changelog = true }
+build = { omit_from_changelog = true }
+ci = { omit_from_changelog = true }
+chore = { omit_from_changelog = true }

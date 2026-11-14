@@ -1,0 +1,72 @@
+name: Commits
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: commits-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  conventional:
+    name: Conventional Commits
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Check commit messages
+        uses: cocogitto/cocogitto-action@v4
+        with:
+          command: check
+
+  changelog:
+    name: Changelog
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Require an entry for user-facing changes
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            git fetch --no-tags origin "$base" || true
+          else
+            base="${{ github.event.before }}"
+            case "$base" in
+              '' | *[!0]*) ;;
+              *) base=$(git rev-list --max-parents=0 HEAD) ;;
+            esac
+          fi
+
+          echo "Comparing $base..HEAD"
+          types=$(git log --format=%s "$base..HEAD" |
+            sed -nE 's/^([a-z]+)(\([^)]*\))?!?:.*/\1/p' | sort -u | tr '\n' ' ')
+          echo "Commit types: ${types:-none}"
+
+          if ! printf '%s' "$types" | grep -qwE 'feat|fix|perf|refactor|revert'; then
+            echo "No user-facing commits; changelog not required."
+            exit 0
+          fi
+
+          if git diff --name-only "$base..HEAD" | grep -qx 'CHANGELOG.md'; then
+            echo "CHANGELOG.md was updated."
+            exit 0
+          fi
+
+          echo "::error file=CHANGELOG.md::User-facing commits require an entry under [Unreleased]."
+          exit 1
