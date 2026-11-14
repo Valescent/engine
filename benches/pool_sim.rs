@@ -9,6 +9,12 @@
 //! 3. a burst of background chunk-mesh jobs submitted to the pool, bounded by a
 //!    backlog cap so a saturated queue drops requests instead of growing forever.
 //!
+//! Frames are paced to the 60 fps deadline and the numbers below are frame *work*
+//! time, so a backend that spends 12 ms blocked in `join` shows up as a hitched
+//! frame. Background load per scenario is expressed as a fraction of the pool's
+//! capacity for a 16.67 ms frame, which keeps the two backends comparable on any
+//! core count.
+//!
 //! Run with:
 //!
 //! ```text
@@ -17,17 +23,24 @@
 //! cargo bench --bench pool_sim -- both --threads 8
 //! ```
 
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+
 use std::hint::{black_box, spin_loop};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 const FRAME_BUDGET_US: u64 = 16_667;
+const FRAME_BUDGET: Duration = Duration::from_micros(FRAME_BUDGET_US);
 const MAIN_US: u64 = 1_200;
 const FOREGROUND_US: u64 = 2_500;
 const BACKGROUND_JOB_US: u64 = 4_000;
 const WARMUP_FRAMES: usize = 50;
-const FRAMES: usize = 400;
+const FRAMES: usize = 300;
 
 /// Dependency-free CPU burn used as the unit of simulated work.
 fn burn(units: u64) -> u64 {
@@ -148,7 +161,6 @@ const SCENARIOS: &[Scenario] = &[
 struct Report {
     backend: String,
     scenario: &'static str,
-    workers: usize,
     jobs_per_frame: usize,
     dropped: usize,
     completed: u64,
@@ -160,6 +172,7 @@ struct Report {
     join_p99: u64,
     join_max: u64,
     over_budget: usize,
+    wall_ms: u64,
     checksum: u64,
 }
 
@@ -186,7 +199,6 @@ fn run<B: Backend>(backend: &B, scenario: &Scenario, upu: u64) -> Report {
     let in_flight = Arc::new(AtomicUsize::new(0));
     let completed = Arc::new(AtomicU64::new(0));
     let dropped = Arc::new(AtomicUsize::new(0));
-    let results = Arc::new(AtomicU64::new(0));
 
     let main_units = MAIN_US * upu;
     let foreground_units = (FOREGROUND_US / 2) * upu;
@@ -218,10 +230,8 @@ fn run<B: Backend>(backend: &B, scenario: &Scenario, upu: u64) -> Report {
             in_flight.fetch_add(1, Ordering::Relaxed);
             let in_flight = Arc::clone(&in_flight);
             let completed = Arc::clone(&completed);
-            let results = Arc::clone(&results);
             B::spawn(move || {
-                let value = burn(background_units);
-                results.fetch_add(value, Ordering::Relaxed);
+                burn(background_units);
                 completed.fetch_add(1, Ordering::Relaxed);
                 in_flight.fetch_sub(1, Ordering::Relaxed);
             });
@@ -232,6 +242,12 @@ fn run<B: Backend>(backend: &B, scenario: &Scenario, upu: u64) -> Report {
             frames.push(frame_us);
             joins.push(join_us);
         }
+
+        // Pace to a 60 fps deadline so both backends get the same wall-clock
+        // time per frame for background work, like a vsync-locked engine.
+        if let Some(rest) = FRAME_BUDGET.checked_sub(frame_start.elapsed()) {
+            std::thread::sleep(rest);
+        }
     }
 
     while in_flight.load(Ordering::Relaxed) > 0 {
@@ -240,16 +256,13 @@ fn run<B: Backend>(backend: &B, scenario: &Scenario, upu: u64) -> Report {
     }
     let wall_us = wall_start.elapsed().as_micros() as u64;
 
-    checksum = checksum.wrapping_add(results.load(Ordering::Relaxed));
-
     frames.sort_unstable();
     joins.sort_unstable();
-    let budget = FRAME_BUDGET_US + FOREGROUND_US + MAIN_US;
+    let budget = FRAME_BUDGET_US;
 
     Report {
         backend: backend.label(),
         scenario: scenario.name,
-        workers,
         jobs_per_frame,
         dropped: dropped.load(Ordering::Relaxed),
         completed: completed.load(Ordering::Relaxed),
@@ -261,6 +274,7 @@ fn run<B: Backend>(backend: &B, scenario: &Scenario, upu: u64) -> Report {
         join_p99: percentile(&joins, 0.99),
         join_max: joins.last().copied().unwrap_or(0),
         over_budget: frames.iter().filter(|&&f| f > budget).count(),
+        wall_ms: wall_us / 1000,
         checksum,
     }
 }
@@ -270,9 +284,11 @@ fn print_header() {
         "sim: 60 fps budget, main {:>5.0}us/frame, foreground join {:>5.0}us, background job {:>5.0}us",
         MAIN_US as f64, FOREGROUND_US as f64, BACKGROUND_JOB_US as f64
     );
-    println!("     backlog cap 4 jobs/worker, workload calibrated to this machine\n");
     println!(
-        "{:<10} {:<24} {:>7} {:>7} {:>6} {:>6} {:>6} {:>6} {:>7} {:>6} {:>9} {:>6}",
+        "     backlog cap 4 jobs/worker, frames paced to the budget, times are frame work time (us)\n"
+    );
+    println!(
+        "{:<10} {:<24} {:>7} {:>7} {:>6} {:>6} {:>6} {:>6} {:>7} {:>6} {:>6} {:>9} {:>6} {:>7}",
         "scenario",
         "backend",
         "jobs/fr",
@@ -283,15 +299,17 @@ fn print_header() {
         "over",
         "join50",
         "join99",
+        "joinmax",
         "completed",
-        "drops"
+        "drops",
+        "wall ms"
     );
-    println!("{}", "-".repeat(110));
+    println!("{}", "-".repeat(122));
 }
 
 fn print_row(report: &Report) {
     println!(
-        "{:<10} {:<24} {:>7} {:>7} {:>6} {:>6} {:>6} {:>6} {:>7} {:>6} {:>9} {:>6}",
+        "{:<10} {:<24} {:>7} {:>7} {:>6} {:>6} {:>6} {:>6} {:>7} {:>6} {:>6} {:>9} {:>6} {:>7}",
         report.scenario,
         report.backend,
         report.jobs_per_frame,
@@ -302,8 +320,10 @@ fn print_row(report: &Report) {
         report.over_budget,
         report.join_p50,
         report.join_p99,
+        report.join_max,
         report.completed,
-        report.dropped
+        report.dropped,
+        report.wall_ms
     );
 }
 
@@ -319,7 +339,11 @@ fn main() {
                 i += 1;
                 threads = args.get(i).and_then(|v| v.parse::<usize>().ok());
             }
-            other => panic!("unknown argument {other:?} (expected rayon|micropool|both|--threads N)"),
+            // cargo appends its own flags to the harness binary
+            "--bench" | "--nocapture" => {}
+            other => {
+                panic!("unknown argument {other:?} (expected rayon|micropool|both|--threads N)")
+            }
         }
         i += 1;
     }
