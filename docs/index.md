@@ -1,22 +1,124 @@
-# Valescent Engine
+<div class="hero">
+<div class="hero-copy">
 
-<p class="lede">A voxel engine written in Rust, built one milestone at a time.</p>
+# A world, one voxel at a time.
 
-The engine is **pre-alpha**. [Version `0.0.1`](roadmap.md) and `0.0.2` are complete: a voxel scene and a fly camera. Everything after that is still a plan.
+Valescent Engine is a voxel engine written in Rust. Two milestones are shipped — a voxel scene and a fly camera — and every step after that is written down before it is built.
+
+This is **pre-alpha**. The current world is one `HashSet<IVec3>`, one mesh, and a camera you can fly. Chunks, interaction, and light are planned in public.
+
+<div class="hero-actions">
+
+[Set up the toolchain](dev/setup.md) [Read the roadmap](roadmap.md)
+
+</div>
+
+<div class="hero-data">
+
+`PRE-ALPHA` <span>/</span> `v0.0.2 SHIPPED` <span>/</span> `RUST + WGPU`
+
+</div>
+
+</div>
+<figure class="survey">
+<div class="survey-stage">
+<div class="plate-fallback" aria-hidden="true">
+<img src="assets/voxel-fallback.svg" alt="" width="160" height="160">
+</div>
+<canvas id="voxel-plate" hidden tabindex="0" role="img" aria-keyshortcuts="ArrowLeft ArrowRight" aria-label="Isometric illustration of an island of voxel cubes. Drag or use the arrow keys to orbit."></canvas>
+<span class="plate-label tl">Survey 01 / Voxel model</span>
+<span class="plate-label tr">Y-up / right-handed</span>
+<span class="plate-label bl">Yaw <span data-yaw>028°</span></span>
+<span class="plate-label br">Drag / arrow keys</span>
+</div>
+<figcaption>Drawn from the current data model: voxels in a <code>HashSet&lt;IVec3&gt;</code>, meshed as non-indexed cubes, right-handed and Y-up. The highlighted cube stands in for the one <code>Space</code> toggles. Illustration, not a screenshot.</figcaption>
+</figure>
+</div>
+
+<div class="home-split">
+<section class="home-start">
 
 ## Start here
 
 1. **[Set up the toolchain](dev/setup.md).** Platform prerequisites, the pinned compiler, and the commands you will run every day.
 2. **[Read the conventions](dev/conventions.md).** How engine code is written: errors, logging, determinism, tests.
-3. **[Check the roadmap](roadmap.md).** What each version delivers, and what it deliberately excludes.
+3. **[Walk the roadmap](roadmap.md).** What each version delivers, and what it deliberately excludes.
+
+</section>
+<section class="home-reference">
 
 ## Reference
 
+- [Architecture overview](dev/architecture.md) — module ownership and the frame flow.
+- [Coordinates](dev/coordinates.md) — axes, units, and voxel addresses.
+- [Controls](dev/controls.md) — current bindings and the planned ones.
+- [Configuration](dev/configuration.md) — environment variables, constants, and tooling files.
 - [Decision records](decisions/index.md) — why the engine is built the way it is.
+- [Testing](dev/testing.md) — headless tests and manual GPU acceptance.
 - [Changelog](https://github.com/Valescent/engine/blob/main/CHANGELOG.md) — user-visible changes.
 - [Contributing](CONTRIBUTING.md) — commits, changelog entries, pull requests, and the CLA.
 - [Security policy](SECURITY.md) — how to report a vulnerability.
 
-## Licence
+<p class="licence-note">Source-available, not open source. The code is under the <a href="https://github.com/Valescent/engine/blob/main/LICENSE">PolyForm Shield License 1.0.0</a>: read it, run it, modify it, and redistribute it, but do not use it to provide a competing product.</p>
 
-Valescent Engine is source-available, not open source. It is licensed under the [PolyForm Shield License 1.0.0](https://github.com/Valescent/engine/blob/main/LICENSE): read it, run it, modify it, and redistribute it, but do not use it to provide a competing product. PolyForm Shield is not OSI-approved.
+</section>
+</div>
+
+<section class="home-next">
+
+<div>
+
+## Next on the bench
+
+<span class="version">v0.0.3</span>
+
+### Chunks and meshes
+
+The world is currently one mesh. The next milestone splits it into fixed 32×32×32 chunks, gives each chunk its own mesh, and stops emitting faces that are hidden behind solid blocks. A block change should rebuild only the chunk it touches.
+
+[Read the v0.0.3 scope](dev/v0.0.3-scope.md)
+
+</div>
+<div>
+
+> **Definition of done.** A world made of multiple chunks. A block change triggers only a local mesh rebuild. A stable frame rate while moving around.
+
+The work after that is already scoped: walking and collision, block interaction, persistence, and a texture atlas in [v0.0.4 — Playable](dev/v0.0.4-scope.md).
+
+</div>
+</section>
+
+<section class="home-decisions">
+
+## Decisions, on the record
+
+Six records explain the stack, including the alternatives that lost and the reasons they lost. They are superseded, never rewritten.
+
+| ID | Decision | Status |
+|---|---|---|
+| [0001](decisions/0001-rust-for-engine-core.md) | Rust for the engine core | Accepted |
+| [0002](decisions/0002-wgpu-for-graphics.md) | wgpu for graphics | Accepted |
+| [0003](decisions/0003-winit-for-windowing.md) | winit for windowing | Accepted |
+| [0004](decisions/0004-glam-for-math.md) | glam for math | Accepted |
+| [0005](decisions/0005-bytemuck-for-gpu-layout.md) | bytemuck for GPU data layout | Accepted |
+| [0006](decisions/0006-tracy-for-profiling.md) | Tracy for profiling | Accepted |
+
+</section>
+
+<div class="closing">
+
+## Source-available, not open source.
+
+You may read, run, modify, and redistribute Valescent Engine. You may not use it to provide a product that competes with it. PolyForm Shield is not OSI-approved.
+
+<div class="closing-links">
+
+[Read the licence](https://github.com/Valescent/engine/blob/main/LICENSE) [Contributing](CONTRIBUTING.md) [GitHub](https://github.com/Valescent/engine)
+
+</div>
+</div>
+
+<div class="home-foot">
+<span>Valescent Engine · pre-alpha</span>
+<a href="https://github.com/Valescent/engine">Source on GitHub</a>
+</div>

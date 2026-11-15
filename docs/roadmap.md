@@ -1,23 +1,23 @@
-# Valescent Engine Roadmap
+# Roadmap
 
-> Status legend: [ ] not started · [~] in progress · [x] done
+Milestones move from **planned** to **in progress** to **shipped**. Each one names what it delivers, how it is verified, and what it deliberately leaves out.
 
-| Version | Name                  | Status |
-|---------|-----------------------|--------|
-| 0.0.1   | The Foundation        | [x]    |
-| 0.0.2   | Camera                | [x]    |
-| 0.0.3   | Chunks and Meshes     | [ ]    |
-| 0.0.4   | Playable              | [ ]    |
-| 0.0.5   | Scale and Performance | [ ]    |
-| 0.0.6   | Atmosphere            | [ ]    |
-| 0.0.7   | Advanced Horizons     | [ ]    |
-
----
+| Version | Name                  | Status   |
+|---------|-----------------------|----------|
+| 0.0.1   | The Foundation        | Shipped  |
+| 0.0.2   | Camera                | Shipped  |
+| 0.0.3   | Chunks and Meshes     | Planned  |
+| 0.0.4   | Playable              | Planned  |
+| 0.0.5   | Scale and Performance | Planned  |
+| 0.0.6   | Atmosphere            | Planned  |
+| 0.0.7   | Advanced Horizons     | Planned  |
 
 ## v0.0.1: The Foundation
 
-**Status:** [x]
+**Status:** Shipped
+
 **Goal:** Voxels on screen, driven by data instead of hardcoded draw calls.
+
 **Summary:** Before you can have a world, you need a cube. Establish the rendering pipeline and core math.
 
 See [v0.0.1 scope](dev/v0.0.1-scope.md) for the concrete deliverables, technical shape, and acceptance checklist.
@@ -49,12 +49,12 @@ See [v0.0.1 scope](dev/v0.0.1-scope.md) for the concrete deliverables, technical
 - Chunking, meshing optimizations, face culling
 - World generation, lighting
 
----
-
 ## v0.0.2: Camera
 
-**Status:** [x]
+**Status:** Shipped
+
 **Goal:** Fly through the scene with keyboard and mouse.
+
 **Summary:** A movable camera makes the world inspectable and proves the frame time holds while the view changes.
 
 See [v0.0.2 scope](dev/v0.0.2-scope.md) for the concrete deliverables, technical shape, and acceptance checklist.
@@ -83,12 +83,12 @@ See [v0.0.2 scope](dev/v0.0.2-scope.md) for the concrete deliverables, technical
 - Voxel raycasting, block interaction
 - Chunks, meshing, textures, persistence
 
----
-
 ## v0.0.3: Chunks and Meshes
 
-**Status:** [ ]
+**Status:** Planned
+
 **Goal:** Split the world into chunks and stop emitting hidden faces.
+
 **Summary:** v0.0.1 draws one mesh for the whole world. Chunks make edits local and keep draw work proportional to the visible world.
 
 See [v0.0.3 scope](dev/v0.0.3-scope.md) for the concrete deliverables, technical shape, and acceptance checklist.
@@ -117,12 +117,12 @@ See [v0.0.3 scope](dev/v0.0.3-scope.md) for the concrete deliverables, technical
 - Greedy meshing, LOD, async meshing
 - Save/load
 
----
-
 ## v0.0.4: Playable
 
-**Status:** [ ]
+**Status:** Planned
+
 **Goal:** Walk around, break and place blocks, persist the world.
+
 **Summary:** A world you can move through and interact with feels like a real engine.
 
 See [v0.0.4 scope](dev/v0.0.4-scope.md) for the concrete deliverables, technical shape, and acceptance checklist.
@@ -154,12 +154,12 @@ See [v0.0.4 scope](dev/v0.0.4-scope.md) for the concrete deliverables, technical
 - Infinite terrain streaming (save/load is its prerequisite only)
 - Lighting, LOD
 
----
-
 ## v0.0.5: Scale and Performance
 
-**Status:** [ ]
+**Status:** Planned
+
 **Goal:** Large view distances at a smooth frame rate.
+
 **Summary:** Move from toy to real engine.
 
 See [v0.0.5 scope](dev/v0.0.5-scope.md) for the concrete deliverables, technical shape, and acceptance checklist.
@@ -187,12 +187,12 @@ See [v0.0.5 scope](dev/v0.0.5-scope.md) for the concrete deliverables, technical
 ### Non-Goals
 - Lighting, water, procedural generation
 
----
-
 ## v0.0.6: Atmosphere
 
-**Status:** [ ]
+**Status:** Planned
+
 **Goal:** Make the world look good.
+
 **Summary:** Lighting, fog, and transparency.
 
 See [v0.0.6 scope](dev/v0.0.6-scope.md) for the concrete deliverables, technical shape, and acceptance checklist.
@@ -219,12 +219,12 @@ See [v0.0.6 scope](dev/v0.0.6-scope.md) for the concrete deliverables, technical
 ### Non-Goals
 - Procedural generation, SVDAGs, raymarching
 
----
-
 ## v0.0.7: Advanced Horizons
 
-**Status:** [ ]
+**Status:** Planned
+
 **Goal:** Turn the engine into a game-ready, procedurally generated world.
+
 **Summary:** Optional cutting-edge techniques.
 
 See [v0.0.7 scope](dev/v0.0.7-scope.md) for the concrete deliverables, technical shape, and acceptance checklist.
@@ -244,5 +244,3 @@ See [v0.0.7 scope](dev/v0.0.7-scope.md) for the concrete deliverables, technical
 
 ### Non-Goals
 - None; this is the stretch phase
-
----

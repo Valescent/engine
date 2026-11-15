@@ -12,6 +12,7 @@ The site is built with mdBook. `book.toml` configures it, `SUMMARY.md` defines t
 | `roadmap.md` | Versioned milestones and their status. |
 | `dev/` | Development setup, conventions, architecture, testing, release process, milestone scopes, and templates. |
 | `decisions/` | Architecture decision records, indexed in [`decisions/index.md`](decisions/index.md). |
+| `assets/` | Fonts and the client-side script copied into the built site. |
 | `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `CLA.md` | Project policy. |
 
 Add new top-level folders only when a real document needs them, for example `guides/` for how-to material or `specs/` for formats and protocols. Do not create empty placeholders.

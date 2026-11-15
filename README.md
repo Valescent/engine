@@ -28,6 +28,9 @@ cargo run
 - `Escape` — release the cursor
 - `Space` — add or remove the raised centre voxel
 
+See [`docs/dev/controls.md`](docs/dev/controls.md) for the full binding table, including the
+planned walking controls.
+
 ## Development
 
 ```console
@@ -60,6 +63,7 @@ The documentation site is published at **https://valescent.github.io/engine/**.
 - [Roadmap](docs/roadmap.md) - versioned milestones, definitions of done, and non-goals.
 - [Architecture decision records](docs/decisions/index.md) - why the engine uses Rust, `wgpu`, `winit`, `glam`, `bytemuck`, and Tracy.
 - [Architecture overview](docs/dev/architecture.md) - module ownership and the current frame flow.
+- [Configuration](docs/dev/configuration.md) - runtime inputs, the planned config file, and repository tooling.
 - [Testing](docs/dev/testing.md) - headless tests and manual GPU acceptance.
 - [Release checklist](docs/dev/release-checklist.md) - versioning, tagging, and post-release verification.
 - [Changelog](CHANGELOG.md) - user-visible changes.

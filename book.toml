@@ -12,7 +12,8 @@ create-missing = false
 [output.html]
 site-url = "/engine/"
 default-theme = "light"
-preferred-dark-theme = "navy"
+preferred-dark-theme = "coal"
 additional-css = ["theme/custom.css"]
+additional-js = ["docs/assets/custom.js"]
 git-repository-url = "https://github.com/Valescent/engine"
 edit-url-template = "https://github.com/Valescent/engine/edit/main/{path}"

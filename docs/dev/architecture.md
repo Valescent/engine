@@ -53,6 +53,8 @@ RedrawRequested
 
 ## Input flow
 
+See [Controls](controls.md) for binding tables, capture rules, and planned changes.
+
 - `Space` toggles one demo voxel, rebuilds the mesh, uploads the new vertex buffer, and requests a redraw.
 - `W`, `A`, `S`, and `D` are tracked as pressed physical key codes.
 - Mouse look is applied only while the cursor is captured and the window is focused.
@@ -60,6 +62,8 @@ RedrawRequested
 - Losing focus clears held keys and releases the cursor.
 
 ## Coordinates and data
+
+See [Coordinates](coordinates.md) for the full conventions, including chunk and mesh spaces.
 
 - Right-handed, Y-up.
 - A voxel at `(x, y, z)` occupies `[x, x + 1] × [y, y + 1] × [z, z + 1]`.
