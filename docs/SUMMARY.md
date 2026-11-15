@@ -9,6 +9,18 @@
 - [Roadmap](roadmap.md)
 - [v0.0.1 scope](dev/v0.0.1-scope.md)
 - [v0.0.2 scope](dev/v0.0.2-scope.md)
+- [v0.0.3 scope](dev/v0.0.3-scope.md)
+- [v0.0.4 scope](dev/v0.0.4-scope.md)
+- [v0.0.5 scope](dev/v0.0.5-scope.md)
+- [v0.0.6 scope](dev/v0.0.6-scope.md)
+- [v0.0.7 scope](dev/v0.0.7-scope.md)
+
+# Development
+
+- [Architecture overview](dev/architecture.md)
+- [Testing](dev/testing.md)
+- [Release checklist](dev/release-checklist.md)
+- [Milestone template](dev/milestone-template.md)
 
 # Architecture
 

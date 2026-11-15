@@ -10,7 +10,7 @@ The site is built with mdBook. `book.toml` configures it, `SUMMARY.md` defines t
 |---|---|
 | `index.md` | Landing page for the site. |
 | `roadmap.md` | Versioned milestones and their status. |
-| `dev/` | Development setup, code conventions, and milestone scope. |
+| `dev/` | Development setup, conventions, architecture, testing, release process, milestone scopes, and templates. |
 | `decisions/` | Architecture decision records, indexed in [`decisions/index.md`](decisions/index.md). |
 | `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `CLA.md` | Project policy. |
 

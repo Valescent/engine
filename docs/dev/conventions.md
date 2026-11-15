@@ -48,6 +48,8 @@ These are defaults, not dogma. Deviating is fine when the code says why.
 - The default test suite must not require a GPU or a window; gate those tests behind a feature or an environment variable.
 - Fixed inputs, fixed outputs. No wall-clock, no network, no unseeded randomness.
 
+See [Testing](testing.md) for the full headless and manual GPU test procedure.
+
 ## Documentation
 
 - Public items get rustdoc. Explain invariants and units, not the signature.

@@ -81,5 +81,5 @@ Releases are cut from GitHub Actions: **Actions → Release → Run workflow** w
 The same script works locally:
 
 ```console
-sh scripts/release.sh 0.0.2 --dry-run
+sh scripts/release.sh 0.0.3 --dry-run
 ```

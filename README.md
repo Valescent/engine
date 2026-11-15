@@ -2,7 +2,7 @@
 
 A voxel engine written in Rust.
 
-**Status: pre-alpha.** `0.0.1` is complete, and `0.0.2` adds a fly camera for inspecting the cube scene. Nothing in [`docs/roadmap.md`](docs/roadmap.md) past that is built yet.
+**Status: pre-alpha.** `0.0.1` and `0.0.2` are complete: a voxel scene and a fly camera. Nothing in [`docs/roadmap.md`](docs/roadmap.md) past that is built yet.
 
 This is **source-available, not open source**. The code is under the [PolyForm Shield License 1.0.0](LICENSE): you may read, run, modify, and redistribute it, but not use it to provide a product that competes with it. PolyForm Shield is not OSI-approved.
 
@@ -59,6 +59,9 @@ The documentation site is published at **https://valescent.github.io/engine/**.
 
 - [Roadmap](docs/roadmap.md) - versioned milestones, definitions of done, and non-goals.
 - [Architecture decision records](docs/decisions/index.md) - why the engine uses Rust, `wgpu`, `winit`, `glam`, `bytemuck`, and Tracy.
+- [Architecture overview](docs/dev/architecture.md) - module ownership and the current frame flow.
+- [Testing](docs/dev/testing.md) - headless tests and manual GPU acceptance.
+- [Release checklist](docs/dev/release-checklist.md) - versioning, tagging, and post-release verification.
 - [Changelog](CHANGELOG.md) - user-visible changes.
 
 ## Contributing

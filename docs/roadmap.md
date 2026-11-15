@@ -91,6 +91,8 @@ See [v0.0.2 scope](dev/v0.0.2-scope.md) for the concrete deliverables, technical
 **Goal:** Split the world into chunks and stop emitting hidden faces.
 **Summary:** v0.0.1 draws one mesh for the whole world. Chunks make edits local and keep draw work proportional to the visible world.
 
+See [v0.0.3 scope](dev/v0.0.3-scope.md) for the concrete deliverables, technical shape, and acceptance checklist.
+
 ### Milestones
 
 #### 1. Chunks
@@ -123,6 +125,8 @@ See [v0.0.2 scope](dev/v0.0.2-scope.md) for the concrete deliverables, technical
 **Goal:** Walk around, break and place blocks, persist the world.
 **Summary:** A world you can move through and interact with feels like a real engine.
 
+See [v0.0.4 scope](dev/v0.0.4-scope.md) for the concrete deliverables, technical shape, and acceptance checklist.
+
 ### Milestones
 
 #### 1. Walking and collision
@@ -139,7 +143,7 @@ See [v0.0.2 scope](dev/v0.0.2-scope.md) for the concrete deliverables, technical
 - [ ] Load chunks from disk
 
 #### 4. Texture atlas
-- [ ] Single atlas for all block textures
+- [ ] Single texture-array atlas for all block textures
 - [ ] Batch different block types in one chunk mesh
 
 ### Definition of Done
@@ -157,6 +161,8 @@ See [v0.0.2 scope](dev/v0.0.2-scope.md) for the concrete deliverables, technical
 **Status:** [ ]
 **Goal:** Large view distances at a smooth frame rate.
 **Summary:** Move from toy to real engine.
+
+See [v0.0.5 scope](dev/v0.0.5-scope.md) for the concrete deliverables, technical shape, and acceptance checklist.
 
 ### Milestones
 
@@ -189,6 +195,8 @@ See [v0.0.2 scope](dev/v0.0.2-scope.md) for the concrete deliverables, technical
 **Goal:** Make the world look good.
 **Summary:** Lighting, fog, and transparency.
 
+See [v0.0.6 scope](dev/v0.0.6-scope.md) for the concrete deliverables, technical shape, and acceptance checklist.
+
 ### Milestones
 
 #### 1. Voxel lighting
@@ -218,6 +226,8 @@ See [v0.0.2 scope](dev/v0.0.2-scope.md) for the concrete deliverables, technical
 **Status:** [ ]
 **Goal:** Turn the engine into a game-ready, procedurally generated world.
 **Summary:** Optional cutting-edge techniques.
+
+See [v0.0.7 scope](dev/v0.0.7-scope.md) for the concrete deliverables, technical shape, and acceptance checklist.
 
 ### Milestones
 
