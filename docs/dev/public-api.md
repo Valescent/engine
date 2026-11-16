@@ -55,10 +55,10 @@ This surface has no semver compatibility promise. Any `0.0.x` release may change
 
 ## What is not public
 
-- `App`, `Camera`, `Renderer`, `Vertex`, `build_mesh`, and renderer helpers are private or
-  `pub(crate)`.
-- The `camera`, `renderer`, and `voxel` modules are private. Paths such as `engine::Camera` or
-  `engine::Renderer` do not exist.
+- `App`, `Camera`, `Renderer`, `Vertex`, `World`, `ChunkCoord`, `build_chunk_mesh`, and renderer
+  helpers are private or `pub(crate)`.
+- The `camera`, `renderer`, `voxel`, and `world` modules are private. Paths such as
+  `engine::Camera` or `engine::Renderer` do not exist.
 - `src/main.rs` is the only in-repo consumer. It calls `engine::run()` and returns
   `engine::RunError`.
 - The shader, mesh layout, texture pipeline, world state, and configuration are not public API.

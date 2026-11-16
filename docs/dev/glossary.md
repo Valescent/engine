@@ -1,9 +1,9 @@
 # Glossary
 
 Preferred terms, short definitions, and links to the page that owns each topic. **Status** is
-current for shipped v0.0.2 behaviour, planned with a milestone for scoped work, optional for
-stretch work, or deferred when no decision exists. **Avoid** lists terms that are ambiguous or
-mean something else; it does not ban the word everywhere.
+current for implemented behaviour (shipped, or awaiting release), planned with a milestone for
+scoped work, optional for stretch work, or deferred when no decision exists. **Avoid** lists terms
+that are ambiguous or mean something else; it does not ban the word everywhere.
 
 ## World and coordinates
 
@@ -11,17 +11,17 @@ mean something else; it does not ban the word everywhere.
 |---|---|---|---|
 | [voxel](coordinates.md#voxel-coordinates) | Smallest addressable world cell, identified by an integer `IVec3` and occupying a unit cube. | Current | block, when you mean the cell |
 | [block](v0.0.4-scope.md) | The type or contents stored in a voxel, such as Air, Stone, Dirt, Grass, Wood, or Leaves. | Planned (v0.0.4) | voxel, when you mean the type |
-| [world](architecture.md#coordinates-and-data) | All stored voxels and their state; chunks become the storage unit in v0.0.3. | Current | map, level |
-| [chunk](v0.0.3-scope.md) | Fixed 32×32×32 region of voxels. | Planned (v0.0.3) | section |
-| [ChunkCoord](../specs/v0.0.3.md) | Newtype around `IVec3` used as an ordered chunk key; `IVec3` itself is not `Ord`. | Planned (v0.0.3) | — |
+| [world](architecture.md#coordinates-and-data) | All stored voxels and their state; chunks are the storage unit since v0.0.3. | Current | map, level |
+| [chunk](v0.0.3-scope.md) | Fixed 32×32×32 region of voxels. | Current (v0.0.3) | section |
+| [ChunkCoord](../specs/v0.0.3.md) | Newtype around `IVec3` used as an ordered chunk key; `IVec3` itself is not `Ord`. | Current (v0.0.3) | — |
 | [world coordinate](coordinates.md#voxel-coordinates) | Integer `IVec3` address of a voxel in the world. | Current | global coordinate |
-| [chunk coordinate](coordinates.md#chunk-coordinates-planned-v003) | Integer `IVec3` index of a chunk. Chunk `c` covers world coordinates `c * 32 ..= c * 32 + 31`. | Planned (v0.0.3) | chunk position |
-| [local coordinate](coordinates.md#chunk-coordinates-planned-v003) | Integer coordinate from `0` to `31` on each axis, relative to one chunk. | Planned (v0.0.3) | relative coordinate |
+| [chunk coordinate](coordinates.md#chunk-coordinates-v003) | Integer `IVec3` index of a chunk. Chunk `c` covers world coordinates `c * 32 ..= c * 32 + 31`. | Current (v0.0.3) | chunk position |
+| [local coordinate](coordinates.md#chunk-coordinates-v003) | Integer coordinate from `0` to `31` on each axis, relative to one chunk. | Current (v0.0.3) | relative coordinate |
 | [world space](coordinates.md#world-space) | Floating-point `Vec3` position in metres. | Current | world coordinates, when you mean floats |
 | [position](coordinates.md#world-space) | Floating-point location in world space; not an integer voxel address. | Current | coordinate, when you mean floats |
-| [chunk origin](coordinates.md#chunk-coordinates-planned-v003) | World coordinate `c * 32` at a chunk's minimum corner. | Planned (v0.0.3) | chunk center |
-| [chunk-local space](coordinates.md#mesh-space-planned-v003) | Floating-point space inside one chunk, from `0` to `32` metres. | Planned (v0.0.3) | local space, when it is ambiguous |
-| [chunk border](v0.0.3-scope.md) | Local coordinate `0` or `31` on an axis; edits there can affect a neighbour chunk. | Planned (v0.0.3) | — |
+| [chunk origin](coordinates.md#chunk-coordinates-v003) | World coordinate `c * 32` at a chunk's minimum corner. | Current (v0.0.3) | chunk center |
+| [chunk-local space](coordinates.md#mesh-space-v003) | Floating-point space inside one chunk, from `0` to `32` metres. | Current (v0.0.3) | local space, when it is ambiguous |
+| [chunk border](v0.0.3-scope.md) | Local coordinate `0` or `31` on an axis; edits there can affect a neighbour chunk. | Current (v0.0.3) | — |
 | [precision budget](coordinates.md#precision-and-limits) | Accepted `f32` error or playable radius before camera-relative rendering is needed. | Deferred | chunk size |
 
 ## Rendering and performance
@@ -32,11 +32,11 @@ mean something else; it does not ban the word everywhere.
 | [meshing](v0.0.3-scope.md) | Generating a mesh from voxel data. | Current | rendering |
 | [shader](shaders.md) | WGSL program that runs on the GPU; the current module is `src/shader.wgsl`. | Current | material, when you mean the program |
 | [WGSL](shaders.md) | WebGPU Shading Language, the shader language used by wgpu. | Current | GLSL or HLSL, when you mean WGSL |
-| [chunk mesh](v0.0.3-scope.md) | Mesh for one chunk, built in chunk-local space. | Planned (v0.0.3) | world mesh |
-| [face culling](v0.0.3-scope.md) | Omitting a voxel face when the neighbouring voxel is solid. | Planned (v0.0.3) | backface culling |
+| [chunk mesh](v0.0.3-scope.md) | Mesh for one chunk, built in chunk-local space. | Current (v0.0.3) | world mesh |
+| [face culling](v0.0.3-scope.md) | Omitting a voxel face when the neighbouring voxel is solid. | Current (v0.0.3) | backface culling |
 | [backface culling](architecture.md#rendering-resources) | GPU test that discards triangles facing away from the camera; currently disabled. | Current | face culling |
-| [dirty chunk](v0.0.3-scope.md) | Chunk whose mesh must be rebuilt after an edit. | Planned (v0.0.3) | stale chunk |
-| [rebuild](v0.0.3-scope.md) | Regenerate and upload a dirty chunk's mesh. | Planned (v0.0.3) | remesh, when you mean the whole edit path |
+| [dirty chunk](v0.0.3-scope.md) | Chunk whose mesh must be rebuilt after an edit. | Current (v0.0.3) | stale chunk |
+| [rebuild](v0.0.3-scope.md) | Regenerate and upload a dirty chunk's mesh. | Current (v0.0.3) | remesh, when you mean the whole edit path |
 | [greedy meshing](../specs/v0.0.5.md) | Merging adjacent coplanar same-type faces into larger quads. | Planned (v0.0.5) | merging, when it is ambiguous |
 | [LOD](../decisions/0010-two-level-lod-for-chunks.md) | Level of detail; LOD0 full resolution and LOD1 conservative 2×2×2 for distant chunks. | Planned (v0.0.5) | mipmap |
 | [frustum culling](../specs/v0.0.5.md) | Skipping chunks outside the camera's view frustum. | Planned (v0.0.5) | occlusion culling |
@@ -46,7 +46,7 @@ mean something else; it does not ban the word everywhere.
 | [revision](../specs/v0.0.5.md) | Version number for a chunk mesh or job; results from older revisions are discarded. | Planned (v0.0.5) | version, when you mean the package version |
 | [stress scene](../specs/v0.0.5.md) | Exact 64-chunk in-memory fixture selected by `ENGINE_STRESS_SCENE=1`. | Planned (v0.0.5) | benchmark, when you mean the fixture |
 | [upload budget](../specs/v0.0.5.md) | Maximum completed chunk meshes uploaded per frame; fixed at two. | Planned (v0.0.5) | frame budget |
-| [draw call](v0.0.3-scope.md) | One draw submission to the GPU. v0.0.2 issues one per frame; v0.0.3 plans one per non-empty chunk. | Current | pass |
+| [draw call](v0.0.3-scope.md) | One draw submission to the GPU. v0.0.3 issues one per non-empty chunk. | Current | pass |
 | [frame time](debugging.md#logging) | Time to produce one frame, logged as `frame_ms`. | Current | FPS |
 | [FPS](debugging.md#logging) | Frames per second; the reciprocal of frame time. | Current | frame time |
 

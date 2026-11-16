@@ -30,15 +30,15 @@ points. There is no runtime shader loader or asset path.
 | Stage | Interface |
 |---|---|
 | Vertex input | `@location(0) position: vec3<f32>`, `@location(1) normal: vec3<f32>` |
-| Uniform | `@group(0) @binding(0) camera.view_projection: mat4x4<f32>` |
+| Uniforms | `@group(0) @binding(0)` camera `view_projection: mat4x4<f32>`; `@group(1) @binding(0)` chunk `origin: vec3<f32>` |
 | Vertex output | `@builtin(position) clip_position`, `@location(0) normal` |
 | Fragment output | `@location(0) vec4<f32>` |
 | Pipeline state | Triangle list, no culling, `Depth32Float`, `Less`, depth write enabled, one color target |
 
-The vertex stage computes `clip_position = view_projection * vec4(position, 1.0)` and forwards the
-normal. The fragment stage uses a fixed light direction `(0.35, 0.85, 0.45)`, a `0.45..1.0` shade,
-and a fixed green base color. There are no textures, lighting uniforms, fog, or transparency in
-the current shader.
+The vertex stage computes `world_position = chunk.origin + input.position`, then
+`clip_position = view_projection * vec4(world_position, 1.0)`, and forwards the normal. The fragment
+stage uses a fixed light direction `(0.35, 0.85, 0.45)`, a `0.45..1.0` shade, and a fixed green base
+color. There are no textures, lighting uniforms, fog, or transparency in the current shader.
 
 The interface, in brief:
 
@@ -47,8 +47,16 @@ struct Camera {
     view_projection: mat4x4<f32>,
 };
 
+struct Chunk {
+    origin: vec3<f32>,
+    padding: f32,
+};
+
 @group(0) @binding(0)
 var<uniform> camera: Camera;
+
+@group(1) @binding(0)
+var<uniform> chunk: Chunk;
 
 struct VertexIn {
     @location(0) position: vec3<f32>,
@@ -75,14 +83,17 @@ must match:
 
 ### Bindings
 
-- The current layout has one entry: group `0`, binding `0`, `ShaderStages::VERTEX`, uniform,
-  `min_binding_size` 64.
-- The shader declares `var<uniform> camera: Camera` with the same group and binding. Changing
-  either number without the other fails pipeline creation.
-- The uniform is visible to the vertex stage only. If a fragment function reads it, add
+- The current layout has two entries, both visible to the vertex stage:
+  - group `0`, binding `0`: the 64-byte camera uniform.
+  - group `1`, binding `0`: the 16-byte chunk origin uniform.
+- The shader declares `var<uniform> camera: Camera` and `var<uniform> chunk: Chunk` with the
+  matching groups and bindings. Changing either number without the other fails pipeline creation.
+- The camera uniform is visible to the vertex stage only. If a fragment function reads it, add
   `ShaderStages::FRAGMENT` to the layout entry.
-- The buffer is 64 bytes, matching one `mat4x4<f32>`. If the struct grows, update the buffer size,
-  `min_binding_size`, and the Rust write together.
+- The camera buffer is 64 bytes, matching one `mat4x4<f32>`. If the struct grows, update the buffer
+  size, `min_binding_size`, and the Rust write together.
+- The chunk origin buffer holds `vec3<f32>` plus one padding float, which matches the uniform
+  address-space alignment. The padding is not read.
 - WGSL matrices are column-major. `Mat4::to_cols_array()` writes them column by column, so
   `view_projection * vec4(position, 1.0)` is correct. Do not transpose the matrix on the CPU or in
   the shader.
@@ -204,7 +215,8 @@ padding.
    floats in the vertex stage instead.
 6. Run `cargo test` for the CPU-side layout and mesh vectors, then `cargo run` for GPU validation.
 7. If the layout is normative, update the spec or ADR before changing shipped data. The current
-   shader is v0.0.2; the 36-byte and 40-byte layouts are planned contracts, not current code.
+   shader is v0.0.3; the 36-byte v0.0.4 layout and 40-byte v0.0.6 layout are planned contracts,
+   not current code.
 
 ## Changing bindings
 
@@ -217,15 +229,16 @@ padding.
    sees a `sampler`, not a filtering mode.
 6. Run `cargo run`; an unmatched binding or visibility fails pipeline validation.
 
-The current bind group is group `0`, binding `0`, camera uniform, vertex visibility. The v0.0.4
-texture array and sampler are planned; the spec fixes the texture array and per-vertex layer, not
-the binding numbers. Choose numbers that match the Rust layout and document them in the change.
+The current bind groups are group `0`, binding `0` (camera uniform, vertex visibility) and group
+`1`, binding `0` (chunk origin uniform, vertex visibility). The v0.0.4 texture array and sampler
+are planned; the spec fixes the texture array and per-vertex layer, not the binding numbers.
+Choose numbers that match the Rust layout and document them in the change.
 
-## Planned shader work
+## Shader work by milestone
 
 | Milestone | Change | Shader consequence |
 |---|---|---|
-| v0.0.3 | Chunk-local vertices and chunk origins | The vertex stage adds the chunk origin to the position. The mechanism is an implementation detail; a uniform or an instance attribute with `VertexStepMode::Instance` both work. Normals are unchanged. |
+| v0.0.3 | Chunk-local vertices and chunk origins | Implemented as a 16-byte origin uniform in group `1`. The vertex stage adds the chunk origin to the position. Normals are unchanged. |
 | v0.0.4 | 36-byte vertex with UV and layer, texture array | The vertex stage forwards UV and layer. The fragment stage samples `texture_2d_array<f32>` with nearest filtering and no mipmaps. The highlight is a separate line-list pipeline. |
 | v0.0.5 | Greedy quads and LOD1 | UVs are in block units and the sampler repeats in U and V. LOD1 uses the same shader; the CPU scales positions and UVs, so the shader does not branch on LOD. |
 | v0.0.6 | 40-byte light/AO vertex, day/night, fog, water | The vertex stage unpacks sky light, block light, and AO into separate float varyings; the fragment stage applies the spec's lighting and fog formulas and uses a separate transparent water pipeline with animated normals. |
