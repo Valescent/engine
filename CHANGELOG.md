@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Space` toggles that boundary voxel and rebuilds only the affected chunks.
 - The camera starts near `(37, 4.5, 38)` and is aimed at `(32, 0.5, 32)`.
 
+### Fixed
+
+- Chunk meshing treats neighbours outside the `i32` world bounds as air instead of overflowing.
+
 ## [0.0.2] - 2026-11-14
 
 ### Added

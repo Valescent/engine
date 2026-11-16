@@ -79,8 +79,8 @@ const FACES: [(IVec3, [[f32; 3]; 4]); 6] = [
 ///
 /// The chunk origin plus local coordinates maps every face neighbour into world
 /// space, so faces shared across a chunk border are culled like any other.
-/// Voxels are sorted by local coordinate so the output does not depend on
-/// `HashSet` iteration order.
+/// Neighbours beyond the `i32` world bounds are air. Voxels are sorted by local
+/// coordinate so the output does not depend on `HashSet` iteration order.
 pub(crate) fn build_chunk_mesh(world: &World, chunk: ChunkCoord) -> Vec<Vertex> {
     let Some(chunk_data) = world.chunk(chunk) else {
         return Vec::new();
@@ -99,9 +99,10 @@ pub(crate) fn build_chunk_mesh(world: &World, chunk: ChunkCoord) -> Vec<Vertex> 
 
 fn push_voxel(world: &World, chunk_origin: IVec3, local: IVec3, vertices: &mut Vec<Vertex>) {
     let origin = local.as_vec3();
+    let world_voxel = chunk_origin + local;
 
     for (normal, corners) in FACES {
-        if world.is_solid(chunk_origin + local + normal) {
+        if checked_add(world_voxel, normal).is_some_and(|neighbour| world.is_solid(neighbour)) {
             continue;
         }
 
@@ -113,6 +114,16 @@ fn push_voxel(world: &World, chunk_origin: IVec3, local: IVec3, vertices: &mut V
             });
         }
     }
+}
+
+/// Offsets a world coordinate, returning `None` when the result leaves the
+/// `i32` range. Out-of-range neighbours are treated as air.
+fn checked_add(position: IVec3, offset: IVec3) -> Option<IVec3> {
+    Some(IVec3::new(
+        position.x.checked_add(offset.x)?,
+        position.y.checked_add(offset.y)?,
+        position.z.checked_add(offset.z)?,
+    ))
 }
 
 #[cfg(test)]
@@ -220,6 +231,14 @@ mod tests {
                 && (0.0..=1.0).contains(&vertex.position[1])
                 && (31.0..=32.0).contains(&vertex.position[2])
         }));
+    }
+
+    #[test]
+    fn world_edges_do_not_wrap_to_the_opposite_side() {
+        let world = world_with(&[IVec3::MIN, IVec3::MAX]);
+
+        assert_eq!(mesh(&world, chunk_at(IVec3::MAX)).len(), 36);
+        assert_eq!(mesh(&world, chunk_at(IVec3::MIN)).len(), 36);
     }
 
     #[test]
