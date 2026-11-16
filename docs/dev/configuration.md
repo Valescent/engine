@@ -27,7 +27,11 @@ files for builds, checks, docs, and releases. Runtime settings are not read from
 | `RUST_LOG` | Engine (`tracing-subscriber` `EnvFilter`) | Sets the log filter. Unset or invalid falls back to `info`. Examples: `engine=debug`, `engine=debug,wgpu=warn`. |
 | `WGPU_BACKEND` | `wgpu` | Forces a backend such as `dx12`, `vulkan`, or `metal`, depending on the platform. Unset lets `wgpu` choose. The engine does not parse it. |
 
-See [Testing](testing.md) for manual-run examples and [Setup](setup.md) for backend selection.
+See [Testing](testing.md) for manual-run examples, [Setup](setup.md) for backend selection, and
+[Debugging](debugging.md) for log workflows and the planned log file.
+
+Planned for v0.0.5: `ENGINE_STRESS_SCENE=1` selects the in-memory stress scene and disables
+world save/load. See the [v0.0.5 spec](../specs/v0.0.5.md).
 
 #### Compile-time constants
 
@@ -57,6 +61,8 @@ No `config.toml` is read today. The decided shape is:
   setting.
 - **Settings:** the remappable action map (no milestone) and render distance in chunks
   (v0.0.7).
+- **v0.0.7 key:** `world.render_distance_chunks = 12`, range `8..=16`, default `12` when
+  missing. See the [v0.0.7 spec](../specs/v0.0.7.md).
 - **Schema:** the exact keys and nesting are not fixed. The file will not configure logging,
   the GPU backend, the window, camera tuning, or frame timing; those stay environment
   variables or compile-time constants.
@@ -69,9 +75,12 @@ No separate milestone is assigned to the config file itself.
 |---|---|
 | `config.toml` | Planned; working directory. |
 | `world/` | Planned (v0.0.4); working directory. |
+| `world/seed` | Planned (v0.0.7); decimal world seed. |
+| `logs/` | Planned; working directory; per-run log files. |
 
-Both are resolved against the process working directory. `.gitignore` currently ignores
-`/target`, `/.idea`, and `/book`; the v0.0.4 scope adds `world/`.
+Both are resolved against the process working directory. `.gitignore` ignores `/target`,
+`/.idea`, `/book`, `/logs`, and `/world`. See [World management](world-management.md) for backups,
+corruption recovery, and reset.
 
 ## Repository tooling
 
@@ -101,7 +110,8 @@ Lints:
 - Clippy: `all` and `pedantic` are warned, with allowances for module name repetitions,
   missing `must_use` candidates, and missing error and panic docs. The Clippy job turns
   warnings into errors.
-- No optional Cargo features are defined. `--all-features` currently selects nothing.
+- No optional Cargo features are defined today. `--all-features` currently selects nothing. The
+  planned Tracy feature in [Debugging](debugging.md) is not defined yet.
 
 cargo-deny allows the licences listed in `deny.toml`, ignores the private PolyForm Shield
 licence, denies wildcard requirements and unknown registries or Git sources, and warns on
@@ -114,7 +124,7 @@ duplicate crate versions.
 | `rustfmt.toml` | Edition 2024, 100-column maximum, Unix newlines, field-init and try shorthand. |
 | `.editorconfig` | UTF-8, LF, final newline, trimmed trailing whitespace, four-space indent. Markdown and YAML/JSON use two spaces; Markdown keeps trailing whitespace. |
 | `.gitattributes` | LF normalization, Rust and WGSL diff drivers, and binary asset types. |
-| `_typos.toml` | `// spellchecker:disable-line` support, project names such as `Valescent`, `wgpu`, and `winit`, and the mdBook CSS word `existant`. |
+| `_typos.toml` | `// spellchecker:disable-line` support, project names such as `Valescent`, `wgpu`, and `winit`, and the deliberate mdBook CSS variable misspelling. |
 
 ### Documentation and releases
 
@@ -127,6 +137,8 @@ duplicate crate versions.
 | `.github/workflows/commits.yml` | Conventional Commit check and the changelog-entry gate for user-facing commits. |
 | `.github/workflows/release.yml` | Tag-triggered or manual release. Manual runs call `scripts/release.sh`; tag pushes publish the GitHub release. |
 | `.github/dependabot.yml` | Weekly grouped Cargo and GitHub Actions updates. |
+
+See [CI](ci.md) for the full workflow map, local equivalents, and current gaps.
 
 `docs/SUMMARY.md` defines the documentation navigation. A page that is not listed there is
 not published.

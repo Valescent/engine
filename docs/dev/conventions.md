@@ -8,6 +8,7 @@ These are defaults, not dogma. Deviating is fine when the code says why.
 - One concept per module. A module owns its data and the operations on it.
 - Export the minimum. `pub(crate)` before `pub`, `pub` before `pub use` trees.
 - No global mutable state. Pass what a subsystem needs.
+- WGSL shaders follow [Shader authoring](shaders.md).
 
 ## Errors
 
@@ -39,7 +40,7 @@ These are defaults, not dogma. Deviating is fine when the code says why.
 - Keep the per-frame path allocation-free where practical, but correctness first.
 - Document any hot loop that relies on a non-obvious layout or ordering.
 
-`benches/pool_sim.rs` compares rayon with micropool on the v0.0.5 async-meshing frame loop. It is a decision aid, not a regression gate: run `cargo bench --bench pool_sim` when choosing or changing the worker pool, keep both backends in the same run on the same machine, and do not add it to CI.
+`benches/pool_sim.rs` compares rayon with micropool on the v0.0.5 async-meshing frame loop. It is a decision aid, not a regression gate: run `cargo bench --bench pool_sim` when choosing or changing the worker pool, keep both backends in the same run on the same machine, and do not add it to CI. Recorded runs are in [Benchmark results](benchmarks.md).
 
 ## Tests
 

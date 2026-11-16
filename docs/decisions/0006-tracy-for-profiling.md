@@ -52,6 +52,8 @@ My choice is constrained by the following:
 
 This covers CPU spans around frame phases, chunk generation, meshing, and buffer uploads; plots for frame time and queue depth; and GPU scopes around render passes. Instrumentation is compiled in only behind an opt-in feature, so normal and release builds contain no client code. Frame debuggers (RenderDoc, Nsight, PIX) remain acceptable and complementary tools for pipeline and shader inspection; they are not the profiler.
 
+See the [profiling guide](../dev/profiling.md) for the intended dependency set, engine wiring, and the current gaps against this decision.
+
 I accept this decision for the current scope. I will revisit it only if the assumptions in this document stop holding.
 
 ---

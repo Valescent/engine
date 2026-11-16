@@ -2,6 +2,8 @@
 
 Releases are cut from `main` by `scripts/release.sh`, usually through the **Release** GitHub Actions workflow. The script rolls `[Unreleased]` into a version, bumps `Cargo.toml`, commits, tags, and pushes. The tag then publishes a GitHub release.
 
+See [Versioning](versioning.md) for the release-version policy and tag rules.
+
 ## Before the release
 
 - [ ] The target version is decided.
@@ -65,4 +67,5 @@ The tag push triggers the **Release** workflow. Its `Publish` job checks that th
 
 - `--dry-run` still creates the release commit; it only skips tagging, pushing, and publishing. Use it deliberately.
 - Release notes come only from the matching `CHANGELOG.md` section, so write for users rather than for the diff.
-- Do not commit generated `book/` output or local world saves.
+- Do not commit generated `book/` output or local world saves. Back up and reset test worlds with
+  [World management](world-management.md).
