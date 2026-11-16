@@ -7,6 +7,7 @@
 mod camera;
 mod renderer;
 mod voxel;
+mod world;
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -26,10 +27,11 @@ use winit::window::{CursorGrabMode, Window, WindowId};
 use camera::Camera;
 use renderer::Renderer;
 pub use renderer::RendererError;
-use voxel::build_mesh;
+use voxel::build_chunk_mesh;
+use world::World;
 
 const WINDOW_TITLE: &str = concat!("Valescent Engine ", env!("CARGO_PKG_VERSION"));
-const TOGGLE_TARGET: IVec3 = IVec3::new(1, 1, 1);
+const TOGGLE_TARGET: IVec3 = IVec3::new(31, 1, 31);
 const MAX_FRAME_DELTA: Duration = Duration::from_millis(100);
 const FRAME_LOG_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -68,7 +70,7 @@ fn init_tracing() {
 struct App {
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
-    voxels: HashSet<IVec3>,
+    world: World,
     camera: Camera,
     error: Option<RunError>,
     pressed: HashSet<KeyCode>,
@@ -85,7 +87,7 @@ impl App {
         Self {
             window: None,
             renderer: None,
-            voxels: initial_voxels(),
+            world: initial_world(),
             camera: Camera::new(1.0),
             error: None,
             pressed: HashSet::new(),
@@ -105,18 +107,25 @@ impl App {
     }
 
     fn toggle_voxel(&mut self) {
-        if !self.voxels.remove(&TOGGLE_TARGET) {
-            self.voxels.insert(TOGGLE_TARGET);
-        }
-
-        let mesh = build_mesh(&self.voxels);
+        let started = Instant::now();
+        let dirty = self.world.toggle(TOGGLE_TARGET);
         if let Some(renderer) = &mut self.renderer {
-            renderer.upload_mesh(&mesh);
+            for chunk in &dirty {
+                let mesh = build_chunk_mesh(&self.world, *chunk);
+                renderer.upload_chunk(*chunk, &mesh);
+            }
         }
+        let elapsed = started.elapsed();
+        debug!(
+            dirty_chunks = dirty.len(),
+            vertices = self.renderer.as_ref().map_or(0, Renderer::total_vertices),
+            rebuild_ms = elapsed.as_secs_f64() * 1000.0,
+            "rebuilt chunks"
+        );
+
         if let Some(window) = &self.window {
             window.request_redraw();
         }
-        debug!(voxels = self.voxels.len(), "toggled voxel");
     }
 
     fn resize(&mut self, size: PhysicalSize<u32>) {
@@ -280,11 +289,10 @@ impl ApplicationHandler for App {
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(
                 Box::new(event_loop.owned_display_handle()),
             ));
-        let mesh = build_mesh(&self.voxels);
         let renderer = match pollster::block_on(Renderer::new(
             window.clone(),
             instance,
-            &mesh,
+            &self.world,
             &self.camera,
         )) {
             Ok(renderer) => renderer,
@@ -359,26 +367,28 @@ fn is_movement_key(code: KeyCode) -> bool {
     )
 }
 
-fn initial_voxels() -> HashSet<IVec3> {
-    [
-        IVec3::new(0, 0, 0),
-        IVec3::new(1, 0, 0),
-        IVec3::new(2, 0, 0),
-        IVec3::new(0, 0, 1),
-        IVec3::new(1, 0, 1),
-        IVec3::new(2, 0, 1),
-        IVec3::new(0, 0, 2),
-        IVec3::new(1, 0, 2),
-        IVec3::new(2, 0, 2),
-        IVec3::new(1, 1, 1),
-    ]
-    .into_iter()
-    .collect()
+fn initial_world() -> World {
+    let mut world = World::default();
+    for x in 30..=33 {
+        for z in 30..=33 {
+            world.insert(IVec3::new(x, 0, z));
+        }
+    }
+    world.insert(TOGGLE_TARGET);
+    world
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use crate::world::ChunkCoord;
+
     use super::*;
+
+    fn chunk_at(world: IVec3) -> ChunkCoord {
+        ChunkCoord::from_world(world).0
+    }
 
     #[test]
     fn mouse_look_requires_capture_and_focus() {
@@ -396,5 +406,40 @@ mod tests {
         app.focused = true;
         app.apply_mouse_look(100.0, 0.0);
         assert_ne!(app.camera.view_projection(), initial);
+    }
+
+    #[test]
+    fn demo_scene_spans_four_chunks() {
+        let mut world = initial_world();
+        let counts: BTreeMap<ChunkCoord, usize> = world
+            .iter_chunks()
+            .map(|(chunk, _)| (chunk, build_chunk_mesh(&world, chunk).len()))
+            .collect();
+
+        let expected = BTreeMap::from([
+            (chunk_at(IVec3::new(0, 0, 0)), 96),
+            (chunk_at(IVec3::new(32, 0, 0)), 72),
+            (chunk_at(IVec3::new(0, 0, 32)), 72),
+            (chunk_at(IVec3::new(32, 0, 32)), 72),
+        ]);
+        assert_eq!(counts, expected);
+        assert_eq!(counts.values().sum::<usize>(), 312);
+
+        let dirty = world.toggle(TOGGLE_TARGET);
+        assert_eq!(
+            dirty,
+            BTreeSet::from([
+                chunk_at(IVec3::new(0, 0, 0)),
+                chunk_at(IVec3::new(32, 0, 0)),
+                chunk_at(IVec3::new(0, 0, 32)),
+            ])
+        );
+
+        let total: usize = world
+            .iter_chunks()
+            .map(|(chunk, _)| build_chunk_mesh(&world, chunk).len())
+            .sum();
+        assert_eq!(total, 288);
+        assert!(world.chunk(chunk_at(IVec3::new(32, 0, 32))).is_some());
     }
 }

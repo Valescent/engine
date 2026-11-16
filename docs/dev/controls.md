@@ -7,14 +7,14 @@ Keyboard and mouse bindings for the current engine and the scoped milestones. Se
 | Area | Status |
 |---|---|
 | Fly-camera bindings | Current (v0.0.2) |
-| Chunk boundary demo toggle | Planned (v0.0.3) |
+| Chunk boundary demo toggle | Current (v0.0.3) |
 | Walking, interaction, hotbar, save | Planned (v0.0.4) |
 | Day/night debug key | Planned (v0.0.6) |
 | Remappable bindings | Planned, no milestone |
 
 ## Bindings by milestone
 
-| Input | v0.0.2 (current) | v0.0.3 (planned) | v0.0.4 (planned) |
+| Input | v0.0.2 | v0.0.3 (current) | v0.0.4 (planned) |
 |---|---|---|---|
 | `W` / `S` | Fly forward / back | Fly forward / back | Walk forward / back |
 | `A` / `D` | Strafe left / right | Strafe left / right | Walk left / right |
@@ -34,7 +34,7 @@ strafe horizontally. v0.0.4 replaces flight with walking.
 v0.0.4 also saves on exit. The v0.0.3 demo toggle is not carried forward on `Space`, and the
 scope assigns no replacement key.
 
-## Current capture and focus (v0.0.2)
+## Current capture and focus (v0.0.2–v0.0.3)
 
 - Gameplay input is handled only while the window is focused.
 - Mouse look requires both capture and focus. It reads raw mouse motion; sensitivity is

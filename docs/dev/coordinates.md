@@ -6,7 +6,7 @@ Conventions shared by the camera, voxel storage, meshing, and rendering. Section
 | Convention | Status |
 |---|---|
 | World axes, units, voxel occupancy, camera direction | Current (v0.0.2) |
-| Chunk coordinates and chunk-local mesh vertices | Planned (v0.0.3) |
+| Chunk coordinates and chunk-local mesh vertices | Current (v0.0.3) |
 | Block targeting and placement | Planned (v0.0.4) |
 | Large-world precision budget | Deferred |
 
@@ -14,11 +14,10 @@ Conventions shared by the camera, voxel storage, meshing, and rendering. Section
 
 - **World coordinate** — integer `IVec3` identifying one voxel in the world. This is the
   canonical block address.
-- **Chunk coordinate** — integer `IVec3` identifying one 32³ chunk. Planned.
+- **Chunk coordinate** — integer `IVec3` identifying one 32³ chunk.
 - **Local coordinate** — integer `IVec3` from `0` to `31` on each axis, relative to one chunk.
-  Planned.
 - **World space** — floating-point `Vec3` in metres, used by the camera and renderer.
-- **Chunk-local space** — floating-point `Vec3` in metres within one chunk. Planned.
+- **Chunk-local space** — floating-point `Vec3` in metres within one chunk.
 
 ## World space
 
@@ -39,9 +38,9 @@ Conventions shared by the camera, voxel storage, meshing, and rendering. Section
 - A face normal is an axis-aligned unit vector pointing out of the solid voxel.
 - Faces are wound counter-clockwise when viewed from outside the voxel. Backface culling is
   currently disabled; if it is enabled, counter-clockwise remains the front face.
-- Adjacent voxels share a face. v0.0.2 emits both faces; v0.0.3 culls the shared pair.
+- Adjacent voxels share a face. The shared pair is culled in v0.0.3 and later.
 
-## Chunk coordinates (planned, v0.0.3)
+## Chunk coordinates (v0.0.3)
 
 - `CHUNK_SIZE = 32`. Chunks are 32×32×32.
 - Chunk coordinate `c` covers world coordinates `c * 32 ..= c * 32 + 31` on each axis.
@@ -67,7 +66,7 @@ Conventions shared by the camera, voxel storage, meshing, and rendering. Section
 - Meshing resolves face visibility through world coordinates, not local coordinates, so a face
   between solid voxels across a chunk border is culled like any other.
 
-## Mesh space (planned, v0.0.3)
+## Mesh space (v0.0.3)
 
 - Chunk meshes are generated in chunk-local space. Vertex positions are in `0..=32` because
   the last voxel's far corner is at local `32`.
@@ -78,8 +77,7 @@ Conventions shared by the camera, voxel storage, meshing, and rendering. Section
   [ADR 0004](../decisions/0004-glam-for-math.md).
 - The draw path supplies each chunk's origin to the vertex stage. The GPU mechanism is an
   implementation detail, not part of this convention.
-- v0.0.2 has one world-space vertex buffer and no chunk origin. v0.0.3 replaces that with one
-  buffer per non-empty chunk.
+- Each non-empty chunk owns one vertex buffer, replacing the v0.0.2 world-space buffer.
 
 ## Camera and direction
 

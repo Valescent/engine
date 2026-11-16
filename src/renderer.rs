@@ -1,5 +1,6 @@
 //! Minimal `wgpu` renderer for the voxel mesh.
 
+use std::collections::BTreeMap;
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -10,7 +11,8 @@ use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
 use crate::camera::Camera;
-use crate::voxel::Vertex;
+use crate::voxel::{Vertex, build_chunk_mesh};
+use crate::world::{ChunkCoord, World};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {
@@ -34,6 +36,13 @@ pub enum RendererError {
     Validation(String),
 }
 
+struct GpuChunk {
+    vertex_buffer: wgpu::Buffer,
+    vertex_count: u32,
+    _origin_buffer: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+}
+
 pub(crate) struct Renderer {
     window: Arc<Window>,
     instance: wgpu::Instance,
@@ -44,8 +53,8 @@ pub(crate) struct Renderer {
     pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
-    vertex_buffer: wgpu::Buffer,
-    vertex_count: u32,
+    chunk_bind_group_layout: wgpu::BindGroupLayout,
+    chunks: BTreeMap<ChunkCoord, GpuChunk>,
     depth_texture: wgpu::Texture,
     depth_view: wgpu::TextureView,
 }
@@ -54,7 +63,7 @@ impl Renderer {
     pub(crate) async fn new(
         window: Arc<Window>,
         instance: wgpu::Instance,
-        mesh: &[Vertex],
+        world: &World,
         camera: &Camera,
     ) -> Result<Self, RendererError> {
         let size = window.inner_size();
@@ -106,20 +115,19 @@ impl Renderer {
             bytemuck::cast_slice(&camera.view_projection().to_cols_array()),
         );
 
-        let bind_group_layout = create_bind_group_layout(&device);
-        let bind_group = create_bind_group(&device, &bind_group_layout, &uniform_buffer);
-        let pipeline = create_pipeline(&device, &config, &bind_group_layout)?;
+        let camera_bind_group_layout = create_camera_bind_group_layout(&device);
+        let bind_group =
+            create_camera_bind_group(&device, &camera_bind_group_layout, &uniform_buffer);
+        let chunk_bind_group_layout = create_chunk_bind_group_layout(&device);
+        let pipeline = create_pipeline(
+            &device,
+            &config,
+            &camera_bind_group_layout,
+            &chunk_bind_group_layout,
+        )?;
         let (depth_texture, depth_view) = create_depth_texture(&device, &config);
-        let (vertex_buffer, vertex_count) = create_vertex_buffer(&device, mesh);
 
-        info!(
-            width = config.width,
-            height = config.height,
-            vertices = vertex_count,
-            "renderer ready"
-        );
-
-        Ok(Self {
+        let mut renderer = Self {
             window,
             instance,
             surface,
@@ -129,11 +137,26 @@ impl Renderer {
             pipeline,
             uniform_buffer,
             bind_group,
-            vertex_buffer,
-            vertex_count,
+            chunk_bind_group_layout,
+            chunks: BTreeMap::new(),
             depth_texture,
             depth_view,
-        })
+        };
+
+        for (chunk, _) in world.iter_chunks() {
+            let mesh = build_chunk_mesh(world, chunk);
+            renderer.upload_chunk(chunk, &mesh);
+        }
+
+        info!(
+            width = renderer.config.width,
+            height = renderer.config.height,
+            chunks = renderer.chunks.len(),
+            vertices = renderer.total_vertices(),
+            "renderer ready"
+        );
+
+        Ok(renderer)
     }
 
     pub(crate) fn resize(&mut self, size: PhysicalSize<u32>, camera: &Camera) {
@@ -160,10 +183,44 @@ impl Renderer {
         );
     }
 
-    pub(crate) fn upload_mesh(&mut self, mesh: &[Vertex]) {
+    pub(crate) fn upload_chunk(&mut self, chunk: ChunkCoord, mesh: &[Vertex]) {
+        if mesh.is_empty() {
+            self.remove_chunk(chunk);
+            return;
+        }
+
         let (vertex_buffer, vertex_count) = create_vertex_buffer(&self.device, mesh);
-        self.vertex_buffer = vertex_buffer;
-        self.vertex_count = vertex_count;
+        let origin = chunk.origin();
+        let origin_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("chunk origin"),
+                contents: bytemuck::cast_slice(&[origin.x, origin.y, origin.z, 0.0]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let bind_group =
+            create_chunk_bind_group(&self.device, &self.chunk_bind_group_layout, &origin_buffer);
+
+        self.chunks.insert(
+            chunk,
+            GpuChunk {
+                vertex_buffer,
+                vertex_count,
+                _origin_buffer: origin_buffer,
+                bind_group,
+            },
+        );
+    }
+
+    pub(crate) fn remove_chunk(&mut self, chunk: ChunkCoord) {
+        self.chunks.remove(&chunk);
+    }
+
+    pub(crate) fn total_vertices(&self) -> u64 {
+        self.chunks
+            .values()
+            .map(|chunk| u64::from(chunk.vertex_count))
+            .sum()
     }
 
     pub(crate) fn render(&mut self) {
@@ -226,11 +283,14 @@ impl Renderer {
                 multiview_mask: None,
             });
 
-            if self.vertex_count > 0 {
+            if !self.chunks.is_empty() {
                 pass.set_pipeline(&self.pipeline);
                 pass.set_bind_group(0, &self.bind_group, &[]);
-                pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-                pass.draw(0..self.vertex_count, 0..1);
+                for gpu_chunk in self.chunks.values() {
+                    pass.set_bind_group(1, &gpu_chunk.bind_group, &[]);
+                    pass.set_vertex_buffer(0, gpu_chunk.vertex_buffer.slice(..));
+                    pass.draw(0..gpu_chunk.vertex_count, 0..1);
+                }
             }
         }
 
@@ -250,7 +310,7 @@ impl Renderer {
     }
 }
 
-fn create_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+fn create_camera_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("camera bind group layout"),
         entries: &[wgpu::BindGroupLayoutEntry {
@@ -266,7 +326,7 @@ fn create_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     })
 }
 
-fn create_bind_group(
+fn create_camera_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     uniform_buffer: &wgpu::Buffer,
@@ -281,16 +341,51 @@ fn create_bind_group(
     })
 }
 
+fn create_chunk_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("chunk bind group layout"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: wgpu::BufferSize::new(16),
+            },
+            count: None,
+        }],
+    })
+}
+
+fn create_chunk_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    origin_buffer: &wgpu::Buffer,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("chunk bind group"),
+        layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: origin_buffer.as_entire_binding(),
+        }],
+    })
+}
+
 fn create_pipeline(
     device: &wgpu::Device,
     config: &wgpu::SurfaceConfiguration,
-    bind_group_layout: &wgpu::BindGroupLayout,
+    camera_bind_group_layout: &wgpu::BindGroupLayout,
+    chunk_bind_group_layout: &wgpu::BindGroupLayout,
 ) -> Result<wgpu::RenderPipeline, RendererError> {
     let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("voxel pipeline layout"),
-        bind_group_layouts: &[Some(bind_group_layout)],
+        bind_group_layouts: &[
+            Some(camera_bind_group_layout),
+            Some(chunk_bind_group_layout),
+        ],
         immediate_size: 0,
     });
     let vertex_layout = wgpu::VertexBufferLayout {
@@ -367,18 +462,8 @@ fn create_depth_texture(
 
 fn create_vertex_buffer(device: &wgpu::Device, mesh: &[Vertex]) -> (wgpu::Buffer, u32) {
     let vertex_count = u32::try_from(mesh.len()).expect("mesh vertex count fits in u32");
-    if mesh.is_empty() {
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("voxel vertices"),
-            size: u64::try_from(size_of::<Vertex>()).expect("vertex size fits in u64"),
-            usage: wgpu::BufferUsages::VERTEX,
-            mapped_at_creation: false,
-        });
-        return (buffer, 0);
-    }
-
     let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("voxel vertices"),
+        label: Some("chunk vertices"),
         contents: bytemuck::cast_slice(mesh),
         usage: wgpu::BufferUsages::VERTEX,
     });

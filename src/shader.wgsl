@@ -2,8 +2,16 @@ struct Camera {
     view_projection: mat4x4<f32>,
 };
 
+struct Chunk {
+    origin: vec3<f32>,
+    padding: f32,
+};
+
 @group(0) @binding(0)
 var<uniform> camera: Camera;
+
+@group(1) @binding(0)
+var<uniform> chunk: Chunk;
 
 struct VertexIn {
     @location(0) position: vec3<f32>,
@@ -18,7 +26,8 @@ struct VertexOut {
 @vertex
 fn vs_main(input: VertexIn) -> VertexOut {
     var output: VertexOut;
-    output.clip_position = camera.view_projection * vec4<f32>(input.position, 1.0);
+    let world_position = chunk.origin + input.position;
+    output.clip_position = camera.view_projection * vec4<f32>(world_position, 1.0);
     output.normal = input.normal;
     return output;
 }

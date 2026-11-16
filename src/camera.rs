@@ -22,8 +22,8 @@ pub(crate) struct Camera {
 
 impl Camera {
     pub(crate) fn new(aspect: f32) -> Self {
-        let position = Vec3::new(6.0, 4.5, 7.0);
-        let target = Vec3::new(1.0, 0.5, 1.0);
+        let position = Vec3::new(37.0, 4.5, 38.0);
+        let target = Vec3::new(32.0, 0.5, 32.0);
         let direction = (target - position).normalize();
 
         Self {
@@ -95,7 +95,7 @@ mod tests {
     #[test]
     fn initial_camera_looks_at_the_scene() {
         let camera = Camera::new(1.0);
-        let target_direction = (Vec3::new(1.0, 0.5, 1.0) - camera.position).normalize();
+        let target_direction = (Vec3::new(32.0, 0.5, 32.0) - camera.position).normalize();
 
         assert!(camera.forward().dot(target_direction) > 0.999);
     }
@@ -145,6 +145,6 @@ mod tests {
         two_steps.move_by(1.0, 0.0, 0.5);
 
         assert!((one_step.position - two_steps.position).length() < 1e-5);
-        assert!((one_step.position - Vec3::new(6.0, 4.5, -1.0)).length() < 1e-5);
+        assert!((one_step.position - Vec3::new(37.0, 4.5, 30.0)).length() < 1e-5);
     }
 }

@@ -1,14 +1,15 @@
-//! Voxel storage and mesh generation.
+//! Chunk mesh generation.
 //!
 //! A voxel at `(x, y, z)` occupies the unit cube from `(x, y, z)` to
-//! `(x + 1, y + 1, z + 1)`. Coordinates are right-handed and Y-up.
-
-use std::collections::HashSet;
+//! `(x + 1, y + 1, z + 1)`. Coordinates are right-handed and Y-up. Meshes are
+//! built in chunk-local space; the renderer adds each chunk's origin.
 
 use bytemuck::{Pod, Zeroable};
-use glam::IVec3;
+use glam::{IVec3, Vec3};
 
-/// One mesh vertex: world-space position and outward face normal.
+use crate::world::{ChunkCoord, World};
+
+/// One mesh vertex: chunk-local position and outward face normal.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub(crate) struct Vertex {
@@ -17,9 +18,9 @@ pub(crate) struct Vertex {
 }
 
 /// A quad per cube face, wound counter-clockwise from outside the cube.
-const FACES: [([f32; 3], [[f32; 3]; 4]); 6] = [
+const FACES: [(IVec3, [[f32; 3]; 4]); 6] = [
     (
-        [1.0, 0.0, 0.0],
+        IVec3::X,
         [
             [1.0, 0.0, 0.0],
             [1.0, 1.0, 0.0],
@@ -28,7 +29,7 @@ const FACES: [([f32; 3], [[f32; 3]; 4]); 6] = [
         ],
     ),
     (
-        [-1.0, 0.0, 0.0],
+        IVec3::NEG_X,
         [
             [0.0, 0.0, 1.0],
             [0.0, 1.0, 1.0],
@@ -37,7 +38,7 @@ const FACES: [([f32; 3], [[f32; 3]; 4]); 6] = [
         ],
     ),
     (
-        [0.0, 1.0, 0.0],
+        IVec3::Y,
         [
             [0.0, 1.0, 0.0],
             [0.0, 1.0, 1.0],
@@ -46,7 +47,7 @@ const FACES: [([f32; 3], [[f32; 3]; 4]); 6] = [
         ],
     ),
     (
-        [0.0, -1.0, 0.0],
+        IVec3::NEG_Y,
         [
             [0.0, 0.0, 1.0],
             [0.0, 0.0, 0.0],
@@ -55,7 +56,7 @@ const FACES: [([f32; 3], [[f32; 3]; 4]); 6] = [
         ],
     ),
     (
-        [0.0, 0.0, 1.0],
+        IVec3::Z,
         [
             [1.0, 0.0, 1.0],
             [1.0, 1.0, 1.0],
@@ -64,7 +65,7 @@ const FACES: [([f32; 3], [[f32; 3]; 4]); 6] = [
         ],
     ),
     (
-        [0.0, 0.0, -1.0],
+        IVec3::NEG_Z,
         [
             [0.0, 0.0, 0.0],
             [0.0, 1.0, 0.0],
@@ -74,38 +75,41 @@ const FACES: [([f32; 3], [[f32; 3]; 4]); 6] = [
     ),
 ];
 
-/// Builds one non-indexed mesh containing six visible faces per voxel.
+/// Builds one non-indexed mesh of the faces exposed to air.
 ///
-/// No face culling is performed yet: adjacent voxels still emit their shared
-/// faces. Coordinates are sorted so the output does not depend on `HashSet`
-/// iteration order.
-pub(crate) fn build_mesh(voxels: &HashSet<IVec3>) -> Vec<Vertex> {
-    let mut coordinates: Vec<IVec3> = voxels.iter().copied().collect();
-    coordinates.sort_unstable_by_key(|voxel| (voxel.x, voxel.y, voxel.z));
+/// The chunk origin plus local coordinates maps every face neighbour into world
+/// space, so faces shared across a chunk border are culled like any other.
+/// Voxels are sorted by local coordinate so the output does not depend on
+/// `HashSet` iteration order.
+pub(crate) fn build_chunk_mesh(world: &World, chunk: ChunkCoord) -> Vec<Vertex> {
+    let Some(chunk_data) = world.chunk(chunk) else {
+        return Vec::new();
+    };
 
-    let mut vertices = Vec::with_capacity(coordinates.len() * 36);
-    for coordinate in coordinates {
-        push_cube(&mut vertices, coordinate);
+    let mut voxels: Vec<IVec3> = chunk_data.voxels.iter().copied().collect();
+    voxels.sort_unstable_by_key(|voxel| (voxel.x, voxel.y, voxel.z));
+
+    let chunk_origin = chunk.world_origin();
+    let mut vertices = Vec::with_capacity(voxels.len() * 36);
+    for local in voxels {
+        push_voxel(world, chunk_origin, local, &mut vertices);
     }
     vertices
 }
 
-fn push_cube(vertices: &mut Vec<Vertex>, coordinate: IVec3) {
-    let origin = coordinate.as_vec3();
+fn push_voxel(world: &World, chunk_origin: IVec3, local: IVec3, vertices: &mut Vec<Vertex>) {
+    let origin = local.as_vec3();
 
     for (normal, corners) in FACES {
-        let points = corners.map(|corner| {
-            [
-                origin.x + corner[0],
-                origin.y + corner[1],
-                origin.z + corner[2],
-            ]
-        });
+        if world.is_solid(chunk_origin + local + normal) {
+            continue;
+        }
 
+        let points = corners.map(|corner| origin + Vec3::from_array(corner));
         for index in [0, 1, 2, 0, 2, 3] {
             vertices.push(Vertex {
-                position: points[index],
-                normal,
+                position: points[index].to_array(),
+                normal: normal.as_vec3().to_array(),
             });
         }
     }
@@ -115,45 +119,118 @@ fn push_cube(vertices: &mut Vec<Vertex>, coordinate: IVec3) {
 mod tests {
     use super::*;
 
-    fn set(coordinates: &[IVec3]) -> HashSet<IVec3> {
-        coordinates.iter().copied().collect()
+    fn world_with(voxels: &[IVec3]) -> World {
+        let mut world = World::default();
+        for &voxel in voxels {
+            world.insert(voxel);
+        }
+        world
+    }
+
+    fn chunk_at(world: IVec3) -> ChunkCoord {
+        ChunkCoord::from_world(world).0
+    }
+
+    fn mesh(world: &World, chunk: ChunkCoord) -> Vec<Vertex> {
+        build_chunk_mesh(world, chunk)
     }
 
     #[test]
-    fn empty_set_builds_no_vertices() {
-        assert_eq!(build_mesh(&HashSet::new()).len(), 0);
+    fn missing_chunk_builds_no_vertices() {
+        let world = World::default();
+
+        assert_eq!(mesh(&world, chunk_at(IVec3::ZERO)).len(), 0);
+    }
+
+    #[test]
+    fn empty_chunk_builds_no_vertices() {
+        let mut world = World::default();
+        world.insert(IVec3::new(32, 0, 0));
+
+        assert_eq!(mesh(&world, chunk_at(IVec3::ZERO)).len(), 0);
     }
 
     #[test]
     fn one_voxel_builds_six_faces() {
-        let mesh = build_mesh(&set(&[IVec3::ZERO]));
+        let world = world_with(&[IVec3::ZERO]);
+        let vertices = mesh(&world, chunk_at(IVec3::ZERO));
 
-        assert_eq!(mesh.len(), 36);
-        assert!(mesh.iter().all(|vertex| {
+        assert_eq!(vertices.len(), 36);
+        assert!(vertices.iter().all(|vertex| {
             vertex
                 .position
                 .iter()
                 .all(|coordinate| (0.0..=1.0).contains(coordinate))
         }));
         assert!(
-            mesh.iter()
+            vertices
+                .iter()
                 .all(|vertex| vertex.normal.iter().any(|component| *component != 0.0))
         );
     }
 
     #[test]
-    fn adjacent_voxels_are_not_culled() {
-        let mesh = build_mesh(&set(&[IVec3::ZERO, IVec3::X]));
+    fn two_adjacent_voxels_cull_the_shared_face() {
+        let world = world_with(&[IVec3::ZERO, IVec3::X]);
 
-        assert_eq!(mesh.len(), 72);
+        assert_eq!(mesh(&world, chunk_at(IVec3::ZERO)).len(), 60);
     }
 
     #[test]
-    fn coordinate_order_does_not_change_the_mesh() {
-        let forward = build_mesh(&set(&[IVec3::ZERO, IVec3::X, IVec3::Y, IVec3::Z]));
-        let reverse = build_mesh(&set(&[IVec3::Z, IVec3::Y, IVec3::X, IVec3::ZERO]));
+    fn three_voxels_in_a_line_build_eighty_four_vertices() {
+        let world = world_with(&[IVec3::ZERO, IVec3::X, IVec3::new(2, 0, 0)]);
 
-        assert_eq!(forward, reverse);
+        assert_eq!(mesh(&world, chunk_at(IVec3::ZERO)).len(), 84);
+    }
+
+    #[test]
+    fn faces_across_a_chunk_border_are_culled() {
+        let world = world_with(&[IVec3::new(31, 0, 0), IVec3::new(32, 0, 0)]);
+
+        assert_eq!(mesh(&world, chunk_at(IVec3::new(31, 0, 0))).len(), 30);
+        assert_eq!(mesh(&world, chunk_at(IVec3::new(32, 0, 0))).len(), 30);
+    }
+
+    #[test]
+    fn first_face_keeps_the_specified_order_winding_and_normal() {
+        let world = world_with(&[IVec3::new(3, 4, 5)]);
+        let vertices = mesh(&world, chunk_at(IVec3::new(3, 4, 5)));
+
+        let expected = [
+            [4.0, 4.0, 5.0],
+            [4.0, 5.0, 5.0],
+            [4.0, 5.0, 6.0],
+            [4.0, 4.0, 5.0],
+            [4.0, 5.0, 6.0],
+            [4.0, 4.0, 6.0],
+        ];
+        for (vertex, position) in vertices.iter().take(6).zip(expected) {
+            assert_eq!(vertex.position, position);
+            assert_eq!(vertex.normal, [1.0, 0.0, 0.0]);
+        }
+    }
+
+    #[test]
+    fn vertex_positions_stay_chunk_local() {
+        let world = world_with(&[IVec3::new(63, 0, 63)]);
+        let vertices = mesh(&world, chunk_at(IVec3::new(63, 0, 63)));
+
+        assert!(vertices.iter().all(|vertex| {
+            (31.0..=32.0).contains(&vertex.position[0])
+                && (0.0..=1.0).contains(&vertex.position[1])
+                && (31.0..=32.0).contains(&vertex.position[2])
+        }));
+    }
+
+    #[test]
+    fn insertion_order_does_not_change_the_mesh() {
+        let forward = world_with(&[IVec3::ZERO, IVec3::X, IVec3::Y, IVec3::Z]);
+        let reverse = world_with(&[IVec3::Z, IVec3::Y, IVec3::X, IVec3::ZERO]);
+
+        assert_eq!(
+            mesh(&forward, chunk_at(IVec3::ZERO)),
+            mesh(&reverse, chunk_at(IVec3::ZERO))
+        );
     }
 
     #[test]

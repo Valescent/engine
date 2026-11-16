@@ -6,7 +6,7 @@ Milestones move from **planned** to **in progress** to **shipped**. Each one nam
 |---------|-----------------------|----------|
 | 0.0.1   | The Foundation        | Shipped  |
 | 0.0.2   | Camera                | Shipped  |
-| 0.0.3   | Chunks and Meshes     | Planned  |
+| 0.0.3   | Chunks and Meshes     | In progress |
 | 0.0.4   | Playable              | Planned  |
 | 0.0.5   | Scale and Performance | Planned  |
 | 0.0.6   | Atmosphere            | Planned  |
@@ -65,7 +65,7 @@ See [v0.0.2 scope](dev/v0.0.2-scope.md) for the concrete deliverables, technical
 - [x] First-person fly camera with position, yaw, and pitch
 - [x] Pitch clamped to ±89°
 - [x] WASD movement relative to the view direction
-- [x] Mouse look with pointer capture; `Escape` releases the cursor
+- [x] Mouse look with cursor capture; `Escape` releases the cursor
 
 #### 2. Frame loop
 - [x] Delta-time movement independent of frame rate
@@ -85,28 +85,28 @@ See [v0.0.2 scope](dev/v0.0.2-scope.md) for the concrete deliverables, technical
 
 ## v0.0.3: Chunks and Meshes
 
-**Status:** Planned
+**Status:** In progress — implementation complete, release pending.
 
 **Goal:** Split the world into chunks and stop emitting hidden faces.
 
-**Summary:** v0.0.1 draws one mesh for the whole world. Chunks make edits local and keep draw work proportional to the visible world.
+**Summary:** v0.0.1 drew one mesh for the whole world. Chunks make edits local and keep draw work proportional to the visible world.
 
 See [v0.0.3 scope](dev/v0.0.3-scope.md) for the concrete deliverables, technical shape, and acceptance checklist.
 
 ### Milestones
 
 #### 1. Chunks
-- [ ] Fixed-size chunks (32×32×32)
-- [ ] Each chunk owns its voxels and its mesh
-- [ ] Block change rebuilds only the affected chunk and any neighbour whose boundary faces changed
+- [x] Fixed-size chunks (32×32×32)
+- [x] Each chunk owns its voxels and its mesh
+- [x] Block change rebuilds only the affected chunk and any neighbour whose boundary faces changed
 
 #### 2. Face culling
-- [ ] Only emit faces exposed to air
-- [ ] No faces between two solid blocks, including across chunk boundaries
+- [x] Only emit faces exposed to air
+- [x] No faces between two solid blocks, including across chunk boundaries
 
 #### 3. Per-chunk rendering
-- [ ] One vertex buffer per non-empty chunk
-- [ ] Empty chunks release their GPU buffers
+- [x] One vertex buffer per non-empty chunk
+- [x] Empty chunks release their GPU buffers
 
 ### Definition of Done
 - World made of multiple chunks

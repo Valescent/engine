@@ -5,7 +5,7 @@
 
 Valescent Engine is a voxel engine written in Rust. Two milestones are shipped — a voxel scene and a fly camera — and every step after that is written down before it is built.
 
-This is **pre-alpha**. The current world is one `HashSet<IVec3>`, one mesh, and a camera you can fly. Chunks, interaction, and light are planned in public.
+This is **pre-alpha**. The current world is split into fixed 32×32×32 chunks, each with its own face-culled mesh, and a camera you can fly. Interaction and light are planned in public.
 
 <div class="hero-actions">
 
@@ -31,7 +31,7 @@ This is **pre-alpha**. The current world is one `HashSet<IVec3>`, one mesh, and 
 <span class="plate-label bl">Yaw <span data-yaw>028°</span></span>
 <span class="plate-label br">Drag / arrow keys</span>
 </div>
-<figcaption>Drawn from the current data model: voxels in a <code>HashSet&lt;IVec3&gt;</code>, meshed as non-indexed cubes, right-handed and Y-up. The highlighted cube stands in for the one <code>Space</code> toggles. Illustration, not a screenshot.</figcaption>
+<figcaption>Drawn from the current data model: voxels stored per chunk, meshed as face-culled non-indexed cubes, right-handed and Y-up. The highlighted cube stands in for the boundary voxel that <code>Space</code> toggles. Illustration, not a screenshot.</figcaption>
 </figure>
 </div>
 
@@ -51,10 +51,13 @@ This is **pre-alpha**. The current world is one `HashSet<IVec3>`, one mesh, and 
 
 - [Architecture overview](dev/architecture.md) — module ownership and the frame flow.
 - [Coordinates](dev/coordinates.md) — axes, units, and voxel addresses.
-- [Controls](dev/controls.md) — current bindings and the planned ones.
+- [Controls](dev/controls.md) - current bindings and the planned ones.
+- [FAQ and troubleshooting](faq.md) - common questions and a symptom-first index.
 - [Configuration](dev/configuration.md) — environment variables, constants, and tooling files.
 - [Decision records](decisions/index.md) — why the engine is built the way it is.
-- [Testing](dev/testing.md) — headless tests and manual GPU acceptance.
+- [Testing](dev/testing.md) - headless tests and manual GPU acceptance.
+- [Public API](dev/public-api.md) - current unstable surface and the reference gate.
+- [Benchmark results](dev/benchmarks.md) - pool_sim methodology and run log.
 - [Changelog](https://github.com/Valescent/engine/blob/main/CHANGELOG.md) — user-visible changes.
 - [Contributing](CONTRIBUTING.md) — commits, changelog entries, pull requests, and the CLA.
 - [Security policy](SECURITY.md) — how to report a vulnerability.
@@ -70,20 +73,20 @@ This is **pre-alpha**. The current world is one `HashSet<IVec3>`, one mesh, and 
 
 ## Next on the bench
 
-<span class="version">v0.0.3</span>
+<span class="version">v0.0.4</span>
 
-### Chunks and meshes
+### Playable
 
-The world is currently one mesh. The next milestone splits it into fixed 32×32×32 chunks, gives each chunk its own mesh, and stops emitting faces that are hidden behind solid blocks. A block change should rebuild only the chunk it touches.
+The chunked world is in place. The next milestone adds walking and collision, block breaking and placing, a texture array, and chunk persistence, so the world survives a restart.
 
-[Read the v0.0.3 scope](dev/v0.0.3-scope.md)
+[Read the v0.0.4 scope](dev/v0.0.4-scope.md) · [Read the v0.0.4 spec](specs/v0.0.4.md)
 
 </div>
 <div>
 
-> **Definition of done.** A world made of multiple chunks. A block change triggers only a local mesh rebuild. A stable frame rate while moving around.
+> **Definition of done.** A world you can walk through, edit, and reload.
 
-The work after that is already scoped: walking and collision, block interaction, persistence, and a texture atlas in [v0.0.4 — Playable](dev/v0.0.4-scope.md).
+The work after that is already scoped: greedy meshing, LOD, frustum culling, and async meshing in [v0.0.5 — Scale and Performance](dev/v0.0.5-scope.md).
 
 </div>
 </section>
