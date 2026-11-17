@@ -110,7 +110,7 @@ Lamp `6`, Water `7`, and Sand `8`. Adding a block ID is a save-format change; fo
 Current code layout:
 
 - `src/block.rs`: `Block`, `FaceLayers`, `Block::layers`, and the stable layer mapping.
-- `src/voxel.rs`: texture-aware meshing and the 36-byte vertex.
+- `src/voxel.rs`: the texture vertex and the highlight mesh; `src/mesh.rs` owns greedy meshing.
 - `src/renderer.rs`: texture array creation, upload, sampler, bind group, and draw path.
 - `src/shader.wgsl`: `texture_2d_array<f32>` and `sampler` sampling.
 
@@ -254,9 +254,8 @@ serve every chunk draw; do not create a bind group per block type.
 
 ## Vertex and shader contract
 
-- The v0.0.4 vertex is 36 bytes: position, normal, UV, and layer.
-- v0.0.4 UVs are `(0,0)`, `(0,1)`, `(1,1)`, `(1,0)` per face. v0.0.5 greedy quads use UVs in block
-  units and rely on a repeat sampler.
+- The vertex is 36 bytes: position, normal, UV, and layer.
+- Greedy quad UVs are in block units, so a merged face can span several tiles; the repeat sampler tiles the texture within the array layer.
 - The layer is a `u32` vertex attribute and a flat interstage value. All four vertices of a face or
   greedy quad carry the same layer.
 - WGSL declares `texture_2d_array<f32>` and `sampler` and samples with

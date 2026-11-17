@@ -25,13 +25,14 @@ files for builds, checks, docs, and releases. Runtime settings are not read from
 | Variable | Read by | Effect |
 |---|---|---|
 | `RUST_LOG` | Engine (`tracing-subscriber` `EnvFilter`) | Sets the log filter. Unset or invalid falls back to `info`. Examples: `engine=debug`, `engine=debug,wgpu=warn`. |
+| `ENGINE_STRESS_SCENE` | Engine (`run`) | `1` builds the deterministic 8x8 stress scene in memory and disables world load and save. Any other value or unset uses `world/chunks/`. |
 | `WGPU_BACKEND` | `wgpu` | Forces a backend such as `dx12`, `vulkan`, or `metal`, depending on the platform. Unset lets `wgpu` choose. The engine does not parse it. |
 
 See [Testing](testing.md) for manual-run examples, [Setup](setup.md) for backend selection, and
 [Debugging](debugging.md) for log workflows and the planned log file.
 
-Planned for v0.0.5: `ENGINE_STRESS_SCENE=1` selects the in-memory stress scene and disables
-world save/load. See the [v0.0.5 spec](../specs/v0.0.5.md).
+The stress scene is selected with `ENGINE_STRESS_SCENE=1`; it never reads or writes `world/chunks/`.
+See the [v0.0.5 spec](../specs/v0.0.5.md).
 
 #### Compile-time constants
 

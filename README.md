@@ -2,7 +2,7 @@
 
 A voxel engine written in Rust.
 
-**Status: pre-alpha.** `0.0.1` through `0.0.4` are released. You can walk, break and place blocks, and keep the world across restarts. Nothing past that is built yet.
+**Status: pre-alpha.** `0.0.1` through `0.0.4` are released. `0.0.5` (greedy meshing, LOD, frustum culling, and async meshing) is implemented and awaiting release. Nothing past that is built yet.
 
 This is **source-available, not open source**. The code is under the [PolyForm Shield License 1.0.0](LICENSE): you may read, run, modify, and redistribute it, but not use it to provide a product that competes with it. PolyForm Shield is not OSI-approved.
 
@@ -34,7 +34,8 @@ cargo run
 - `F3` — toggle the FPS/frame-time overlay
 - `Escape` — release the cursor
 
-The world saves to `world/chunks/` on exit and on `Ctrl+S`.
+The world saves to `world/chunks/` on exit and on `Ctrl+S`. Set `ENGINE_STRESS_SCENE=1` to load
+the deterministic 64-chunk stress scene instead; it never touches `world/chunks/`.
 
 See [`docs/dev/controls.md`](docs/dev/controls.md) for the full binding table, including the
 planned day/night controls.

@@ -1,7 +1,7 @@
 # FAQ and troubleshooting
 
 Short answers for the current pre-alpha engine and a symptom-first index into the detailed pages.
-Only v0.0.1 through v0.0.4 are released; v0.0.5-v0.0.7 are planned. A planned feature is not a bug.
+Only v0.0.1 through v0.0.4 are released; v0.0.5 is implemented and awaiting release, and v0.0.6-v0.0.7 are planned. A planned feature is not a bug.
 
 | I need to... | Start here |
 |---|---|
@@ -14,18 +14,18 @@ Only v0.0.1 through v0.0.4 are released; v0.0.5-v0.0.7 are planned. A planned fe
 
 ## Project and status
 
-The current release is **v0.0.4, pre-alpha**. The build has a
-window, a depth-buffered `wgpu` renderer, chunked face-culled meshes, walking and collision,
+The current release is **v0.0.4, pre-alpha**; v0.0.5 is implemented and awaiting release. The build has a
+window, a depth-buffered `wgpu` renderer, chunked greedy meshes with two LODs, frustum culling, asynchronous remeshing, walking and collision,
 block breaking and placing, procedural block textures, and `VCHK` chunk saves. It does not have
 lighting, fog, water, terrain generation, or Tracy.
 
 | Question | Answer |
 |---|---|
 | What is Valescent Engine? | A voxel engine written in Rust on `wgpu` and `winit`. It is source-available, not open source. See [the landing page](index.md) and [Architecture](dev/architecture.md). |
-| What is the current version? | `0.0.4` is released. v0.0.5-v0.0.7 are planned. See [Roadmap](roadmap.md) and [Changelog](https://github.com/Valescent/engine/blob/main/CHANGELOG.md). |
+| What is the current version? | `0.0.4` is released. `0.0.5` is implemented and awaiting release; v0.0.6-v0.0.7 are planned. See [Roadmap](roadmap.md) and [Changelog](https://github.com/Valescent/engine/blob/main/CHANGELOG.md). |
 | Is it stable? | No. It is pre-alpha and there is no public API stability before 1.0. See [Versioning](dev/versioning.md). |
 | Why is the version `0.0.x`? | Each roadmap milestone ships as the next `0.0.x` patch. There is no `0.1.0` or `1.0.0` target yet. See [Versioning](dev/versioning.md#semantic-versioning). |
-| What is next? | v0.0.5 for greedy meshing, LOD, frustum culling, and async meshing. See [the roadmap](roadmap.md). |
+| What is next? | Release v0.0.5, then v0.0.6 for lighting, fog, and water. See [the roadmap](roadmap.md). |
 | Why is the world one mesh? | It is not. Since v0.0.3 each non-empty chunk owns its mesh and GPU buffer. See [Architecture](dev/architecture.md#rendering-resources). |
 | Can I walk, fall, jump, or collide? | Yes. WASD walks, `Space` jumps, and swept AABB collision stops the player at solid blocks. See [Controls](dev/controls.md#bindings-by-milestone). |
 | Can I break or place blocks? | Yes, after the cursor is captured. Left click breaks and right click places the selected block. See [Interaction](dev/controls.md#interaction-current-v004). |
@@ -95,7 +95,7 @@ lighting, fog, water, terrain generation, or Tracy.
 | Question or symptom | Answer |
 |---|---|
 | How do I measure FPS and frame time? | Run with `RUST_LOG=engine=debug` and read `fps` and `frame_ms`. See [Logging](dev/debugging.md#logging). |
-| Why is performance low? | The current world uses one draw per non-empty chunk with no greedy meshing, async meshing, or LOD. Those arrive in v0.0.5. See [Current limitations](dev/architecture.md#current-limitations) and the [Roadmap](roadmap.md). |
+| Why is performance low? | The world uses one draw per visible chunk, greedy meshes, two LODs, frustum culling, and asynchronous remeshing. Missing are occlusion culling, streaming, lighting, and terrain generation. See [Current limitations](dev/architecture.md#current-limitations) and the [Roadmap](roadmap.md). |
 | Is Tracy integrated? | Not yet. It is selected in ADR-0006, but there is no dependency, feature, span, or GPU zone. See [Profiling](dev/profiling.md). |
 | Why are there no GPU timings? | `wgpu-profiler` and timestamp queries are not integrated. See [Profiling](dev/profiling.md). |
 | What is `pool_sim`? | A benchmark that compares rayon with micropool on the v0.0.5 async-meshing frame loop. It is a decision aid, not a CI gate. See [Current aids](dev/debugging.md#current-aids) and [Benchmark results](dev/benchmarks.md). |
@@ -116,7 +116,7 @@ lighting, fog, water, terrain generation, or Tracy.
 | Can I import or export a world? | No importer or exporter exists. The format is `VCHK` v1, one file per saved chunk. See [World management](dev/world-management.md) and [ADR-0008](decisions/0008-chunk-save-format.md). |
 | Where is `config.toml`? | It is not read yet. Current inputs are environment variables and compile-time constants. See [Configuration](dev/configuration.md). |
 | Where are the logs? | They go to stderr today. A per-run `logs/` file is planned with no milestone. See [Logging](dev/debugging.md#logging). |
-| What is the stress scene? | `ENGINE_STRESS_SCENE=1` is a planned v0.0.5 in-memory scene that bypasses `world/chunks/` and saving. See [Configuration](dev/configuration.md) and the [v0.0.5 spec](specs/v0.0.5.md). |
+| What is the stress scene? | `ENGINE_STRESS_SCENE=1` loads a deterministic 64-chunk in-memory scene that bypasses `world/chunks/` and saving. See [Configuration](dev/configuration.md) and the [v0.0.5 spec](specs/v0.0.5.md). |
 | Can I choose the world seed? | v0.0.7 will read `world/seed`; see [Choose a seed](dev/world-management.md#choose-a-seed). |
 | Can I change the render distance? | It is planned as `world.render_distance_chunks` in v0.0.7. See [Configuration](dev/configuration.md). |
 

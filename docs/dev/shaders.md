@@ -9,7 +9,7 @@ shader changes planned for later milestones.
 | Shader source and embedding | Current |
 | Camera uniform and vertex/normal interface | Current |
 | Textured block shader | Current (v0.0.4) |
-| Greedy-quad and LOD shader inputs | Planned (v0.0.5) |
+| Greedy-quad and LOD shader inputs | Current (v0.0.5) |
 | Light, AO, fog, and water | Planned (v0.0.6) |
 | Eleven texture layers and Sand | Planned (v0.0.7) |
 | Shader hot reload | Not implemented |
@@ -109,7 +109,7 @@ must match:
 - The chunk origin buffer holds `vec3<f32>` plus one padding float, which matches the uniform
   address-space alignment. The padding is not read.
 - The texture is an eight-layer `Rgba8UnormSrgb` array with one mip level. The sampler is nearest
-  on every filter and clamps to the edge.
+  on every filter and repeats in U and V, clamping in W.
 - WGSL matrices are column-major. `Mat4::to_cols_array()` writes them column by column, so
   `view_projection * vec4(position, 1.0)` is correct. Do not transpose the matrix on the CPU or in
   the shader.
@@ -257,7 +257,7 @@ the Rust layout and document them in the change.
 |---|---|---|
 | v0.0.3 | Chunk-local vertices and chunk origins | Implemented as a 16-byte origin uniform in group `1`. The vertex stage adds the chunk origin to the position. Normals are unchanged. |
 | v0.0.4 | 36-byte vertex with UV and layer, texture array | Implemented. The vertex stage forwards UV and layer; the fragment stage samples `texture_2d_array<f32>` with nearest filtering and no mipmaps. The highlight is a separate line-list pipeline. |
-| v0.0.5 | Greedy quads and LOD1 | UVs are in block units and the sampler repeats in U and V. LOD1 uses the same shader; the CPU scales positions and UVs, so the shader does not branch on LOD. |
+| v0.0.5 | Greedy quads and LOD1 | Implemented. UVs are in block units and the sampler repeats in U and V. LOD1 uses the same shader; the CPU scales positions and UVs, so the shader does not branch on LOD. |
 | v0.0.6 | 40-byte light/AO vertex, day/night, fog, water | The vertex stage unpacks sky light, block light, and AO into separate float varyings; the fragment stage applies the spec's lighting and fog formulas and uses a separate transparent water pipeline with animated normals. |
 | v0.0.7 | Eleven texture layers and Sand | The texture array grows; the layer index is data. The lighting and water shader logic do not change. |
 

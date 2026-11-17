@@ -44,7 +44,11 @@ The headless suite covers:
 - Mouse-look gating on capture and focus.
 - Block IDs, solidity, face-layer mapping, and hotbar selection.
 - Chunk coordinate conversion including negative worlds, block storage idempotence, and dirty-chunk sets for interior, border, corner, and last-block edits.
-- Missing and empty chunk meshes, cross-chunk face culling, exact face order, UV order, texture layers, and deterministic chunk meshing.
+- Missing and empty chunk meshes, cross-chunk face culling, exact greedy quads, block-unit UVs, texture layers, LOD1 boundary faces, and deterministic chunk meshing.
+- LOD1 downsampling, LOD thresholds and hysteresis, and greedy reduction against the v0.0.4 mesher.
+- Frustum plane extraction and conservative AABB rejection for inside, outside, and straddling boxes.
+- Mesh revisions, stale-result rejection, queue priority, background dropping, and the two-upload cap.
+- The deterministic 8x8 stress fixture and the stress-mode world path.
 - Player AABB, gravity, jumping, ground detection, axis order, collision response, and tunnelling limits.
 - DDA ray hits, misses, range limits, tie-break order, and face normals.
 - Placement rejection for occupied cells and player intersection.
@@ -86,8 +90,18 @@ Check:
 - `F3` toggles the FPS/frame-time overlay; values update once per second.
 - A malformed `.vchk` file produces a typed startup error rather than a panic.
 - Resizing and minimizing/restoring keep the projection correct.
-- Frame-time logs show a stable rate while moving.
+- Frame-time logs show a stable rate while moving, plus visible chunks, total chunks, visible vertices, draw calls, rebuild time, and upload time.
 - The output contains no `wgpu` validation errors or panics.
+
+Run the stress fixture with:
+
+```console
+$env:ENGINE_STRESS_SCENE = "1"; $env:RUST_LOG = "engine=debug"; cargo run
+```
+
+It never reads or writes `world/chunks/`. Check that all 64 chunks load, distant chunks switch LOD
+without holes or flicker, draw calls drop when looking away, breaking blocks does not hitch, and the
+frame rate holds at 60 FPS in the default window.
 
 Useful environment variables:
 

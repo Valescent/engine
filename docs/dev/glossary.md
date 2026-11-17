@@ -37,16 +37,16 @@ something else; it does not ban the word everywhere.
 | [backface culling](architecture.md#rendering-resources) | GPU test that discards triangles facing away from the camera; currently disabled. | Current | face culling |
 | [dirty chunk](v0.0.3-scope.md) | Chunk whose mesh must be rebuilt after an edit. | Current (v0.0.3) | stale chunk |
 | [rebuild](v0.0.3-scope.md) | Regenerate and upload a dirty chunk's mesh. | Current (v0.0.3) | remesh, when you mean the whole edit path |
-| [greedy meshing](../specs/v0.0.5.md) | Merging adjacent coplanar same-type faces into larger quads. | Planned (v0.0.5) | merging, when it is ambiguous |
-| [LOD](../decisions/0010-two-level-lod-for-chunks.md) | Level of detail; LOD0 full resolution and LOD1 conservative 2×2×2 for distant chunks. | Planned (v0.0.5) | mipmap |
-| [frustum culling](../specs/v0.0.5.md) | Skipping chunks outside the camera's view frustum. | Planned (v0.0.5) | occlusion culling |
+| [greedy meshing](../specs/v0.0.5.md) | Merging adjacent coplanar same-type faces into larger quads. | Current (v0.0.5) | merging, when it is ambiguous |
+| [LOD](../decisions/0010-two-level-lod-for-chunks.md) | Level of detail; LOD0 full resolution and LOD1 conservative 2×2×2 for distant chunks. | Current (v0.0.5) | mipmap |
+| [frustum culling](../specs/v0.0.5.md) | Skipping chunks outside the camera's view frustum. | Current (v0.0.5) | occlusion culling |
 | [occlusion culling](../specs/v0.0.5.md) | Skipping chunks hidden behind other geometry. | Deferred | frustum culling |
-| [async meshing](../specs/v0.0.5.md) | Building meshes on worker threads instead of the main thread. | Planned (v0.0.5) | parallel rendering |
-| [worker pool](../decisions/0009-micropool-for-chunk-workers.md) | Threads that run meshing and generation jobs; micropool is selected. | Planned (v0.0.5) | thread pool, when you mean this engine component |
-| [revision](../specs/v0.0.5.md) | Version number for a chunk mesh or job; results from older revisions are discarded. | Planned (v0.0.5) | version, when you mean the package version |
-| [stress scene](../specs/v0.0.5.md) | Exact 64-chunk in-memory fixture selected by `ENGINE_STRESS_SCENE=1`. | Planned (v0.0.5) | benchmark, when you mean the fixture |
-| [upload budget](../specs/v0.0.5.md) | Maximum completed chunk meshes uploaded per frame; fixed at two. | Planned (v0.0.5) | frame budget |
-| [draw call](v0.0.3-scope.md) | One draw submission to the GPU. v0.0.3 issues one per non-empty chunk. | Current | pass |
+| [async meshing](../specs/v0.0.5.md) | Building meshes on worker threads instead of the main thread. | Current (v0.0.5) | parallel rendering |
+| [worker pool](../decisions/0009-micropool-for-chunk-workers.md) | Threads that run meshing and generation jobs; micropool is selected. | Current (v0.0.5) | thread pool, when you mean this engine component |
+| [revision](../specs/v0.0.5.md) | Version number for a chunk mesh or job; results from older revisions are discarded. | Current (v0.0.5) | version, when you mean the package version |
+| [stress scene](../specs/v0.0.5.md) | Exact 64-chunk in-memory fixture selected by `ENGINE_STRESS_SCENE=1`. | Current (v0.0.5) | benchmark, when you mean the fixture |
+| [upload budget](../specs/v0.0.5.md) | Maximum completed chunk meshes uploaded per frame; fixed at two. | Current (v0.0.5) | frame budget |
+| [draw call](v0.0.3-scope.md) | One draw submission to the GPU. v0.0.5 issues one per visible non-empty chunk. | Current | pass |
 | [frame time](debugging.md#logging) | Time to produce one frame, logged as `frame_ms`. | Current | FPS |
 | [FPS](debugging.md#logging) | Frames per second; the reciprocal of frame time. | Current | frame time |
 | [debug overlay](debugging.md#profiling) | On-screen FPS and frame time, toggled with `F3` and refreshed once per second. | Current | HUD |

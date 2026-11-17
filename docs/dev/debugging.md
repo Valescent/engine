@@ -101,15 +101,13 @@ The intended setup, pinned versions, frame wiring, scopes, plots, and troublesho
 the feature lands: `tracy-client`'s `broadcast` feature cannot be removed with the current
 `wgpu-profiler` dependency, and the CI workflows use `--all-features`.
 
-## Planned metrics
+## Metrics
 
-| Milestone | Planned output |
+| Milestone | Output |
 |---|---|
-| v0.0.3 | After an edit: dirty chunk count, total vertices, and rebuild time. |
-| v0.0.5 | Per frame at debug level: frame time, visible and total chunks, vertices, draw calls, rebuild time, and upload time. |
-| v0.0.7 | Generation time, queue depth, loaded and visible chunks, vertices, and frame time. |
-
-None of these metrics are implemented yet.
+| v0.0.3 | After an edit: dirty chunk count, total vertices, and rebuild time. Implemented. |
+| v0.0.5 | Per frame at debug level: frame time, visible and total chunks, vertices, draw calls, rebuild time, and upload time. Implemented. |
+| v0.0.7 | Generation time, queue depth, loaded and visible chunks, vertices, and frame time. Planned. |
 
 ## External tools
 

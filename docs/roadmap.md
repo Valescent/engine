@@ -8,7 +8,7 @@ Milestones move from **planned** to **in progress** to **shipped**. Each one nam
 | 0.0.2   | Camera                | Shipped  |
 | 0.0.3   | Chunks and Meshes     | Shipped  |
 | 0.0.4   | Playable              | Shipped  |
-| 0.0.5   | Scale and Performance | Planned  |
+| 0.0.5   | Scale and Performance | In progress |
 | 0.0.6   | Atmosphere            | Planned  |
 | 0.0.7   | Advanced Horizons     | Planned  |
 
@@ -156,7 +156,7 @@ See [v0.0.4 scope](dev/v0.0.4-scope.md) for the concrete deliverables, technical
 
 ## v0.0.5: Scale and Performance
 
-**Status:** Planned
+**Status:** In progress - implementation complete, release pending.
 
 **Goal:** Large view distances at a smooth frame rate.
 
@@ -167,18 +167,18 @@ See [v0.0.5 scope](dev/v0.0.5-scope.md) for the concrete deliverables, technical
 ### Milestones
 
 #### 1. Greedy meshing
-- [ ] Merge adjacent coplanar same-type faces into larger quads
-- [ ] Measure vertex count before/after (target: large reduction vs naive)
+- [x] Merge adjacent coplanar same-type faces into larger quads
+- [x] Measure vertex count before/after (target: large reduction vs naive)
 
 #### 2. Level of Detail
-- [ ] Distance-based coarser meshes for far chunks
+- [x] Distance-based coarser meshes for far chunks
 
 #### 3. Frustum culling
-- [ ] Skip chunks outside the camera frustum
+- [x] Skip chunks outside the camera frustum
 
 #### 4. Async meshing
-- [ ] Chunk generation and meshing on worker threads
-- [ ] Main thread never blocks on meshing
+- [x] Chunk generation and meshing on worker threads
+- [x] Main thread never blocks on meshing
 
 ### Definition of Done
 - Vast draw distance with a smooth frame rate

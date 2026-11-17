@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Greedy meshing: adjacent coplanar block faces merge into one quad with UVs in block units; a flat 32x32 chunk now emits far fewer vertices than the v0.0.4 face-culled mesher.
+- Distance LOD: chunks within four chunk units render at full resolution, chunks at eight or more render a 2x2x2-downsampled mesh, and the gap keeps the current level so boundaries do not flicker.
+- Frustum culling per chunk AABB, so chunks behind or beside the camera issue no draw calls.
+- Asynchronous meshing on a bounded micropool worker pool, with per-chunk revisions, urgent edit rebuilds, background LOD work, and a two-mesh-per-frame upload cap.
+- A deterministic 64-chunk stress scene on `ENGINE_STRESS_SCENE=1`; it never reads or writes `world/chunks/`.
+- Per-second debug metrics for frame time, visible and total chunks, visible vertices, draw calls, worker rebuild time, and upload time.
+
+### Changed
+
+- The texture sampler repeats in U and V so merged greedy quads tile correctly instead of clamping.
+- The camera far plane moved from 100 m to 512 m so the 10-chunk stress draw distance is visible.
+- `micropool` moved from a development dependency to a runtime dependency.
+
 ## [0.0.4] - 2026-11-17
 
 ### Added
