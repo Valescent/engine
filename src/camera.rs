@@ -28,7 +28,7 @@ impl Camera {
             aspect,
             fov_y_radians: std::f32::consts::FRAC_PI_3,
             z_near: 0.1,
-            z_far: 100.0,
+            z_far: 512.0,
             sensitivity: 0.0025,
         }
     }
@@ -43,6 +43,10 @@ impl Camera {
 
     pub(crate) fn yaw(&self) -> f32 {
         self.yaw
+    }
+
+    pub(crate) fn set_yaw(&mut self, yaw: f32) {
+        self.yaw = wrap_angle(yaw);
     }
 
     pub(crate) fn look(&mut self, delta_x: f32, delta_y: f32) {

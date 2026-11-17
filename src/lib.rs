@@ -6,6 +6,9 @@
 
 mod block;
 mod camera;
+mod frustum;
+mod mesh;
+mod mesher;
 mod overlay;
 mod player;
 mod raycast;
@@ -31,13 +34,16 @@ use winit::window::{CursorGrabMode, Window, WindowId};
 
 use block::Block;
 use camera::Camera;
+use frustum::Frustum;
+use mesh::Lod;
+use mesher::{MeshPool, MeshQueue, Priority, WorkerPool, collect_finished};
 use player::{Player, PlayerInput};
 use raycast::{RaycastHit, raycast};
-use renderer::Renderer;
 pub use renderer::RendererError;
-use voxel::{build_chunk_mesh, build_highlight_mesh};
+use renderer::{FrameStats, Renderer};
+use voxel::build_highlight_mesh;
+use world::{CHUNK_SIZE, DirtyChunks, World};
 pub use world::{ChunkCoord, SaveError};
-use world::{DirtyChunks, World};
 
 const WINDOW_TITLE: &str = concat!("Valescent Engine ", env!("CARGO_PKG_VERSION"));
 const MAX_FRAME_DELTA: Duration = Duration::from_millis(100);
@@ -46,6 +52,10 @@ const WORLD_CHUNKS: &str = "world/chunks";
 const INTERACTION_DISTANCE: f32 = 6.0;
 const SPAWN_X: i32 = 32;
 const SPAWN_Z: i32 = 32;
+const MAX_UPLOADS_PER_FRAME: usize = 2;
+const STRESS_SCENE_ENV: &str = "ENGINE_STRESS_SCENE";
+const STRESS_CHUNKS: i32 = 8;
+const STRESS_FLAT_CHUNKS: i32 = 4;
 
 #[derive(Debug, Error)]
 pub enum RunError {
@@ -68,9 +78,10 @@ pub enum RunError {
 pub fn run() -> Result<(), RunError> {
     init_tracing();
 
-    let world = load_world()?;
+    let stress = stress_requested();
+    let world = world_for(stress, Path::new(WORLD_CHUNKS))?;
     let event_loop = EventLoop::new()?;
-    let mut app = App::new(world);
+    let mut app = App::with_world(world, stress);
     let result = event_loop.run_app(&mut app);
     if let Some(error) = app.error {
         return Err(error);
@@ -83,13 +94,60 @@ fn init_tracing() {
     let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
 }
 
-fn load_world() -> Result<World, SaveError> {
-    let directory = Path::new(WORLD_CHUNKS);
-    if directory.exists() {
+/// Returns whether the in-memory stress scene replaces the saved world.
+fn stress_requested() -> bool {
+    std::env::var(STRESS_SCENE_ENV).is_ok_and(|value| value == "1")
+}
+
+/// Returns the chunk directory to load and save, or `None` in stress mode.
+fn save_directory(stress: bool) -> Option<&'static Path> {
+    if stress {
+        None
+    } else {
+        Some(Path::new(WORLD_CHUNKS))
+    }
+}
+
+/// Loads the stress scene or the saved (or demo) world.
+///
+/// Stress mode never touches `directory`.
+fn world_for(stress: bool, directory: &Path) -> Result<World, SaveError> {
+    if stress {
+        Ok(stress_world())
+    } else if directory.exists() {
         World::load_chunks(directory)
     } else {
         Ok(demo_world())
     }
+}
+
+/// Builds the deterministic 8x8 chunk stress fixture.
+///
+/// Chunks sit at `(cx, 0, cz)` for `cx, cz` in `0..8`. The first four chunk
+/// columns are flat at height two; the rest vary between two and five.
+fn stress_world() -> World {
+    let mut world = World::default();
+    let extent = STRESS_CHUNKS * CHUNK_SIZE;
+    for x in 0..extent {
+        for z in 0..extent {
+            let height = if x.div_euclid(CHUNK_SIZE) < STRESS_FLAT_CHUNKS {
+                2
+            } else {
+                2 + (((x * 31) ^ (z * 17)) & 3)
+            };
+            for y in 0..=height {
+                let block = if y == height {
+                    Block::Grass
+                } else if y == height - 1 {
+                    Block::Dirt
+                } else {
+                    Block::Stone
+                };
+                world.set_block(IVec3::new(x, y, z), block);
+            }
+        }
+    }
+    world
 }
 
 fn demo_world() -> World {
@@ -146,6 +204,10 @@ fn place_position(hit: RaycastHit) -> Option<IVec3> {
 struct App {
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
+    mesher: Option<Arc<dyn MeshPool>>,
+    queue: MeshQueue,
+    stats: FrameAccumulator,
+    stress: bool,
     world: World,
     player: Player,
     camera: Camera,
@@ -166,16 +228,47 @@ struct App {
     frame_count: u32,
 }
 
+/// Per-second accumulation of the v0.0.5 metrics.
+#[derive(Clone, Copy, Debug, Default)]
+struct FrameAccumulator {
+    totals: FrameStats,
+    rebuild_ms: f64,
+    upload_ms: f64,
+}
+
+impl FrameAccumulator {
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
 impl App {
+    #[cfg(test)]
     fn new(world: World) -> Self {
-        let player = Player::new(spawn_position(&world));
+        Self::with_world(world, false)
+    }
+
+    fn with_world(world: World, stress: bool) -> Self {
+        let spawn = if stress {
+            Vec3::new(16.5, 3.0, 16.5)
+        } else {
+            spawn_position(&world)
+        };
+        let player = Player::new(spawn);
         let mut camera = Camera::new(1.0);
         camera.set_position(player.eye_position());
-        debug!(spawn = ?player.position, "player spawned");
+        if stress {
+            camera.set_yaw(std::f32::consts::FRAC_PI_4);
+        }
+        debug!(spawn = ?player.position, stress, "player spawned");
 
         Self {
             window: None,
             renderer: None,
+            mesher: None,
+            queue: MeshQueue::default(),
+            stats: FrameAccumulator::default(),
+            stress,
             world,
             player,
             camera,
@@ -203,21 +296,96 @@ impl App {
         event_loop.exit();
     }
 
-    fn rebuild_chunks(&mut self, dirty: &DirtyChunks) {
+    /// Queues an urgent full-detail rebuild and a background coarse rebuild.
+    fn invalidate_chunks(&mut self, dirty: &DirtyChunks) {
         let started = Instant::now();
-        if let Some(renderer) = &mut self.renderer {
+        self.queue.invalidate(dirty);
+
+        if let Some(pool) = self.mesher.clone() {
             for chunk in dirty {
-                let mesh = build_chunk_mesh(&self.world, *chunk);
-                renderer.upload_chunk(*chunk, &mesh);
+                if self.world.chunk(*chunk).is_some() {
+                    self.queue
+                        .request(&*pool, &self.world, *chunk, Lod::Lod0, Priority::Urgent);
+                    self.queue.request(
+                        &*pool,
+                        &self.world,
+                        *chunk,
+                        Lod::Lod1,
+                        Priority::Background,
+                    );
+                } else {
+                    self.queue.remove(*chunk);
+                    if let Some(renderer) = &mut self.renderer {
+                        renderer.remove_chunk(*chunk);
+                    }
+                }
             }
         }
-        let elapsed = started.elapsed();
+
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+
         debug!(
             dirty_chunks = dirty.len(),
             vertices = self.renderer.as_ref().map_or(0, Renderer::total_vertices),
-            rebuild_ms = elapsed.as_secs_f64() * 1000.0,
+            rebuild_ms = started.elapsed().as_secs_f64() * 1000.0,
             "rebuilt chunks"
         );
+    }
+
+    fn request_initial_meshes(&mut self) {
+        let Some(pool) = self.mesher.clone() else {
+            return;
+        };
+        for (chunk, _) in self.world.iter_chunks() {
+            self.queue
+                .request(&*pool, &self.world, chunk, Lod::Lod0, Priority::Urgent);
+        }
+    }
+
+    /// Recalculates every chunk's LOD and requests any missing mesh.
+    fn request_levels(&mut self, pool: &dyn MeshPool) {
+        let feet = self.player.position.floor().as_ivec3();
+        let player_chunk = ChunkCoord::from_world(feet).0;
+
+        for (chunk, _) in self.world.iter_chunks() {
+            let lod = self.queue.desired_lod(chunk, player_chunk);
+            let revision = self.queue.revision(chunk);
+            let resident = self
+                .renderer
+                .as_ref()
+                .is_some_and(|renderer| renderer.has_current_mesh(chunk, lod, revision));
+            if !resident {
+                self.queue
+                    .request(pool, &self.world, chunk, lod, Priority::Background);
+            }
+        }
+    }
+
+    fn upload_finished_meshes(&mut self, pool: &dyn MeshPool) {
+        let (results, rebuild) = collect_finished(&mut self.queue, pool, MAX_UPLOADS_PER_FRAME);
+        self.stats.rebuild_ms += rebuild.as_secs_f64() * 1000.0;
+
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
+        for result in &results {
+            let started = Instant::now();
+            renderer.upload_chunk(result.chunk, result.lod, result.revision, &result.mesh);
+            self.stats.upload_ms += started.elapsed().as_secs_f64() * 1000.0;
+        }
+    }
+
+    fn select_active_levels(&mut self) {
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
+        for (chunk, _) in self.world.iter_chunks() {
+            if let Some(lod) = self.queue.desired(chunk) {
+                renderer.select_active(chunk, lod);
+            }
+        }
     }
 
     fn target_hit(&self) -> Option<RaycastHit> {
@@ -235,10 +403,7 @@ impl App {
         };
         let dirty = self.world.set_block(hit.block, Block::Air);
         debug!(block = ?hit.block, "broke block");
-        self.rebuild_chunks(&dirty);
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.invalidate_chunks(&dirty);
     }
 
     fn place_block(&mut self) {
@@ -253,14 +418,15 @@ impl App {
         }
         let dirty = self.world.set_block(position, self.selected_block);
         debug!(block = ?position, selected = ?self.selected_block, "placed block");
-        self.rebuild_chunks(&dirty);
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.invalidate_chunks(&dirty);
     }
 
     fn save_world(&self) {
-        match self.world.save_chunks(Path::new(WORLD_CHUNKS)) {
+        let Some(directory) = save_directory(self.stress) else {
+            debug!("stress scene is not saved");
+            return;
+        };
+        match self.world.save_chunks(directory) {
             Ok(()) => debug!("world saved"),
             Err(error) => error!(%error, "failed to save the world"),
         }
@@ -338,16 +504,23 @@ impl App {
             self.update_highlight();
         }
 
+        if let Some(pool) = self.mesher.clone() {
+            self.request_levels(&*pool);
+            self.upload_finished_meshes(&*pool);
+            self.select_active_levels();
+        }
+
         let overlay = self.show_overlay.then(|| {
             format!(
                 "FPS {:.0}  {:.2} MS",
                 self.overlay_fps, self.overlay_frame_ms
             )
         });
+        let frustum = Frustum::from_view_projection(self.camera.view_projection());
         if let Some(renderer) = &mut self.renderer {
             renderer.set_camera(&self.camera);
             renderer.set_overlay(overlay.as_deref());
-            renderer.render();
+            self.stats.totals = renderer.render(&frustum);
         }
         if self.focused
             && let Some(window) = &self.window
@@ -365,6 +538,12 @@ impl App {
             debug!(
                 fps = frames / seconds,
                 frame_ms = seconds * 1000.0 / frames,
+                visible_chunks = self.stats.totals.visible_chunks,
+                total_chunks = self.stats.totals.total_chunks,
+                visible_vertices = self.stats.totals.visible_vertices,
+                draw_calls = self.stats.totals.draw_calls,
+                rebuild_ms = self.stats.rebuild_ms,
+                upload_ms = self.stats.upload_ms,
                 player = ?self.player.position,
                 on_ground = self.player.on_ground,
                 "frame timing"
@@ -373,6 +552,7 @@ impl App {
             self.overlay_frame_ms = seconds * 1000.0 / frames;
             self.frame_accum = Duration::ZERO;
             self.frame_count = 0;
+            self.stats.reset();
         }
     }
 
@@ -490,22 +670,20 @@ impl ApplicationHandler for App {
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(
                 Box::new(event_loop.owned_display_handle()),
             ));
-        let renderer = match pollster::block_on(Renderer::new(
-            window.clone(),
-            instance,
-            &self.world,
-            &self.camera,
-        )) {
-            Ok(renderer) => renderer,
-            Err(error) => {
-                self.fail(RunError::Renderer(error), event_loop);
-                return;
-            }
-        };
+        let renderer =
+            match pollster::block_on(Renderer::new(window.clone(), instance, &self.camera)) {
+                Ok(renderer) => renderer,
+                Err(error) => {
+                    self.fail(RunError::Renderer(error), event_loop);
+                    return;
+                }
+            };
 
         info!(width = size.width, height = size.height, "window ready");
         self.window = Some(window.clone());
         self.renderer = Some(renderer);
+        self.mesher = Some(Arc::new(WorkerPool::new()));
+        self.request_initial_meshes();
         self.last_frame = Instant::now();
         window.request_redraw();
     }
@@ -601,6 +779,8 @@ fn hotbar_block(code: KeyCode) -> Option<Block> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     #[test]
@@ -685,5 +865,125 @@ mod tests {
         );
         app.break_block();
         assert_eq!(app.world.block(IVec3::new(SPAWN_X, 1, SPAWN_Z)), Block::Air);
+    }
+
+    #[test]
+    fn stress_scene_is_an_eight_by_eight_grid_at_chunk_y_zero() {
+        let world = stress_world();
+        let chunks: Vec<_> = world.iter_chunks().map(|(chunk, _)| chunk).collect();
+
+        assert_eq!(chunks.len(), 64);
+        for chunk in chunks {
+            let coordinates = chunk.coordinates();
+            assert_eq!(coordinates.y, 0);
+            assert!((0..STRESS_CHUNKS).contains(&coordinates.x));
+            assert!((0..STRESS_CHUNKS).contains(&coordinates.z));
+        }
+    }
+
+    #[test]
+    fn stress_terrain_matches_the_formula_for_every_column() {
+        let world = stress_world();
+        let extent = STRESS_CHUNKS * CHUNK_SIZE;
+
+        for x in 0..extent {
+            for z in 0..extent {
+                let expected = if x.div_euclid(CHUNK_SIZE) < STRESS_FLAT_CHUNKS {
+                    2
+                } else {
+                    2 + (((x * 31) ^ (z * 17)) & 3)
+                };
+                assert_eq!(
+                    world.block(IVec3::new(x, expected, z)),
+                    Block::Grass,
+                    "{x},{z}"
+                );
+                assert_eq!(world.block(IVec3::new(x, expected - 1, z)), Block::Dirt);
+                assert_eq!(world.block(IVec3::new(x, expected + 1, z)), Block::Air);
+            }
+        }
+    }
+
+    #[test]
+    fn stress_mode_ignores_the_saved_world_directory() {
+        let directory = std::env::temp_dir().join(format!(
+            "valescent-stress-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("chunk_bad.vchk"), []).unwrap();
+
+        assert!(world_for(true, &directory).is_ok());
+        assert!(world_for(false, &directory).is_err());
+        assert!(save_directory(true).is_none());
+        assert_eq!(save_directory(false), Some(Path::new(WORLD_CHUNKS)));
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn stress_mode_spawns_on_the_flat_half_facing_the_uneven_half() {
+        let app = App::with_world(stress_world(), true);
+
+        assert_eq!(app.player.position, Vec3::new(16.5, 3.0, 16.5));
+        assert!((app.camera.yaw() - std::f32::consts::FRAC_PI_4).abs() < 1e-6);
+        assert_eq!(app.world.block(IVec3::new(16, 2, 16)), Block::Grass);
+    }
+
+    #[test]
+    fn player_stands_on_the_stress_ground() {
+        let world = stress_world();
+        let mut player = Player::new(Vec3::new(16.5, 3.0, 16.5));
+        let input = PlayerInput {
+            forward: 0.0,
+            right: 0.0,
+            jump: false,
+            yaw: std::f32::consts::FRAC_PI_4,
+        };
+
+        for _ in 0..240 {
+            player.update(&world, input, 1.0 / 60.0);
+        }
+
+        assert!(player.on_ground);
+        assert!(
+            (player.position.y - 3.0).abs() < 1e-3,
+            "{:?}",
+            player.position
+        );
+    }
+
+    #[test]
+    fn the_stress_spawn_frustum_contains_the_nearby_chunks() {
+        let app = App::with_world(stress_world(), true);
+        let frustum = Frustum::from_view_projection(app.camera.view_projection());
+
+        let inside = ChunkCoord::from_world(IVec3::new(16, 0, 16)).0.origin();
+        assert!(frustum.intersects_aabb(inside, inside + Vec3::splat(32.0)));
+
+        let behind = ChunkCoord::from_world(IVec3::new(16, 0, 240)).0.origin();
+        assert!(!frustum.intersects_aabb(behind, behind + Vec3::splat(32.0)));
+    }
+
+    #[test]
+    fn stress_scene_meshes_every_chunk_with_fewer_vertices_than_naive() {
+        let world = stress_world();
+        let mut greedy = 0;
+        let mut naive = 0;
+
+        for (chunk, _) in world.iter_chunks() {
+            let snapshot = mesh::ChunkSnapshot::new(&world, chunk);
+            let border = mesh::BorderBlocks::new(&world, chunk);
+            let lod0 = mesh::build_mesh(&snapshot, &border, Lod::Lod0);
+            let lod1 = mesh::build_mesh(&snapshot, &border, Lod::Lod1);
+
+            assert_ne!(lod0.len(), 0);
+            assert_ne!(lod1.len(), 0);
+            greedy += lod0.len();
+            naive += voxel::build_chunk_mesh(&world, chunk).len();
+        }
+
+        assert!(greedy < naive, "greedy {greedy} naive {naive}");
     }
 }

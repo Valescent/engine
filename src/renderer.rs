@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::mem::size_of;
 use std::sync::Arc;
 
+use glam::Vec3;
 use thiserror::Error;
 use tracing::{error, info};
 use wgpu::util::DeviceExt;
@@ -12,9 +13,11 @@ use winit::window::Window;
 
 use crate::block::{TEXTURE_LAYERS, TEXTURE_SIZE};
 use crate::camera::Camera;
+use crate::frustum::Frustum;
+use crate::mesh::Lod;
 use crate::overlay::{OverlayVertex, build_overlay_mesh};
-use crate::voxel::{HighlightVertex, Vertex, build_chunk_mesh};
-use crate::world::{ChunkCoord, World};
+use crate::voxel::{HighlightVertex, Vertex};
+use crate::world::{CHUNK_SIZE, ChunkCoord};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {
@@ -38,11 +41,59 @@ pub enum RendererError {
     Validation(String),
 }
 
-struct GpuChunk {
+struct GpuMesh {
     vertex_buffer: wgpu::Buffer,
     vertex_count: u32,
+}
+
+struct GpuChunk {
     _origin_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
+    lod0: Option<(u64, GpuMesh)>,
+    lod1: Option<(u64, GpuMesh)>,
+    active: Option<Lod>,
+}
+
+impl GpuChunk {
+    fn mesh(&self, lod: Lod) -> Option<&GpuMesh> {
+        let slot = match lod {
+            Lod::Lod0 => &self.lod0,
+            Lod::Lod1 => &self.lod1,
+        };
+        slot.as_ref().map(|(_, mesh)| mesh)
+    }
+
+    fn slot(&mut self, lod: Lod) -> &mut Option<(u64, GpuMesh)> {
+        match lod {
+            Lod::Lod0 => &mut self.lod0,
+            Lod::Lod1 => &mut self.lod1,
+        }
+    }
+
+    fn is_current(&self, lod: Lod, revision: u64) -> bool {
+        let slot = match lod {
+            Lod::Lod0 => &self.lod0,
+            Lod::Lod1 => &self.lod1,
+        };
+        matches!(slot, Some((current, _)) if *current == revision)
+    }
+
+    fn active_mesh(&self) -> Option<&GpuMesh> {
+        self.active.and_then(|lod| self.mesh(lod))
+    }
+
+    fn is_empty(&self) -> bool {
+        self.lod0.is_none() && self.lod1.is_none()
+    }
+}
+
+/// Counts for one drawn frame.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct FrameStats {
+    pub(crate) total_chunks: u32,
+    pub(crate) visible_chunks: u32,
+    pub(crate) visible_vertices: u64,
+    pub(crate) draw_calls: u32,
 }
 
 pub(crate) struct Renderer {
@@ -77,7 +128,6 @@ impl Renderer {
     pub(crate) async fn new(
         window: Arc<Window>,
         instance: wgpu::Instance,
-        world: &World,
         camera: &Camera,
     ) -> Result<Self, RendererError> {
         let size = window.inner_size();
@@ -153,7 +203,7 @@ impl Renderer {
         let overlay_pipeline = create_overlay_pipeline(&device, &config)?;
         let (overlay_buffer, overlay_buffer_size) = create_overlay_buffer(&device);
 
-        let mut renderer = Self {
+        let renderer = Self {
             window,
             instance,
             surface,
@@ -180,16 +230,9 @@ impl Renderer {
             depth_view,
         };
 
-        for (chunk, _) in world.iter_chunks() {
-            let mesh = build_chunk_mesh(world, chunk);
-            renderer.upload_chunk(chunk, &mesh);
-        }
-
         info!(
             width = renderer.config.width,
             height = renderer.config.height,
-            chunks = renderer.chunks.len(),
-            vertices = renderer.total_vertices(),
             "renderer ready"
         );
 
@@ -220,33 +263,74 @@ impl Renderer {
         );
     }
 
-    pub(crate) fn upload_chunk(&mut self, chunk: ChunkCoord, mesh: &[Vertex]) {
+    pub(crate) fn upload_chunk(
+        &mut self,
+        chunk: ChunkCoord,
+        lod: Lod,
+        revision: u64,
+        mesh: &[Vertex],
+    ) {
         if mesh.is_empty() {
-            self.remove_chunk(chunk);
+            if let Some(gpu_chunk) = self.chunks.get_mut(&chunk) {
+                *gpu_chunk.slot(lod) = None;
+                if gpu_chunk.active == Some(lod) {
+                    gpu_chunk.active = None;
+                }
+                if gpu_chunk.is_empty() {
+                    self.chunks.remove(&chunk);
+                }
+            }
             return;
         }
 
         let (vertex_buffer, vertex_count) = create_vertex_buffer(&self.device, mesh);
-        let origin = chunk.origin();
-        let origin_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let gpu_chunk = self.chunk_entry(chunk);
+        *gpu_chunk.slot(lod) = Some((
+            revision,
+            GpuMesh {
+                vertex_buffer,
+                vertex_count,
+            },
+        ));
+        if gpu_chunk.active.is_none() {
+            gpu_chunk.active = Some(lod);
+        }
+    }
+
+    fn chunk_entry(&mut self, chunk: ChunkCoord) -> &mut GpuChunk {
+        let device = &self.device;
+        let layout = &self.chunk_bind_group_layout;
+        self.chunks.entry(chunk).or_insert_with(|| {
+            let origin = chunk.origin();
+            let origin_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("chunk origin"),
                 contents: bytemuck::cast_slice(&[origin.x, origin.y, origin.z, 0.0]),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
-        let bind_group =
-            create_chunk_bind_group(&self.device, &self.chunk_bind_group_layout, &origin_buffer);
-
-        self.chunks.insert(
-            chunk,
             GpuChunk {
-                vertex_buffer,
-                vertex_count,
+                bind_group: create_chunk_bind_group(device, layout, &origin_buffer),
                 _origin_buffer: origin_buffer,
-                bind_group,
-            },
-        );
+                lod0: None,
+                lod1: None,
+                active: None,
+            }
+        })
+    }
+
+    /// Makes `lod` the drawn mesh when that mesh is resident.
+    pub(crate) fn select_active(&mut self, chunk: ChunkCoord, lod: Lod) {
+        if let Some(gpu_chunk) = self.chunks.get_mut(&chunk)
+            && gpu_chunk.mesh(lod).is_some()
+        {
+            gpu_chunk.active = Some(lod);
+        }
+    }
+
+    /// Returns whether a mesh for this LOD is resident at the given revision.
+    pub(crate) fn has_current_mesh(&self, chunk: ChunkCoord, lod: Lod, revision: u64) -> bool {
+        self.chunks
+            .get(&chunk)
+            .is_some_and(|gpu_chunk| gpu_chunk.is_current(lod, revision))
     }
 
     pub(crate) fn remove_chunk(&mut self, chunk: ChunkCoord) {
@@ -256,7 +340,8 @@ impl Renderer {
     pub(crate) fn total_vertices(&self) -> u64 {
         self.chunks
             .values()
-            .map(|chunk| u64::from(chunk.vertex_count))
+            .filter_map(GpuChunk::active_mesh)
+            .map(|mesh| u64::from(mesh.vertex_count))
             .sum()
     }
 
@@ -298,29 +383,33 @@ impl Renderer {
         self.overlay_count = count;
     }
 
-    pub(crate) fn render(&mut self) {
+    #[allow(clippy::cast_precision_loss)]
+    pub(crate) fn render(&mut self, frustum: &Frustum) -> FrameStats {
+        let mut stats = FrameStats::default();
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
-            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => return,
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                return stats;
+            }
             wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
                 drop(texture);
                 self.surface.configure(&self.device, &self.config);
                 self.window.request_redraw();
-                return;
+                return stats;
             }
             wgpu::CurrentSurfaceTexture::Outdated => {
                 self.surface.configure(&self.device, &self.config);
                 self.window.request_redraw();
-                return;
+                return stats;
             }
             wgpu::CurrentSurfaceTexture::Lost => {
                 self.recreate_surface();
                 self.window.request_redraw();
-                return;
+                return stats;
             }
             wgpu::CurrentSurfaceTexture::Validation => {
                 error!("surface acquisition hit a validation error");
-                return;
+                return stats;
             }
         };
 
@@ -362,10 +451,21 @@ impl Renderer {
                 pass.set_pipeline(&self.pipeline);
                 pass.set_bind_group(0, &self.camera_bind_group, &[]);
                 pass.set_bind_group(2, &self.texture_bind_group, &[]);
-                for gpu_chunk in self.chunks.values() {
+                for (chunk, gpu_chunk) in &self.chunks {
+                    stats.total_chunks += 1;
+                    let Some(mesh) = gpu_chunk.active_mesh() else {
+                        continue;
+                    };
+                    let min = chunk.origin();
+                    if !frustum.intersects_aabb(min, min + Vec3::splat(CHUNK_SIZE as f32)) {
+                        continue;
+                    }
                     pass.set_bind_group(1, &gpu_chunk.bind_group, &[]);
-                    pass.set_vertex_buffer(0, gpu_chunk.vertex_buffer.slice(..));
-                    pass.draw(0..gpu_chunk.vertex_count, 0..1);
+                    pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+                    pass.draw(0..mesh.vertex_count, 0..1);
+                    stats.visible_chunks += 1;
+                    stats.draw_calls += 1;
+                    stats.visible_vertices += u64::from(mesh.vertex_count);
                 }
             }
 
@@ -386,6 +486,7 @@ impl Renderer {
         self.queue.submit(Some(encoder.finish()));
         self.window.pre_present_notify();
         self.queue.present(frame);
+        stats
     }
 
     fn recreate_surface(&mut self) {
@@ -542,8 +643,8 @@ fn create_block_texture(
     });
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("block texture sampler"),
-        address_mode_u: wgpu::AddressMode::ClampToEdge,
-        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        address_mode_u: wgpu::AddressMode::Repeat,
+        address_mode_v: wgpu::AddressMode::Repeat,
         address_mode_w: wgpu::AddressMode::ClampToEdge,
         mag_filter: wgpu::FilterMode::Nearest,
         min_filter: wgpu::FilterMode::Nearest,

@@ -50,7 +50,12 @@ impl ChunkCoord {
         self.world_origin().as_vec3()
     }
 
-    fn offset(self, by: IVec3) -> Self {
+    /// Chunk-space coordinate vector.
+    pub(crate) fn coordinates(self) -> IVec3 {
+        self.0
+    }
+
+    pub(crate) fn offset(self, by: IVec3) -> Self {
         Self(self.0 + by)
     }
 }

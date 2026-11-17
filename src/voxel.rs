@@ -1,4 +1,4 @@
-//! Chunk and highlight mesh generation.
+//! Highlight mesh and the v0.0.4 face-culled mesher kept as a test reference.
 //!
 //! A voxel at `(x, y, z)` occupies the unit cube from `(x, y, z)` to
 //! `(x + 1, y + 1, z + 1)`. Coordinates are right-handed and Y-up. Chunk meshes
@@ -6,9 +6,6 @@
 
 use bytemuck::{Pod, Zeroable};
 use glam::{IVec3, Vec3};
-
-use crate::block::Block;
-use crate::world::{ChunkCoord, World};
 
 /// One mesh vertex: chunk-local position, normal, texture UV, and array layer.
 #[repr(C)]
@@ -28,9 +25,11 @@ pub(crate) struct HighlightVertex {
 }
 
 /// The quad UVs in face-corner order.
+#[cfg(test)]
 const UVS: [[f32; 2]; 4] = [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]];
 
 /// A quad per cube face, wound counter-clockwise from outside the cube.
+#[cfg(test)]
 const FACES: [(IVec3, [[f32; 3]; 4]); 6] = [
     (
         IVec3::X,
@@ -94,7 +93,11 @@ const FACES: [(IVec3, [[f32; 3]; 4]); 6] = [
 /// space, so faces shared across a chunk border are culled like any other.
 /// Neighbours beyond the `i32` world bounds are air. Voxels are sorted by local
 /// coordinate so the output does not depend on `HashMap` iteration order.
-pub(crate) fn build_chunk_mesh(world: &World, chunk: ChunkCoord) -> Vec<Vertex> {
+#[cfg(test)]
+pub(crate) fn build_chunk_mesh(
+    world: &crate::world::World,
+    chunk: crate::world::ChunkCoord,
+) -> Vec<Vertex> {
     let Some(chunk_data) = world.chunk(chunk) else {
         return Vec::new();
     };
@@ -111,11 +114,12 @@ pub(crate) fn build_chunk_mesh(world: &World, chunk: ChunkCoord) -> Vec<Vertex> 
     vertices
 }
 
+#[cfg(test)]
 fn push_voxel(
-    world: &World,
+    world: &crate::world::World,
     chunk_origin: IVec3,
     local: IVec3,
-    block: Block,
+    block: crate::block::Block,
     vertices: &mut Vec<Vertex>,
 ) {
     let Some(layers) = block.layers() else {
@@ -191,6 +195,7 @@ pub(crate) fn build_highlight_mesh(block: IVec3) -> Vec<HighlightVertex> {
 
 /// Offsets a world coordinate, returning `None` when the result leaves the
 /// `i32` range. Out-of-range neighbours are treated as air.
+#[cfg(test)]
 fn checked_add(position: IVec3, offset: IVec3) -> Option<IVec3> {
     Some(IVec3::new(
         position.x.checked_add(offset.x)?,
@@ -202,6 +207,8 @@ fn checked_add(position: IVec3, offset: IVec3) -> Option<IVec3> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::block::Block;
+    use crate::world::{ChunkCoord, World};
 
     fn world_with(blocks: &[(IVec3, Block)]) -> World {
         let mut world = World::default();
