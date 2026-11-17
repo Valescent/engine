@@ -67,11 +67,11 @@ RedrawRequested
        -> encode clear + depth clear + frustum-culled chunk draws + outline
        -> submit
        -> present
-  -> request next redraw while focused
+  -> request the next redraw
 ```
 
-- The loop pauses continuous redraw when the window loses focus or becomes occluded.
-- A single frame is still rendered on demand while unfocused, so the window is not left blank.
+- Continuous redraw runs while the window is visible, including when it is unfocused, so profilers and external tools keep receiving frames. Input stays gated on focus.
+- The loop pauses only when the window is occluded.
 - Frame time is logged at debug level about once per second.
 
 ## Input flow

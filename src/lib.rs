@@ -554,9 +554,7 @@ impl App {
         metrics::mesh_jobs(self.stats.pending_jobs as f64);
         profiling::finish_frame!();
 
-        if self.focused
-            && let Some(window) = &self.window
-        {
+        if let Some(window) = &self.window {
             window.request_redraw();
         }
     }

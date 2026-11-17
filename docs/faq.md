@@ -99,7 +99,7 @@ lighting, fog, water, or terrain generation.
 | Is Tracy integrated? | Yes, behind the `tracy` feature: `cargo run --features tracy` adds CPU spans, memory events, GPU timer zones, and metric plots. See [Profiling](dev/profiling.md). |
 | Why are there no GPU timings? | `wgpu-profiler` and timestamp queries are not integrated. See [Profiling](dev/profiling.md). |
 | What is `pool_sim`? | A benchmark that compares rayon with micropool on the v0.0.5 async-meshing frame loop. It is a decision aid, not a CI gate. See [Current aids](dev/debugging.md#current-aids) and [Benchmark results](dev/benchmarks.md). |
-| Why does the window keep redrawing? | Continuous redraw runs while the window is focused and pauses when unfocused or occluded. See [Frame flow](dev/architecture.md#frame-flow). |
+| Why does the window keep redrawing? | Continuous redraw runs even while unfocused so profilers keep receiving frames; only occlusion pauses it. Input stays focus-gated. See [Frame flow](dev/architecture.md#frame-flow). |
 | Should I profile a debug or release build? | Use dev for symbols and release for realistic frame times. See [Profiling](dev/profiling.md). |
 | A frame is stuttering | There is no async meshing or LOD yet, and frame delta is clamped to `100 ms`. See [Architecture](dev/architecture.md) and [Profiling](dev/profiling.md). |
 

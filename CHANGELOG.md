@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - CI runs Clippy, tests, and rustdoc without `--all-features`, so the profiling feature's C++ client stays out of the runners.
+- The engine keeps rendering while the window is unfocused, so a live profiler keeps receiving frames instead of freezing the capture. Input remains focus-gated and occlusion still pauses the loop.
 
 ## [0.0.5] - 2026-11-17
 
