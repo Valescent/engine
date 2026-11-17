@@ -198,7 +198,7 @@ fn greedy(n: i32, scale: f32, block_at: impl Fn(IVec3) -> Block) -> Vec<Vertex> 
 
     for (face, normal) in FACE_NORMALS.into_iter().enumerate() {
         for slice in 0..n {
-            let mut mask: Vec<Option<(Block, u32)>> = vec![None; cells];
+            let mut mask: Vec<Option<MaskKey>> = vec![None; cells];
             for v in 0..n {
                 for u in 0..n {
                     let cell = cell_coord(face, slice, u, v);
@@ -206,7 +206,11 @@ fn greedy(n: i32, scale: f32, block_at: impl Fn(IVec3) -> Block) -> Vec<Vertex> 
                     if !block.is_solid() || block_at(cell + normal).is_solid() {
                         continue;
                     }
-                    mask[mask_index(u, v, n)] = Some((block, face_layer(block, normal)));
+                    mask[mask_index(u, v, n)] = Some(MaskKey {
+                        block,
+                        layer: face_layer(block, normal),
+                        ao: corner_ao(&block_at, cell, face),
+                    });
                 }
             }
 
@@ -243,7 +247,7 @@ fn greedy(n: i32, scale: f32, block_at: impl Fn(IVec3) -> Block) -> Vec<Vertex> 
                         normal,
                         (slice, u, v, width, height),
                         scale,
-                        key.1,
+                        key.layer,
                     );
                 }
             }
@@ -251,6 +255,42 @@ fn greedy(n: i32, scale: f32, block_at: impl Fn(IVec3) -> Block) -> Vec<Vertex> 
     }
 
     vertices
+}
+
+/// Greedy merge key for one exposed cell.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MaskKey {
+    block: Block,
+    layer: u32,
+    /// Ambient occlusion at the four cell corners, in quad corner order.
+    ao: [u8; 4],
+}
+
+/// Ambient occlusion at the four corners of one exposed face.
+///
+/// Each corner inspects the outside cell and its two edge neighbours plus the
+/// diagonal in the plane of the face. Two solid edges fully occlude the corner.
+fn corner_ao(block_at: &impl Fn(IVec3) -> Block, cell: IVec3, face: usize) -> [u8; 4] {
+    let outside = cell + FACE_NORMALS[face];
+    let (u_axis, v_axis) = face_axes(face);
+    [(-1, -1), (-1, 1), (1, 1), (1, -1)].map(|(su, sv)| {
+        let side_a = block_at(outside + u_axis * su).is_solid();
+        let side_b = block_at(outside + v_axis * sv).is_solid();
+        let diagonal = block_at(outside + u_axis * su + v_axis * sv).is_solid();
+        if side_a && side_b {
+            0
+        } else {
+            3 - (u8::from(side_a) + u8::from(side_b) + u8::from(diagonal))
+        }
+    })
+}
+
+fn face_axes(face: usize) -> (IVec3, IVec3) {
+    match face {
+        0 | 1 => (IVec3::Z, IVec3::Y),
+        2 | 3 => (IVec3::X, IVec3::Z),
+        _ => (IVec3::X, IVec3::Y),
+    }
 }
 
 /// Cell coordinate for `(slice, u, v)` on a face, from the spec's table.
@@ -628,6 +668,106 @@ mod tests {
                 .count(),
             6
         );
+    }
+
+    #[test]
+    fn open_corners_have_full_ambient_occlusion() {
+        let world = world_with(&[(IVec3::ZERO, Block::Stone)]);
+        let chunk = chunk_at(IVec3::ZERO);
+        let snapshot = ChunkSnapshot::new(&world, chunk);
+        let border = BorderBlocks::new(&world, chunk);
+        let block_at = |cell: IVec3| {
+            if in_chunk(cell) {
+                snapshot.block(cell)
+            } else {
+                border.block(cell)
+            }
+        };
+
+        assert_eq!(corner_ao(&block_at, IVec3::ZERO, 2), [3, 3, 3, 3]);
+    }
+
+    #[test]
+    fn one_solid_edge_removes_one_occlusion_level() {
+        let world = world_with(&[
+            (IVec3::ZERO, Block::Stone),
+            (IVec3::new(1, 1, 0), Block::Stone),
+        ]);
+        let chunk = chunk_at(IVec3::ZERO);
+        let snapshot = ChunkSnapshot::new(&world, chunk);
+        let border = BorderBlocks::new(&world, chunk);
+        let block_at = |cell: IVec3| {
+            if in_chunk(cell) {
+                snapshot.block(cell)
+            } else {
+                border.block(cell)
+            }
+        };
+
+        assert_eq!(corner_ao(&block_at, IVec3::ZERO, 2), [3, 3, 2, 2]);
+    }
+
+    #[test]
+    fn two_solid_edges_fully_occlude_a_corner() {
+        let world = world_with(&[
+            (IVec3::ZERO, Block::Stone),
+            (IVec3::new(1, 1, 0), Block::Stone),
+            (IVec3::new(0, 1, 1), Block::Stone),
+        ]);
+        let chunk = chunk_at(IVec3::ZERO);
+        let snapshot = ChunkSnapshot::new(&world, chunk);
+        let border = BorderBlocks::new(&world, chunk);
+        let block_at = |cell: IVec3| {
+            if in_chunk(cell) {
+                snapshot.block(cell)
+            } else {
+                border.block(cell)
+            }
+        };
+
+        assert_eq!(corner_ao(&block_at, IVec3::ZERO, 2), [3, 2, 0, 2]);
+    }
+
+    #[test]
+    fn a_diagonal_occluder_removes_one_occlusion_level() {
+        let world = world_with(&[
+            (IVec3::ZERO, Block::Stone),
+            (IVec3::new(1, 1, 1), Block::Stone),
+        ]);
+        let chunk = chunk_at(IVec3::ZERO);
+        let snapshot = ChunkSnapshot::new(&world, chunk);
+        let border = BorderBlocks::new(&world, chunk);
+        let block_at = |cell: IVec3| {
+            if in_chunk(cell) {
+                snapshot.block(cell)
+            } else {
+                border.block(cell)
+            }
+        };
+
+        assert_eq!(corner_ao(&block_at, IVec3::ZERO, 2), [3, 3, 2, 3]);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn greedy_splits_quads_when_ao_differs() {
+        let mut flat = World::default();
+        let mut occluded = World::default();
+        for x in 0..4 {
+            flat.set_block(IVec3::new(x, 0, 0), Block::Stone);
+            occluded.set_block(IVec3::new(x, 0, 0), Block::Stone);
+        }
+        occluded.set_block(IVec3::new(0, 1, 1), Block::Stone);
+
+        let top_vertices = |world: &World| {
+            mesh(world, chunk_at(IVec3::ZERO), Lod::Lod0)
+                .iter()
+                .filter(|vertex| vertex.normal == [0.0, 1.0, 0.0] && vertex.position[1] == 1.0)
+                .count()
+        };
+
+        assert_eq!(top_vertices(&flat), 6);
+        assert_eq!(top_vertices(&occluded), 18);
     }
 
     #[test]
