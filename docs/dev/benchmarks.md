@@ -267,6 +267,30 @@ driver and present-path bookkeeping that scales with frame count, not with world
 So the uncapped ceiling is the swapchain/present path on this driver (~0.25 ms per frame), not
 mesh work, collision, or the GPU. Vsync hides it completely at 60 FPS.
 
+## 2026-11-17 runs
+
+- **Machine:** AMD Ryzen 5 7600, 6 cores / 12 logical processors, Windows 11 Home.
+- **Toolchain:** `rustc 1.99.1 (58cf8f9c3 2026-10-13)`.
+- **Commit:** `15ae656` (pool and benchmark unchanged from the v0.0.5 release).
+- **Command:** `cargo bench --bench pool_sim -- both`, run twice.
+
+Both runs reported `over = 0` in every scenario, identical workload checksums, and 350 dropped
+background jobs under saturation. Idle, light, and loaded p95 stayed between 2.9 and 3.3 ms for
+both backends; the difference is the saturated tail:
+
+| Run | Backend | p50 | p95 | p99 | max | join p99 | join max |
+|---|---|---:|---:|---:|---:|---:|---:|
+| 1 | rayon (12) | 2,905 | 3,943 | 4,309 | 4,567 | 3,096 | 3,325 |
+| 1 | micropool (11) | 3,594 | 3,856 | 4,249 | 6,107 | 2,892 | 4,650 |
+| 2 | rayon (12) | 3,747 | 5,869 | 8,581 | 10,567 | 7,289 | 9,302 |
+| 2 | micropool (11) | 3,429 | 3,993 | 4,397 | 4,716 | 3,004 | 3,149 |
+
+Micropool had the better saturated p99 in both runs (`4,249` and `4,397` versus `4,309` and
+`8,581`) and the better saturated join tail in the second. Run 1 had micropool slightly worse on
+saturated p50 and max, so the result is a tail preference rather than a clean sweep. That is
+consistent with [ADR-0009](../decisions/0009-micropool-for-chunk-workers.md), and single runs
+remain noisy.
+
 ## Run log
 
 | Date | Commit | Machine | Rust | Command | Workers | Result |
@@ -275,6 +299,7 @@ mesh work, collision, or the GPU. Vsync hides it completely at 60 FPS.
 | 2026-11-16 | `27c39b1` | Ryzen 5 7600, 6C/12T, Windows 11 26300 | 1.99.1 | `cargo bench --bench pool_sim -- both` | rayon 12, micropool 11 | All `over = 0`; checksums identical; micropool saturated p99 4,108 vs rayon 12,617; drops 350 each |
 | 2026-11-17 | v0.0.5 release build | Ryzen 5 7600, 6C/12T, RTX 4060, Windows 11 | 1.99.1 | `ENGINE_NO_VSYNC=1 cargo run --release` | n/a | 779.6 FPS mean, 1.283 ms frame; `player update` 1.15 ms dominates |
 | 2026-11-17 | collision query fix | Ryzen 5 7600, 6C/12T, RTX 4060, Windows 11 | 1.99.1 | `ENGINE_NO_VSYNC=1 cargo run --release` | n/a | 4370 FPS mean, 0.229 ms frame; `player update` 0.9 us |
+| 2026-11-17 | `15ae656` | Ryzen 5 7600, 6C/12T, Windows 11 | 1.99.1 | `cargo bench --bench pool_sim -- both` (x2) | rayon 12, micropool 11 | `over = 0`; checksums identical; micropool saturated p99 4,249 / 4,397 vs rayon 4,309 / 8,581 |
 
 Add new runs below the latest row. Keep the raw output with the entry when possible.
 
