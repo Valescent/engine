@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Optional `tracy` feature for local profiling: CPU spans for the frame, player update, highlight, mesh request, mesh upload, encode, and chunk worker jobs; allocation events from a global allocator; GPU timer zones from `wgpu-profiler`; and eight per-frame plots (frame, GPU, chunks, draws, vertices, rebuild, upload, queued jobs).
+- `tracy-profiler` thread lanes are named `chunk worker` once per pool thread.
+
+### Changed
+
+- CI runs Clippy, tests, and rustdoc without `--all-features`, so the profiling feature's C++ client stays out of the runners.
+
 ## [0.0.5] - 2026-11-17
 
 ### Added

@@ -17,7 +17,7 @@ Only v0.0.1 through v0.0.5 are released; v0.0.6-v0.0.7 are planned. A planned fe
 The current release is **v0.0.5, pre-alpha**. The build has a
 window, a depth-buffered `wgpu` renderer, chunked greedy meshes with two LODs, frustum culling, asynchronous remeshing, walking and collision,
 block breaking and placing, procedural block textures, and `VCHK` chunk saves. It does not have
-lighting, fog, water, terrain generation, or Tracy.
+lighting, fog, water, or terrain generation.
 
 | Question | Answer |
 |---|---|
@@ -96,7 +96,7 @@ lighting, fog, water, terrain generation, or Tracy.
 |---|---|
 | How do I measure FPS and frame time? | Run with `RUST_LOG=engine=debug` and read `fps` and `frame_ms`. See [Logging](dev/debugging.md#logging). |
 | Why is performance low? | The world uses one draw per visible chunk, greedy meshes, two LODs, frustum culling, and asynchronous remeshing. Missing are occlusion culling, streaming, lighting, and terrain generation. See [Current limitations](dev/architecture.md#current-limitations) and the [Roadmap](roadmap.md). |
-| Is Tracy integrated? | Not yet. It is selected in ADR-0006, but there is no dependency, feature, span, or GPU zone. See [Profiling](dev/profiling.md). |
+| Is Tracy integrated? | Yes, behind the `tracy` feature: `cargo run --features tracy` adds CPU spans, memory events, GPU timer zones, and metric plots. See [Profiling](dev/profiling.md). |
 | Why are there no GPU timings? | `wgpu-profiler` and timestamp queries are not integrated. See [Profiling](dev/profiling.md). |
 | What is `pool_sim`? | A benchmark that compares rayon with micropool on the v0.0.5 async-meshing frame loop. It is a decision aid, not a CI gate. See [Current aids](dev/debugging.md#current-aids) and [Benchmark results](dev/benchmarks.md). |
 | Why does the window keep redrawing? | Continuous redraw runs while the window is focused and pauses when unfocused or occluded. See [Frame flow](dev/architecture.md#frame-flow). |
@@ -128,7 +128,7 @@ lighting, fog, water, terrain generation, or Tracy.
 | A documentation link is broken | Use relative links such as `dev/setup.md`, not `/docs/dev/setup.md`. See [Documentation conventions](README.md#conventions). |
 | Does CI check documentation links? | No. It builds mdBook but does not run a link checker. See [CI](dev/ci.md#ci-workflow). |
 | Which mdBook and typos versions does CI use? | mdBook `0.5.4` and typos `1.52.2`. See [CI](dev/ci.md#docs-workflow). |
-| Why does CI run with `--all-features`? | The workflow checks all features. A new optional feature is built in CI; the planned Tracy feature would need a CI decision. See [CI](dev/ci.md#ci-workflow) and [Profiling](dev/profiling.md#before-enabling-this). |
+| Why does CI not use `--all-features`? | The optional `tracy` feature builds a C++ client and stays local, so CI uses explicit commands. See [CI](dev/ci.md#ci-workflow) and [Profiling](dev/profiling.md#constraints). |
 | Why are benchmarks, GPU tests, coverage, and link checks not in CI? | They are current CI gaps. See [CI](dev/ci.md). |
 | My commit was rejected | Commits follow [Conventional Commits](https://www.conventionalcommits.org). See [Commits](CONTRIBUTING.md#commits). |
 | CI says the changelog is missing | `feat`, `fix`, `perf`, `refactor`, and `revert` commits need an `[Unreleased]` entry. See [Changelog](CONTRIBUTING.md#changelog) and [Commits workflow](dev/ci.md#commits-workflow). |
@@ -151,7 +151,7 @@ lighting, fog, water, terrain generation, or Tracy.
 | Cursor is stuck or hidden | [Current capture and focus](dev/controls.md#current-capture-and-focus-v002) |
 | WASD or `Space` does something unexpected | [Bindings by milestone](dev/controls.md#bindings-by-milestone) |
 | Low FPS, stutter, or no frame-time log | [Logging](dev/debugging.md#logging), [Profiling](dev/profiling.md) |
-| Tracy or GPU timings are missing | [Profiling](dev/profiling.md#before-enabling-this) |
+| Tracy or GPU timings are missing | [Profiling](dev/profiling.md#run-tracy) |
 | Texture, asset, or shader question | [Texture pipeline](dev/textures.md), [Shader authoring](dev/shaders.md) |
 | Save, backup, corruption, or reset question | [World management](dev/world-management.md) |
 | `world/` or `world/seed` is missing | [World directory](dev/world-management.md#world-directory) |

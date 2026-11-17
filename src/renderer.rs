@@ -6,6 +6,8 @@ use std::sync::Arc;
 
 use glam::Vec3;
 use thiserror::Error;
+#[cfg(feature = "tracy")]
+use tracing::warn;
 use tracing::{error, info};
 use wgpu::util::DeviceExt;
 use winit::dpi::PhysicalSize;
@@ -121,6 +123,8 @@ pub(crate) struct Renderer {
     overlay_count: u32,
     depth_texture: wgpu::Texture,
     depth_view: wgpu::TextureView,
+    #[cfg(feature = "tracy")]
+    profiler: Option<wgpu_profiler::GpuProfiler>,
 }
 
 impl Renderer {
@@ -153,7 +157,7 @@ impl Renderer {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("engine device"),
-                required_features: wgpu::Features::empty(),
+                required_features: timer_features(&adapter),
                 required_limits: wgpu::Limits::downlevel_webgl2_defaults()
                     .using_resolution(adapter.limits()),
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
@@ -161,6 +165,25 @@ impl Renderer {
                 trace: wgpu::Trace::Off,
             })
             .await?;
+
+        #[cfg(feature = "tracy")]
+        let profiler = if timer_features(&adapter).contains(wgpu::Features::TIMESTAMP_QUERY) {
+            match wgpu_profiler::GpuProfiler::new_with_tracy_client(
+                wgpu_profiler::GpuProfilerSettings::default(),
+                adapter.get_info().backend,
+                &device,
+                &queue,
+            ) {
+                Ok(profiler) => Some(profiler),
+                Err(error) => {
+                    warn!(%error, "GPU profiling disabled");
+                    None
+                }
+            }
+        } else {
+            warn!("no timestamp-query support; profiling the CPU only");
+            None
+        };
 
         let config = surface
             .get_default_config(&adapter, width, height)
@@ -228,6 +251,8 @@ impl Renderer {
             overlay_count: 0,
             depth_texture,
             depth_view,
+            #[cfg(feature = "tracy")]
+            profiler,
         };
 
         info!(
@@ -423,70 +448,127 @@ impl Renderer {
             });
 
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("voxel pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(CLEAR_COLOR),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+            profiling::scope!("encode");
+            let attachments = [Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(CLEAR_COLOR),
+                    store: wgpu::StoreOp::Store,
+                },
+            })];
+            let descriptor = self.scene_pass_descriptor(&attachments);
 
-            if !self.chunks.is_empty() {
-                pass.set_pipeline(&self.pipeline);
-                pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                pass.set_bind_group(2, &self.texture_bind_group, &[]);
-                for (chunk, gpu_chunk) in &self.chunks {
-                    stats.total_chunks += 1;
-                    let Some(mesh) = gpu_chunk.active_mesh() else {
-                        continue;
-                    };
-                    let min = chunk.origin();
-                    if !frustum.intersects_aabb(min, min + Vec3::splat(CHUNK_SIZE as f32)) {
-                        continue;
-                    }
-                    pass.set_bind_group(1, &gpu_chunk.bind_group, &[]);
-                    pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-                    pass.draw(0..mesh.vertex_count, 0..1);
-                    stats.visible_chunks += 1;
-                    stats.draw_calls += 1;
-                    stats.visible_vertices += u64::from(mesh.vertex_count);
-                }
+            #[cfg(feature = "tracy")]
+            if let Some(profiler) = &self.profiler {
+                let mut scope = profiler.scope("world", &mut encoder);
+                let mut pass = scope.scoped_render_pass("terrain", descriptor);
+                self.draw_scene(&mut pass, frustum, &mut stats);
+                drop(pass);
+            } else {
+                let mut pass = encoder.begin_render_pass(&descriptor);
+                self.draw_scene(&mut pass, frustum, &mut stats);
             }
 
-            if self.highlight_count > 0 {
-                pass.set_pipeline(&self.highlight_pipeline);
-                pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                pass.set_vertex_buffer(0, self.highlight_buffer.slice(..));
-                pass.draw(0..self.highlight_count, 0..1);
+            #[cfg(not(feature = "tracy"))]
+            {
+                let mut pass = encoder.begin_render_pass(&descriptor);
+                self.draw_scene(&mut pass, frustum, &mut stats);
             }
 
-            if self.overlay_count > 0 {
-                pass.set_pipeline(&self.overlay_pipeline);
-                pass.set_vertex_buffer(0, self.overlay_buffer.slice(..));
-                pass.draw(0..self.overlay_count, 0..1);
+            #[cfg(feature = "tracy")]
+            if let Some(profiler) = self.profiler.as_mut() {
+                profiler.resolve_queries(&mut encoder);
             }
         }
 
         self.queue.submit(Some(encoder.finish()));
         self.window.pre_present_notify();
         self.queue.present(frame);
+
+        #[cfg(feature = "tracy")]
+        if let Some(profiler) = self.profiler.as_mut() {
+            if let Err(error) = profiler.end_frame() {
+                warn!(%error, "GPU profiler frame was not resolved");
+            }
+            let period = self.queue.get_timestamp_period();
+            if let Some(queries) = profiler.process_finished_frame(period) {
+                let gpu_ms = queries
+                    .iter()
+                    .filter_map(|query| query.time.as_ref())
+                    .map(|time| time.end - time.start)
+                    .sum::<f64>()
+                    * 1000.0;
+                crate::metrics::gpu_ms(gpu_ms);
+            }
+        }
+
         stats
+    }
+
+    fn scene_pass_descriptor<'a>(
+        &'a self,
+        color_attachments: &'a [Option<wgpu::RenderPassColorAttachment<'a>>],
+    ) -> wgpu::RenderPassDescriptor<'a> {
+        wgpu::RenderPassDescriptor {
+            label: Some("voxel pass"),
+            color_attachments,
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &self.depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        }
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    fn draw_scene(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        frustum: &Frustum,
+        stats: &mut FrameStats,
+    ) {
+        if !self.chunks.is_empty() {
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_bind_group(2, &self.texture_bind_group, &[]);
+            for (chunk, gpu_chunk) in &self.chunks {
+                stats.total_chunks += 1;
+                let Some(mesh) = gpu_chunk.active_mesh() else {
+                    continue;
+                };
+                let min = chunk.origin();
+                if !frustum.intersects_aabb(min, min + Vec3::splat(CHUNK_SIZE as f32)) {
+                    continue;
+                }
+                pass.set_bind_group(1, &gpu_chunk.bind_group, &[]);
+                pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+                pass.draw(0..mesh.vertex_count, 0..1);
+                stats.visible_chunks += 1;
+                stats.draw_calls += 1;
+                stats.visible_vertices += u64::from(mesh.vertex_count);
+            }
+        }
+
+        if self.highlight_count > 0 {
+            pass.set_pipeline(&self.highlight_pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, self.highlight_buffer.slice(..));
+            pass.draw(0..self.highlight_count, 0..1);
+        }
+
+        if self.overlay_count > 0 {
+            pass.set_pipeline(&self.overlay_pipeline);
+            pass.set_vertex_buffer(0, self.overlay_buffer.slice(..));
+            pass.draw(0..self.overlay_count, 0..1);
+        }
     }
 
     fn recreate_surface(&mut self) {
@@ -498,6 +580,22 @@ impl Renderer {
             Err(error) => error!(%error, "failed to recreate the window surface"),
         }
     }
+}
+
+/// Features the GPU profiler needs, intersected with what the adapter supports.
+#[cfg(feature = "tracy")]
+fn timer_features(adapter: &wgpu::Adapter) -> wgpu::Features {
+    let requested = wgpu_profiler::GpuProfiler::ALL_WGPU_TIMER_FEATURES & adapter.features();
+    if requested.contains(wgpu::Features::TIMESTAMP_QUERY) {
+        requested
+    } else {
+        wgpu::Features::empty()
+    }
+}
+
+#[cfg(not(feature = "tracy"))]
+fn timer_features(_adapter: &wgpu::Adapter) -> wgpu::Features {
+    wgpu::Features::empty()
 }
 
 fn preferred_present_mode(vsync: bool, supported: &[wgpu::PresentMode]) -> wgpu::PresentMode {

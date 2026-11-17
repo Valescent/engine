@@ -111,8 +111,8 @@ Lints:
 - Clippy: `all` and `pedantic` are warned, with allowances for module name repetitions,
   missing `must_use` candidates, and missing error and panic docs. The Clippy job turns
   warnings into errors.
-- No optional Cargo features are defined today. `--all-features` currently selects nothing. The
-  planned Tracy feature in [Debugging](debugging.md) is not defined yet.
+- The `tracy` feature is optional and local-only: it builds Tracy's C++ client, so CI does not
+  compile it. See [Profiling](profiling.md).
 
 cargo-deny allows the licences listed in `deny.toml`, ignores the private PolyForm Shield
 licence, denies wildcard requirements and unknown registries or Git sources, and warns on
@@ -148,8 +148,8 @@ CI details:
 
 - The test matrix runs on Ubuntu, Windows, and macOS.
 - Formatting and documentation run only on Ubuntu.
-- Clippy runs with `--all-targets --all-features --locked` and `-D warnings`.
-- Tests run with `--all-features --locked`.
+- Clippy runs with `--all-targets --locked` and `-D warnings`.
+- Tests run with `--locked`.
 - `RUSTDOCFLAGS=-D warnings` fails documentation builds on warnings.
 - Typos uses `crate-ci/typos@v1.52.2`; cargo-deny uses
   `EmbarkStudios/cargo-deny-action@v2`.

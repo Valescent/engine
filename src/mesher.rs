@@ -10,6 +10,18 @@ use crate::mesh::{BorderBlocks, ChunkSnapshot, Lod, build_mesh, select_lod};
 use crate::voxel::Vertex;
 use crate::world::{ChunkCoord, DirtyChunks, World};
 
+thread_local! {
+    static WORKER_NAMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Names each pool thread once so Tracy lanes are labelled.
+fn name_worker_thread() {
+    if !WORKER_NAMED.with(std::cell::Cell::get) {
+        profiling::register_thread!("chunk worker");
+        WORKER_NAMED.with(|named| named.set(true));
+    }
+}
+
 /// Whether a job must be started soon or may be dropped under load.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Priority {
@@ -77,6 +89,8 @@ impl MeshPool for WorkerPool {
         let sender = self.sender.clone();
         let counter = Arc::clone(&self.in_flight);
         drop(micropool::spawn_owned(move || {
+            name_worker_thread();
+            profiling::scope!("chunk mesh");
             let started = Instant::now();
             let mesh = build_mesh(&job.snapshot, &job.border, job.lod);
             let result = MeshResult {
@@ -190,6 +204,11 @@ impl MeshQueue {
     /// Desired LOD last selected for a chunk, if any.
     pub(crate) fn desired(&self, chunk: ChunkCoord) -> Option<Lod> {
         self.desired.get(&chunk).copied()
+    }
+
+    /// Number of mesh jobs currently in flight.
+    pub(crate) fn pending_len(&self) -> usize {
+        self.pending.len()
     }
 }
 

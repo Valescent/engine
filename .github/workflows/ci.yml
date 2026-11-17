@@ -37,17 +37,19 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: cargo fmt --all -- --check
 
+      # The tracy profiling feature builds a C++ client and stays local (ADR-0006);
+      # do not switch these back to --all-features.
       - name: Clippy
-        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+        run: cargo clippy --all-targets --locked -- -D warnings
 
       - name: Test
-        run: cargo test --all-features --locked
+        run: cargo test --locked
 
       - name: Documentation
         if: matrix.os == 'ubuntu-latest'
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --no-deps --all-features
+        run: cargo doc --no-deps
 
   dependencies:
     name: Dependencies

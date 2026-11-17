@@ -151,7 +151,7 @@ something else; it does not ban the word everywhere.
 | [thiserror](conventions.md#errors) | Derive macro for typed library errors. | Current |
 | [tracing](debugging.md#logging) | Structured logging and diagnostics. | Current |
 | pollster | Small executor used to block on `wgpu` futures. | Current |
-| [Tracy / wgpu-profiler](profiling.md) | Planned CPU and GPU profiler integration. | Planned (ADR 0006), not integrated |
+| [Tracy / wgpu-profiler](profiling.md) | CPU spans, memory events, GPU timer zones, and metric plots behind the `tracy` feature. | Current |
 | [rayon / micropool](../decisions/0009-micropool-for-chunk-workers.md) | Worker-pool candidates compared by `pool_sim`; micropool is selected, rayon remains benchmark-only. | Current dev dependencies; micropool pending runtime use |
 | [mdBook](configuration.md#documentation-and-releases) | Documentation site generator. | Current |
 | [Cocogitto](configuration.md#documentation-and-releases) | Conventional Commits and release-tag tooling. | Current |

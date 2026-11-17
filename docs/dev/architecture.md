@@ -17,6 +17,7 @@ The engine is a small `winit` and `wgpu` application. This page describes the cu
 | `src/mesh.rs` | Greedy meshing, the 2x2x2 LOD1 downsample, LOD selection, chunk snapshots, border blocks, and tests. |
 | `src/mesher.rs` | Mesh jobs, revisions, the bounded micropool `WorkerPool`, finished-result collection, and tests. |
 | `src/frustum.rs` | Six-plane frustum extraction and conservative AABB tests. |
+| `src/metrics.rs` | Tracy plots for frame, GPU, chunk, draw, rebuild, upload, and queue metrics; no-ops without the `tracy` feature. |
 | `src/voxel.rs` | Texture vertices, the highlight mesh, and the v0.0.4 face-culled mesher kept as a test reference. |
 | `src/renderer.rs` | `wgpu` device/surface setup, pipelines, block texture array, buffers, depth texture, resizing, and draw submission. |
 | `src/shader.wgsl` | Chunk vertex transform and textured fragment shading. See [Shader authoring](shaders.md). |
@@ -110,6 +111,7 @@ See [Coordinates](coordinates.md) for the full conventions, including chunk and 
 - Bind group 2 holds one eight-layer `texture_2d_array` and a nearest-filtering sampler that repeats in U and V and clamps in W. The table is in [Texture and asset pipeline](textures.md).
 - A chunk's previous buffer stays visible until a newer mesh for its LOD is uploaded. Edits invalidate both LODs; a chunk with an empty mesh releases that buffer.
 - Draw calls are frustum-culled per chunk AABB and counted with visible chunks, visible vertices, draw calls, worker rebuild time, and upload time in the once-per-second debug log.
+- With the local `tracy` feature, the renderer requests timestamp queries when the adapter supports them, wraps the pass in a `wgpu-profiler` GPU zone, and ends the profiler frame after present. See [Profiling](profiling.md).
 - The surface starts in FIFO (vsync) presentation. `V` reconfigures it to immediate or mailbox presentation when supported, and back.
 - The highlight is a 24-vertex line list drawn after chunk meshes with `LessEqual` depth testing and no depth writes.
 - The debug overlay is a screen-space triangle list with per-vertex colour, alpha blending, and an `Always` depth compare. It refreshes from the one-second frame sample.

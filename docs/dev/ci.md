@@ -48,9 +48,9 @@ Each matrix entry:
 
 ```console
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features --locked -- -D warnings
-cargo test --all-features --locked
-RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 ```
 
 Formatting and rustdoc run only on Ubuntu. Clippy and tests run on all three systems. Clippy
@@ -122,8 +122,8 @@ Run the same checks locally:
 
 ```console
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features --locked -- -D warnings
-cargo test --all-features --locked
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked
 typos
 mdbook build
 ```
@@ -132,12 +132,12 @@ Rustdoc needs `RUSTDOCFLAGS`:
 
 ```console
 # POSIX
-RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 ```
 
 ```console
 # PowerShell
-$env:RUSTDOCFLAGS = "-D warnings"; cargo doc --no-deps --all-features
+$env:RUSTDOCFLAGS = "-D warnings"; cargo doc --no-deps
 ```
 
 `cargo deny check` reproduces the dependency job when cargo-deny is installed. CI uses typos
@@ -154,8 +154,8 @@ test, rustdoc, typos, and mdBook checks before a release.
   for `Release`, and Pages permissions for `Docs`.
 - Cancel superseded `CI` and `Commits` runs. Do not cancel `Docs` deployments or `Release`
   runs.
-- Use `--locked` for Clippy and tests. `--all-features` currently selects nothing because no
-  optional features are defined.
+- Use `--locked` for Clippy and tests. Do not switch these to `--all-features`: the optional
+  `tracy` feature builds a C++ client and stays local (ADR-0006).
 - Reference actions by version tags and let Dependabot update them.
 - Do not add `pool_sim` to CI. It is a local decision aid. Record local runs in
   [Benchmark results](benchmarks.md).

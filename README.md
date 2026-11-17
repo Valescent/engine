@@ -44,9 +44,19 @@ planned day/night controls.
 
 ```console
 cargo test
-cargo clippy --all-targets --all-features -- -D warnings
+cargo clippy --all-targets -- -D warnings
 cargo fmt --all
 ```
+
+Profile a local build with Tracy (CPU spans, memory events, GPU timer zones, and plots):
+
+```console
+cargo run --features tracy
+```
+
+Start the [Tracy GUI](https://github.com/wolfpld/tracy/releases/tag/v0.13.1) first or after the
+engine; the client connects over loopback. The feature is local-only and not built in CI. See
+[`docs/dev/profiling.md`](docs/dev/profiling.md).
 
 Enable the commit-message hook once per clone:
 
@@ -83,7 +93,7 @@ The documentation site is published at **https://valescent.github.io/engine/**.
 - [Configuration](docs/dev/configuration.md) - runtime inputs, the planned config file, and repository tooling.
 - [World management](docs/dev/world-management.md) - backups, corruption recovery, and reset.
 - [Debugging](docs/dev/debugging.md) - logging, error reporting, and the planned log file.
-- [Profiling](docs/dev/profiling.md) - Tracy, wgpu-profiler, and the planned CPU/GPU timeline.
+- [Profiling](docs/dev/profiling.md) - Tracy CPU, memory, and GPU timelines behind the local `tracy` feature.
 - [Benchmark results](docs/dev/benchmarks.md) - pool_sim methodology and run log.
 - [CI](docs/dev/ci.md) - GitHub Actions workflows, local checks, and current gaps.
 - [Testing](docs/dev/testing.md) - headless tests and manual GPU acceptance.

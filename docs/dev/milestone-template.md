@@ -77,9 +77,10 @@ the Definition of Done.
 
 - [ ] The definition-of-done behaviour works manually.
 - [ ] The edge cases have automated tests.
-- [ ] `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`,
-      `cargo test --all-features`, `cargo doc --no-deps --all-features`, `typos`, and
-      `mdbook build` pass.
+- [ ] `cargo fmt --all -- --check`, `cargo clippy --all-targets --locked -- -D warnings`,
+      `cargo test --locked`, `cargo doc --no-deps`, `typos`, and `mdbook build` pass. If the
+      change touches the `tracy` feature, also run the Clippy and test commands with
+      `--features tracy`.
 - [ ] The README and roadmap are current and `CHANGELOG.md` has the user-visible entries.
 
 ## Deliberate simplifications

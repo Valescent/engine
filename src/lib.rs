@@ -9,6 +9,7 @@ mod camera;
 mod frustum;
 mod mesh;
 mod mesher;
+mod metrics;
 mod overlay;
 mod player;
 mod raycast;
@@ -77,6 +78,9 @@ pub enum RunError {
 /// initialization fails.
 pub fn run() -> Result<(), RunError> {
     init_tracing();
+
+    #[cfg(feature = "tracy")]
+    let _tracy_client = tracy_client::Client::start();
 
     let stress = stress_requested();
     let world = world_for(stress, Path::new(WORLD_CHUNKS))?;
@@ -234,6 +238,9 @@ struct FrameAccumulator {
     totals: FrameStats,
     rebuild_ms: f64,
     upload_ms: f64,
+    last_rebuild_ms: f64,
+    last_upload_ms: f64,
+    pending_jobs: usize,
 }
 
 impl FrameAccumulator {
@@ -346,6 +353,7 @@ impl App {
 
     /// Recalculates every chunk's LOD and requests any missing mesh.
     fn request_levels(&mut self, pool: &dyn MeshPool) {
+        profiling::scope!("mesh request");
         let feet = self.player.position.floor().as_ivec3();
         let player_chunk = ChunkCoord::from_world(feet).0;
 
@@ -361,20 +369,27 @@ impl App {
                     .request(pool, &self.world, chunk, lod, Priority::Background);
             }
         }
+        self.stats.pending_jobs = self.queue.pending_len();
     }
 
     fn upload_finished_meshes(&mut self, pool: &dyn MeshPool) {
+        profiling::scope!("mesh upload");
         let (results, rebuild) = collect_finished(&mut self.queue, pool, MAX_UPLOADS_PER_FRAME);
-        self.stats.rebuild_ms += rebuild.as_secs_f64() * 1000.0;
+        let rebuild_ms = rebuild.as_secs_f64() * 1000.0;
+        self.stats.rebuild_ms += rebuild_ms;
+        self.stats.last_rebuild_ms = rebuild_ms;
 
         let Some(renderer) = &mut self.renderer else {
             return;
         };
+        let mut upload_ms = 0.0;
         for result in &results {
             let started = Instant::now();
             renderer.upload_chunk(result.chunk, result.lod, result.revision, &result.mesh);
-            self.stats.upload_ms += started.elapsed().as_secs_f64() * 1000.0;
+            upload_ms += started.elapsed().as_secs_f64() * 1000.0;
         }
+        self.stats.upload_ms += upload_ms;
+        self.stats.last_upload_ms = upload_ms;
     }
 
     fn select_active_levels(&mut self) {
@@ -451,6 +466,7 @@ impl App {
         if self.renderer.is_none() {
             return;
         }
+        profiling::scope!("highlight");
         let hit = self.target_hit().map(|hit| hit.block);
         if self.highlighted_block == hit {
             return;
@@ -472,10 +488,13 @@ impl App {
         }
     }
 
+    #[allow(clippy::cast_precision_loss)]
     fn redraw(&mut self) {
         if self.occluded {
             return;
         }
+
+        profiling::scope!("frame");
 
         let now = Instant::now();
         let elapsed = now.saturating_duration_since(self.last_frame);
@@ -499,7 +518,10 @@ impl App {
                 jump: std::mem::take(&mut self.jump_requested),
                 yaw: self.camera.yaw(),
             };
-            self.player.update(&self.world, input, delta_seconds);
+            {
+                profiling::scope!("player update");
+                self.player.update(&self.world, input, delta_seconds);
+            }
             self.camera.set_position(self.player.eye_position());
             self.update_highlight();
         }
@@ -522,6 +544,16 @@ impl App {
             renderer.set_overlay(overlay.as_deref());
             self.stats.totals = renderer.render(&frustum);
         }
+
+        metrics::frame_ms(elapsed.as_secs_f64() * 1000.0);
+        metrics::visible_chunks(f64::from(self.stats.totals.visible_chunks));
+        metrics::draw_calls(f64::from(self.stats.totals.draw_calls));
+        metrics::visible_vertices(self.stats.totals.visible_vertices as f64);
+        metrics::rebuild_ms(self.stats.last_rebuild_ms);
+        metrics::upload_ms(self.stats.last_upload_ms);
+        metrics::mesh_jobs(self.stats.pending_jobs as f64);
+        profiling::finish_frame!();
+
         if self.focused
             && let Some(window) = &self.window
         {

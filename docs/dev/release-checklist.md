@@ -19,9 +19,9 @@ Run the local checks:
 
 ```console
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features --locked -- -D warnings
-cargo test --all-features --locked
-cargo doc --no-deps --all-features
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked
+cargo doc --no-deps
 typos
 mdbook build
 ```

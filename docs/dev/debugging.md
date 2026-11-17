@@ -13,8 +13,8 @@ input bindings are in [Controls](controls.md). For a symptom-first index, see
 | Frame-timing log | Current |
 | FPS/frame-time overlay (`F3`) | Current |
 | `pool_sim` benchmark | Current |
-| Tracy CPU/GPU profiling | Planned (ADR 0006), not integrated |
-| Milestone metrics | Planned (v0.0.3, v0.0.5, v0.0.7) |
+| Tracy CPU/GPU profiling | Current behind the `tracy` feature |
+| Milestone metrics | v0.0.3 and v0.0.5 current; v0.0.7 planned |
 | Debug overlay and crash reporting | FPS/frame-time overlay current; crash reporting not implemented |
 
 ## Logging
@@ -88,18 +88,16 @@ in both stderr and the file.
   loop. It is a decision aid, not a regression gate: keep both backends in one run on the same
   machine, and do not add it to CI. Recorded runs and the entry template are in
   [Benchmark results](benchmarks.md).
-- There is no Tracy, sampling profiler, or GPU timer integration yet.
+- Tracy CPU, memory, and GPU profiling is available with `cargo run --features tracy`. See [Profiling](profiling.md).
 
-### Planned Tracy
+### Tracy
 
 [ADR 0006](../decisions/0006-tracy-for-profiling.md) selects Tracy, instrumented through
-`tracy-client`, with `wgpu-profiler` reporting GPU timer queries into the same timeline. It is
-accepted but not implemented.
+`tracy-client`, with `wgpu-profiler` reporting GPU timer queries into the same timeline.
 
-The intended setup, pinned versions, frame wiring, scopes, plots, and troubleshooting are in
-[Profiling](profiling.md). That page also records two constraints that need a decision before
-the feature lands: `tracy-client`'s `broadcast` feature cannot be removed with the current
-`wgpu-profiler` dependency, and the CI workflows use `--all-features`.
+The setup, pinned versions, frame wiring, scopes, plots, and troubleshooting are in
+[Profiling](profiling.md). The feature is local-only because it builds Tracy's C++ client, so CI
+does not compile it.
 
 ## Metrics
 
@@ -126,7 +124,7 @@ engine has no capture integration or setup instructions for them. Tracy does not
 | Engine-side GPU capture integration | Not implemented; use external frame debuggers. |
 | Automated GPU tests | Not yet; rendering is checked manually. |
 | Log file | Planned, no milestone. |
-| Tracy integration | Planned (ADR 0006). |
+| Tracy integration | Current behind the `tracy` feature. |
 
 ## Capturing a report
 

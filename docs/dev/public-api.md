@@ -78,7 +78,7 @@ This surface has no semver compatibility promise. Any `0.0.x` release may change
 
 - `App`, `Camera`, `Player`, `Aabb`, `Block`, `Renderer`, `Vertex`, `World`, `RaycastHit`, `Lod`,
   `build_mesh`, `MeshQueue`, `WorkerPool`, `Frustum`, and renderer helpers are private or `pub(crate)`.
-- The `block`, `camera`, `frustum`, `mesh`, `mesher`, `overlay`, `player`, `raycast`, `renderer`,
+- The `block`, `camera`, `frustum`, `mesh`, `mesher`, `metrics`, `overlay`, `player`, `raycast`, `renderer`,
   `voxel`, and `world` modules
   are private. Paths such as `engine::Camera` or `engine::Renderer` do not exist.
 - `src/main.rs` is the only in-repo consumer. It calls `engine::run()` and returns
