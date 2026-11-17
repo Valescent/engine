@@ -11,10 +11,11 @@ input bindings are in [Controls](controls.md). For a symptom-first index, see
 | Per-run log file | Planned, no milestone |
 | Typed startup errors and validation | Current |
 | Frame-timing log | Current |
+| FPS/frame-time overlay (`F3`) | Current |
 | `pool_sim` benchmark | Current |
 | Tracy CPU/GPU profiling | Planned (ADR 0006), not integrated |
 | Milestone metrics | Planned (v0.0.3, v0.0.5, v0.0.7) |
-| Debug overlay and crash reporting | Not implemented |
+| Debug overlay and crash reporting | FPS/frame-time overlay current; crash reporting not implemented |
 
 ## Logging
 
@@ -81,8 +82,8 @@ in both stderr and the file.
 
 ### Current aids
 
-- The frame-timing log is the only built-in runtime measurement. Run with
-  `RUST_LOG=engine=debug` and read `fps` and `frame_ms`.
+- The frame-timing log and the `F3` overlay are the built-in runtime measurements. The overlay
+  refreshes once per second; run with `RUST_LOG=engine=debug` to also log `fps` and `frame_ms`.
 - `cargo bench --bench pool_sim` compares rayon with micropool on the v0.0.5 async-meshing frame
   loop. It is a decision aid, not a regression gate: keep both backends in one run on the same
   machine, and do not add it to CI. Recorded runs and the entry template are in
@@ -120,7 +121,7 @@ engine has no capture integration or setup instructions for them. Tracy does not
 
 | Facility | Status |
 |---|---|
-| Debug overlay or HUD | Not implemented. |
+| Debug overlay or HUD | FPS/frame-time overlay on `F3`; no other HUD. |
 | Debug console, commands, or CVars | Not implemented. |
 | Chunk-border, frustum, or other debug views | Not implemented. |
 | Crash reporter or minidump writer | Not implemented. |

@@ -8,7 +8,7 @@ shader changes planned for later milestones.
 |---|---|
 | Shader source and embedding | Current |
 | Camera uniform and vertex/normal interface | Current |
-| Textured block shader | Planned (v0.0.4) |
+| Textured block shader | Current (v0.0.4) |
 | Greedy-quad and LOD shader inputs | Planned (v0.0.5) |
 | Light, AO, fog, and water | Planned (v0.0.6) |
 | Eleven texture layers and Sand | Planned (v0.0.7) |
@@ -29,16 +29,18 @@ points. There is no runtime shader loader or asset path.
 
 | Stage | Interface |
 |---|---|
-| Vertex input | `@location(0) position: vec3<f32>`, `@location(1) normal: vec3<f32>` |
+| Vertex input | `@location(0) position: vec3<f32>`, `@location(1) normal: vec3<f32>`, `@location(2) uv: vec2<f32>`, `@location(3) layer: u32` |
 | Uniforms | `@group(0) @binding(0)` camera `view_projection: mat4x4<f32>`; `@group(1) @binding(0)` chunk `origin: vec3<f32>` |
-| Vertex output | `@builtin(position) clip_position`, `@location(0) normal` |
+| Textures | `@group(2) @binding(0)` block `texture_2d_array<f32>`; `@group(2) @binding(1)` nearest `sampler` |
+| Vertex output | `@builtin(position) clip_position`, `@location(0) normal`, `@location(1) uv`, `@location(2) flat layer` |
 | Fragment output | `@location(0) vec4<f32>` |
 | Pipeline state | Triangle list, no culling, `Depth32Float`, `Less`, depth write enabled, one color target |
 
 The vertex stage computes `world_position = chunk.origin + input.position`, then
-`clip_position = view_projection * vec4(world_position, 1.0)`, and forwards the normal. The fragment
-stage uses a fixed light direction `(0.35, 0.85, 0.45)`, a `0.45..1.0` shade, and a fixed green base
-color. There are no textures, lighting uniforms, fog, or transparency in the current shader.
+`clip_position = view_projection * vec4(world_position, 1.0)`, and forwards the normal, UV, and
+flat layer. The fragment stage samples the array and applies a fixed light direction
+`(0.35, 0.85, 0.45)` and a `0.45..1.0` shade. There are no lighting uniforms, fog, or transparency
+in the current shader.
 
 The interface, in brief:
 
@@ -58,14 +60,24 @@ var<uniform> camera: Camera;
 @group(1) @binding(0)
 var<uniform> chunk: Chunk;
 
+@group(2) @binding(0)
+var block_texture: texture_2d_array<f32>;
+
+@group(2) @binding(1)
+var block_sampler: sampler;
+
 struct VertexIn {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(3) layer: u32,
 };
 
 struct VertexOut {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) normal: vec3<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) @interpolate(flat) layer: u32,
 };
 ```
 
@@ -83,17 +95,21 @@ must match:
 
 ### Bindings
 
-- The current layout has two entries, both visible to the vertex stage:
-  - group `0`, binding `0`: the 64-byte camera uniform.
-  - group `1`, binding `0`: the 16-byte chunk origin uniform.
-- The shader declares `var<uniform> camera: Camera` and `var<uniform> chunk: Chunk` with the
-  matching groups and bindings. Changing either number without the other fails pipeline creation.
+- The current layout has three entries:
+  - group `0`, binding `0`: the 64-byte camera uniform, visible to the vertex stage.
+  - group `1`, binding `0`: the 16-byte chunk origin uniform, visible to the vertex stage.
+  - group `2`, bindings `0` and `1`: the block texture array and sampler, visible to the fragment
+    stage.
+- The shader declares `camera`, `chunk`, `block_texture`, and `block_sampler` with the matching
+  groups and bindings. Changing either number without the other fails pipeline creation.
 - The camera uniform is visible to the vertex stage only. If a fragment function reads it, add
   `ShaderStages::FRAGMENT` to the layout entry.
 - The camera buffer is 64 bytes, matching one `mat4x4<f32>`. If the struct grows, update the buffer
   size, `min_binding_size`, and the Rust write together.
 - The chunk origin buffer holds `vec3<f32>` plus one padding float, which matches the uniform
   address-space alignment. The padding is not read.
+- The texture is an eight-layer `Rgba8UnormSrgb` array with one mip level. The sampler is nearest
+  on every filter and clamps to the edge.
 - WGSL matrices are column-major. `Mat4::to_cols_array()` writes them column by column, so
   `view_projection * vec4(position, 1.0)` is correct. Do not transpose the matrix on the CPU or in
   the shader.
@@ -127,10 +143,11 @@ padding.
 
 ### Vertex inputs
 
-- `Vertex` is `#[repr(C)]`, derives `Pod` and `Zeroable`, and is 24 bytes: `position` at offset
-  `0`, `normal` at offset `12`.
-- The buffer layout uses `array_stride = size_of::<Vertex>()` and `Float32x3` attributes at those
-  offsets. `shader_location` `0` and `1` are the `@location` numbers in `VertexIn`.
+- `Vertex` is `#[repr(C)]`, derives `Pod` and `Zeroable`, and is 36 bytes: `position` at offset
+  `0`, `normal` at `12`, `uv` at `24`, and `layer` at `32`.
+- The buffer layout uses `array_stride = size_of::<Vertex>()` and attributes at those offsets:
+  `Float32x3`, `Float32x3`, `Float32x2`, and `Uint32`. `shader_location` `0`–`3` are the
+  `@location` numbers in `VertexIn`.
 - Every `@location` in `VertexIn` needs exactly one matching `VertexAttribute`, and the WGSL type
   must match the format. `Float32x3` is a `vec3<f32>`; `Uint32` is a `u32`.
 - If you add a field, use `std::mem::offset_of!` for the attribute offset instead of guessing.
@@ -215,8 +232,7 @@ padding.
    floats in the vertex stage instead.
 6. Run `cargo test` for the CPU-side layout and mesh vectors, then `cargo run` for GPU validation.
 7. If the layout is normative, update the spec or ADR before changing shipped data. The current
-   shader is v0.0.3; the 36-byte v0.0.4 layout and 40-byte v0.0.6 layout are planned contracts,
-   not current code.
+   shader is v0.0.4; the 40-byte v0.0.6 layout is a planned contract, not current code.
 
 ## Changing bindings
 
@@ -229,17 +245,18 @@ padding.
    sees a `sampler`, not a filtering mode.
 6. Run `cargo run`; an unmatched binding or visibility fails pipeline validation.
 
-The current bind groups are group `0`, binding `0` (camera uniform, vertex visibility) and group
-`1`, binding `0` (chunk origin uniform, vertex visibility). The v0.0.4 texture array and sampler
-are planned; the spec fixes the texture array and per-vertex layer, not the binding numbers.
-Choose numbers that match the Rust layout and document them in the change.
+The current bind groups are group `0`, binding `0` (camera uniform, vertex visibility), group
+`1`, binding `0` (chunk origin uniform, vertex visibility), and group `2`, bindings `0` and `1`
+(texture array and sampler, fragment visibility). The v0.0.6 lighting uniforms and v0.0.7 layer
+table are planned; the specs fix their data, not their binding numbers. Choose numbers that match
+the Rust layout and document them in the change.
 
 ## Shader work by milestone
 
 | Milestone | Change | Shader consequence |
 |---|---|---|
 | v0.0.3 | Chunk-local vertices and chunk origins | Implemented as a 16-byte origin uniform in group `1`. The vertex stage adds the chunk origin to the position. Normals are unchanged. |
-| v0.0.4 | 36-byte vertex with UV and layer, texture array | The vertex stage forwards UV and layer. The fragment stage samples `texture_2d_array<f32>` with nearest filtering and no mipmaps. The highlight is a separate line-list pipeline. |
+| v0.0.4 | 36-byte vertex with UV and layer, texture array | Implemented. The vertex stage forwards UV and layer; the fragment stage samples `texture_2d_array<f32>` with nearest filtering and no mipmaps. The highlight is a separate line-list pipeline. |
 | v0.0.5 | Greedy quads and LOD1 | UVs are in block units and the sampler repeats in U and V. LOD1 uses the same shader; the CPU scales positions and UVs, so the shader does not branch on LOD. |
 | v0.0.6 | 40-byte light/AO vertex, day/night, fog, water | The vertex stage unpacks sky light, block light, and AO into separate float varyings; the fragment stage applies the spec's lighting and fog formulas and uses a separate transparent water pipeline with animated normals. |
 | v0.0.7 | Eleven texture layers and Sand | The texture array grows; the layer index is data. The lighting and water shader logic do not change. |

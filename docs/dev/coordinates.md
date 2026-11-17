@@ -7,7 +7,7 @@ Conventions shared by the camera, voxel storage, meshing, and rendering. Section
 |---|---|
 | World axes, units, voxel occupancy, camera direction | Current (v0.0.2) |
 | Chunk coordinates and chunk-local mesh vertices | Current (v0.0.3) |
-| Block targeting and placement | Planned (v0.0.4) |
+| Block targeting and placement | Current (v0.0.4) |
 | Large-world precision budget | Deferred |
 
 ## Terms
@@ -93,12 +93,14 @@ Conventions shared by the camera, voxel storage, meshing, and rendering. Section
   (`glam::camera::rh::proj::directx`). The field of view is π/3, the near plane is `0.1 m`, and
   the far plane is `100 m`.
 
-## Interaction (planned, v0.0.4)
+## Interaction (v0.0.4)
 
 - Raycast from the eye along the camera forward, with a maximum range of `6 m`.
 - A hit identifies the solid voxel by world coordinate and the face normal that was entered.
-- Breaking removes the hit voxel. Placing writes to `hit + normal`.
-- Reject placement when the cell is occupied or intersects the player AABB.
+- Breaking removes the hit voxel. Placing writes to `hit + normal` when that cell is air and
+  does not intersect the player AABB.
+- The ray uses DDA traversal with X, then Y, then Z tie-breaking. A ray starting inside a solid
+  voxel returns no hit.
 
 ## Precision and limits
 

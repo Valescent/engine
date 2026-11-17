@@ -13,12 +13,12 @@ reference.
 | Local rustdoc | Builds with `cargo doc --no-deps` |
 | Missing-docs lint | Not enabled |
 | Public API diff or semver check | Not run |
-| Public items | `run`, `RunError`, `RendererError` |
+| Public items | `run`, `RunError`, `RendererError`, `SaveError`, `ChunkCoord` |
 
 ## Current surface
 
-The crate is `engine`. The complete public surface is defined by `src/lib.rs` and its one
-re-export:
+The crate is `engine`. The complete public surface is defined by `src/lib.rs` and its
+re-exports:
 
 ```rust
 pub fn run() -> Result<(), RunError>;
@@ -27,6 +27,7 @@ pub enum RunError {
     EventLoop(winit::error::EventLoopError),
     Window(winit::error::OsError),
     Renderer(RendererError),
+    Save(SaveError),
 }
 
 pub enum RendererError {
@@ -36,29 +37,49 @@ pub enum RendererError {
     UnsupportedSurface,
     Validation(String),
 }
+
+pub enum SaveError {
+    Io(std::io::Error),
+    InvalidFileName(String),
+    InvalidMagic,
+    UnsupportedVersion(u16),
+    InvalidChunkCoordinate(IVec3),
+    InvalidBlockCount(u32),
+    InvalidLocalCoordinate(IVec3),
+    InvalidBlockId(u8),
+    DuplicateRecord(IVec3),
+    DuplicateChunk(ChunkCoord),
+    ChunkMismatch { file: ChunkCoord, header: ChunkCoord },
+    Truncated,
+    TrailingBytes,
+}
+
+pub struct ChunkCoord(IVec3);
 ```
 
-- `run` initializes tracing, creates the event loop and application, and returns when the window
-  closes or startup fails. It is the only public function. Its rustdoc says it returns an error if
-  the event loop, window, or GPU initialization fails.
-- `RunError` and `RendererError` derive `Debug` and `thiserror::Error`. Their variants are public.
-- `RendererError` is defined in the private `renderer` module and re-exported at the crate root.
-  That re-export is the only `pub use`.
-- There are no public modules, structs, traits, constants, macros, or Cargo features.
+- `run` initializes tracing, loads or seeds the world, creates the event loop and application, and
+  returns when the window closes or startup fails. It is the only public function.
+- `RunError`, `RendererError`, and `SaveError` derive `Debug` and `thiserror::Error`. Their variants
+  are public. `RunError::Save` reports world load and save failures.
+- `ChunkCoord` is re-exported so `SaveError` variants can be matched. It has no public constructor
+  or accessor; the world-facing methods are `pub(crate)`.
+- `RendererError` is defined in the private `renderer` module, `SaveError` in the private `world`
+  module; their re-exports are public API.
+- There are no public modules, traits, constants, macros, or Cargo features.
   `--all-features` currently selects nothing.
-- Neither error enum is `#[non_exhaustive]`. Adding a variant is a breaking change under the
-  current definition.
-- The public errors expose `winit` and `wgpu` error types directly. Their stability is coupled to
-  those dependencies until a decision says otherwise.
+- None of the error enums or `ChunkCoord` is `#[non_exhaustive]`. Adding a variant is a breaking
+  change under the current definition.
+- The public errors expose `winit`, `wgpu`, and `std::io` error types directly. Their stability is
+  coupled to those dependencies until a decision says otherwise.
 
 This surface has no semver compatibility promise. Any `0.0.x` release may change it.
 
 ## What is not public
 
-- `App`, `Camera`, `Renderer`, `Vertex`, `World`, `ChunkCoord`, `build_chunk_mesh`, and renderer
-  helpers are private or `pub(crate)`.
-- The `camera`, `renderer`, `voxel`, and `world` modules are private. Paths such as
-  `engine::Camera` or `engine::Renderer` do not exist.
+- `App`, `Camera`, `Player`, `Aabb`, `Block`, `Renderer`, `Vertex`, `World`, `RaycastHit`,
+  `build_chunk_mesh`, and renderer helpers are private or `pub(crate)`.
+- The `block`, `camera`, `overlay`, `player`, `raycast`, `renderer`, `voxel`, and `world` modules
+  are private. Paths such as `engine::Camera` or `engine::Renderer` do not exist.
 - `src/main.rs` is the only in-repo consumer. It calls `engine::run()` and returns
   `engine::RunError`.
 - The shader, mesh layout, texture pipeline, world state, and configuration are not public API.
@@ -67,8 +88,8 @@ This surface has no semver compatibility promise. Any `0.0.x` release may change
 
 - Run `cargo doc --no-deps --open` to generate the current rustdoc. The output lands at
   `target/doc/engine/index.html`.
-- The rustdoc build succeeds today, but only `run` has an item doc comment. The error types and
-  their variants have no rustdoc descriptions.
+- The rustdoc build succeeds today, but only `run` and `SaveError` have item doc comments. The
+  error variants and `ChunkCoord` have no rustdoc descriptions.
 - There is no docs.rs page because the package is not published.
 - Local rustdoc describes the current tree. It is not a stability promise.
 

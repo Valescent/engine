@@ -13,14 +13,24 @@ var<uniform> camera: Camera;
 @group(1) @binding(0)
 var<uniform> chunk: Chunk;
 
+@group(2) @binding(0)
+var block_texture: texture_2d_array<f32>;
+
+@group(2) @binding(1)
+var block_sampler: sampler;
+
 struct VertexIn {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(3) layer: u32,
 };
 
 struct VertexOut {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) normal: vec3<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) @interpolate(flat) layer: u32,
 };
 
 @vertex
@@ -29,6 +39,8 @@ fn vs_main(input: VertexIn) -> VertexOut {
     let world_position = chunk.origin + input.position;
     output.clip_position = camera.view_projection * vec4<f32>(world_position, 1.0);
     output.normal = input.normal;
+    output.uv = input.uv;
+    output.layer = input.layer;
     return output;
 }
 
@@ -36,6 +48,11 @@ fn vs_main(input: VertexIn) -> VertexOut {
 fn fs_main(input: VertexOut) -> @location(0) vec4<f32> {
     let light_direction = normalize(vec3<f32>(0.35, 0.85, 0.45));
     let shade = 0.45 + 0.55 * max(dot(normalize(input.normal), light_direction), 0.0);
-    let colour = vec3<f32>(0.32, 0.62, 0.38);
-    return vec4<f32>(colour * shade, 1.0);
+    let albedo = textureSample(
+        block_texture,
+        block_sampler,
+        input.uv,
+        i32(input.layer),
+    );
+    return vec4<f32>(albedo.rgb * shade, 1.0);
 }

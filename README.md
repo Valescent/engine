@@ -2,7 +2,7 @@
 
 A voxel engine written in Rust.
 
-**Status: pre-alpha.** `0.0.1` through `0.0.3` are released: a voxel scene, a fly camera, and chunked, face-culled meshes. Nothing past chunked meshes is built yet.
+**Status: pre-alpha.** `0.0.1` through `0.0.3` are released. `0.0.4` (walking, block interaction, textures, and persistence) is implemented and awaiting release. Nothing past that is built yet.
 
 This is **source-available, not open source**. The code is under the [PolyForm Shield License 1.0.0](LICENSE): you may read, run, modify, and redistribute it, but not use it to provide a product that competes with it. PolyForm Shield is not OSI-approved.
 
@@ -22,14 +22,22 @@ cargo run
 
 ## Controls
 
-- `W` / `S` — move forward or back along the view direction
-- `A` / `D` — strafe left or right
-- Mouse — look around; click the window to capture the cursor
+- `W` / `S` — walk forward or back using the camera yaw
+- `A` / `D` — walk left or right
+- Mouse — look around while captured; click the window to capture the cursor
+- Left click — capture the cursor, then break the targeted block
+- Right click — place the selected block
+- `Space` — jump
+- `1`–`5` — select Stone, Dirt, Grass, Wood, or Leaves
+- `Ctrl+S` — save the world
+- `V` — toggle vsync
+- `F3` — toggle the FPS/frame-time overlay
 - `Escape` — release the cursor
-- `Space` — add or remove the raised voxel on the chunk boundary
+
+The world saves to `world/chunks/` on exit and on `Ctrl+S`.
 
 See [`docs/dev/controls.md`](docs/dev/controls.md) for the full binding table, including the
-planned walking controls.
+planned day/night controls.
 
 ## Development
 

@@ -1,29 +1,29 @@
 # Texture and asset pipeline
 
-The engine has no game texture assets yet. The current shader outputs a flat colour, and the
-vertex carries only position and normal. v0.0.4 introduces one `texture_2d_array` of procedurally
-generated 16x16 RGBA8 block tiles; there is still no image asset pipeline. This page covers the
-tile model, layer table, generation and upload path, sampler, and the rules for adding tiles.
-Sections marked planned are not implemented.
+The engine has no game texture assets yet. v0.0.4 introduced one `texture_2d_array` of
+procedurally generated 16x16 RGBA8 block tiles; there is still no image asset pipeline. This page
+covers the tile model, layer table, generation and upload path, sampler, and the rules for adding
+tiles.
 
 | Area | Status |
 |---|---|
 | Game texture files and game asset folder | None |
 | `docs/assets/` documentation assets | Current, not game textures |
-| Procedural block tiles | Planned (v0.0.4) |
-| Texture array, sampler, and UV/layer vertex | Planned (v0.0.4) |
-| Eight to ten to eleven layers | Planned (v0.0.4, v0.0.6, v0.0.7) |
+| Procedural block tiles | Current (v0.0.4) |
+| Texture array, sampler, and UV/layer vertex | Current (v0.0.4) |
+| Eight layers now; ten and eleven planned | Current (v0.0.4); v0.0.6 and v0.0.7 extend it |
 | External asset pipeline and texture packs | Deferred; needs a separate decision |
 | Mipmaps, anisotropy, and compression | Not used; deferred |
 | Automated GPU texture tests | Not implemented; CPU mapping tests and manual GPU checks |
 
 ## Current state
 
-- `src/shader.wgsl` uses a fixed fragment colour. It has no texture or sampler binding.
-- `src/voxel.rs` defines `Vertex { position, normal }`, 24 bytes. There is no UV or layer field.
-- `src/renderer.rs` has one bind group entry: group 0, binding 0, the camera uniform. There is no
-  texture view, sampler, or image upload.
-- `Cargo.toml` has no image decoder or texture asset crate.
+- `src/shader.wgsl` samples the `texture_2d_array` with the per-vertex UV and layer.
+- `src/voxel.rs` defines `Vertex { position, normal, uv, layer }`, 36 bytes.
+- `src/renderer.rs` has three bind groups: group 0 camera uniform, group 1 per-chunk origin, and
+  group 2 texture array plus sampler.
+- The eight tiles are generated procedurally in `src/renderer.rs`; there is no image decoder or
+  texture asset crate.
 - `docs/assets/` holds documentation-site files such as `custom.js` and `voxel-fallback.svg`. It is
   not a game texture directory.
 - `world/` holds runtime chunk saves and is ignored by Git. `book/` is mdBook build output.
@@ -107,7 +107,7 @@ Lamp `6`, Water `7`, and Sand `8`. Adding a block ID is a save-format change; fo
 | Shader sampling and WGSL conventions | [Shader authoring](shaders.md) |
 | Runtime chunk saves | [v0.0.4 spec](../specs/v0.0.4.md) and [ADR-0008](../decisions/0008-chunk-save-format.md) |
 
-Planned code layout:
+Current code layout:
 
 - `src/block.rs`: `Block`, `FaceLayers`, `Block::layers`, and the stable layer mapping.
 - `src/voxel.rs`: texture-aware meshing and the 36-byte vertex.

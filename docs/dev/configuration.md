@@ -74,7 +74,7 @@ No separate milestone is assigned to the config file itself.
 | Path | Status |
 |---|---|
 | `config.toml` | Planned; working directory. |
-| `world/` | Planned (v0.0.4); working directory. |
+| `world/` | Current (v0.0.4); working directory. |
 | `world/seed` | Planned (v0.0.7); decimal world seed. |
 | `logs/` | Planned; working directory; per-run log files. |
 

@@ -7,7 +7,7 @@ Milestones move from **planned** to **in progress** to **shipped**. Each one nam
 | 0.0.1   | The Foundation        | Shipped  |
 | 0.0.2   | Camera                | Shipped  |
 | 0.0.3   | Chunks and Meshes     | Shipped  |
-| 0.0.4   | Playable              | Planned  |
+| 0.0.4   | Playable              | In progress |
 | 0.0.5   | Scale and Performance | Planned  |
 | 0.0.6   | Atmosphere            | Planned  |
 | 0.0.7   | Advanced Horizons     | Planned  |
@@ -119,7 +119,7 @@ See [v0.0.3 scope](dev/v0.0.3-scope.md) for the concrete deliverables, technical
 
 ## v0.0.4: Playable
 
-**Status:** Planned
+**Status:** In progress — implementation complete, release pending.
 
 **Goal:** Walk around, break and place blocks, persist the world.
 
@@ -130,21 +130,21 @@ See [v0.0.4 scope](dev/v0.0.4-scope.md) for the concrete deliverables, technical
 ### Milestones
 
 #### 1. Walking and collision
-- [ ] Add gravity and ground checks to the v0.0.2 camera controller
-- [ ] Swept AABB collision against voxel terrain
+- [x] Add gravity and ground checks to the v0.0.2 camera controller
+- [x] Swept AABB collision against voxel terrain
 
 #### 2. Block interaction
-- [ ] Raycast (DDA voxel traversal) to find targeted block
-- [ ] Highlight targeted block
-- [ ] Place and destroy blocks
+- [x] Raycast (DDA voxel traversal) to find targeted block
+- [x] Highlight targeted block
+- [x] Place and destroy blocks
 
 #### 3. Persistence
-- [ ] Serialize chunks to disk
-- [ ] Load chunks from disk
+- [x] Serialize chunks to disk
+- [x] Load chunks from disk
 
 #### 4. Texture atlas
-- [ ] Single texture-array atlas for all block textures
-- [ ] Batch different block types in one chunk mesh
+- [x] Single texture-array atlas for all block textures
+- [x] Batch different block types in one chunk mesh
 
 ### Definition of Done
 - Walk, break, and place blocks

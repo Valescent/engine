@@ -10,7 +10,7 @@ something else; it does not ban the word everywhere.
 | Term | Meaning | Status | Avoid |
 |---|---|---|---|
 | [voxel](coordinates.md#voxel-coordinates) | Smallest addressable world cell, identified by an integer `IVec3` and occupying a unit cube. | Current | block, when you mean the cell |
-| [block](v0.0.4-scope.md) | The type or contents stored in a voxel, such as Air, Stone, Dirt, Grass, Wood, or Leaves. | Planned (v0.0.4) | voxel, when you mean the type |
+| [block](v0.0.4-scope.md) | The type or contents stored in a voxel, such as Air, Stone, Dirt, Grass, Wood, or Leaves. | Current (v0.0.4) | voxel, when you mean the type |
 | [world](architecture.md#coordinates-and-data) | All stored voxels and their state; chunks are the storage unit since v0.0.3. | Current | map, level |
 | [chunk](v0.0.3-scope.md) | Fixed 32×32×32 region of voxels. | Current (v0.0.3) | section |
 | [ChunkCoord](../specs/v0.0.3.md) | Newtype around `IVec3` used as an ordered chunk key; `IVec3` itself is not `Ord`. | Current (v0.0.3) | — |
@@ -49,22 +49,23 @@ something else; it does not ban the word everywhere.
 | [draw call](v0.0.3-scope.md) | One draw submission to the GPU. v0.0.3 issues one per non-empty chunk. | Current | pass |
 | [frame time](debugging.md#logging) | Time to produce one frame, logged as `frame_ms`. | Current | FPS |
 | [FPS](debugging.md#logging) | Frames per second; the reciprocal of frame time. | Current | frame time |
+| [debug overlay](debugging.md#profiling) | On-screen FPS and frame time, toggled with `F3` and refreshed once per second. | Current | HUD |
 
 ## Gameplay and interaction
 
 | Term | Meaning | Status | Avoid |
 |---|---|---|---|
-| [player](v0.0.4-scope.md) | Walking controller with an AABB, gravity, jumping, and an eye position. | Planned (v0.0.4) | camera, when you mean the player |
-| [AABB](v0.0.4-scope.md) | Axis-aligned bounding box. The player is `0.6 m` wide and `1.8 m` tall. | Planned (v0.0.4) | hitbox |
-| [swept AABB](v0.0.4-scope.md) | Collision test that moves an AABB along one axis and stops at the first solid block. | Planned (v0.0.4) | raycast |
-| [collision](v0.0.4-scope.md) | Resolving player movement against solid voxel AABBs. | Planned (v0.0.4) | physics |
-| [raycast](v0.0.4-scope.md) | Casting a ray from the eye to find the first solid voxel and entered face. | Planned (v0.0.4) | raymarch |
-| [DDA](v0.0.4-scope.md) | Digital differential analyzer; grid traversal used for voxel raycasts. | Planned (v0.0.4) | raymarching |
-| [targeted block](v0.0.4-scope.md) | Solid voxel hit by the view ray and outlined before interaction. | Planned (v0.0.4) | selected block, when you mean the hotbar |
-| [highlight](v0.0.4-scope.md) | Wireframe cube drawn around the targeted block. | Planned (v0.0.4) | selection box |
-| [hotbar](v0.0.4-scope.md) | Selected block slot; number keys `1`–`5` choose it. There is no inventory UI. | Planned (v0.0.4) | inventory |
-| [texture array](../decisions/0007-texture-array-for-block-textures.md) | GPU `texture_2d_array` with one layer per block tile, used instead of a flat atlas. | Planned (v0.0.4) | atlas |
-| [tile](textures.md) | One 16x16 RGBA8 block texture stored in a texture-array layer. | Planned (v0.0.4) | atlas tile |
+| [player](v0.0.4-scope.md) | Walking controller with an AABB, gravity, jumping, and an eye position. | Current (v0.0.4) | camera, when you mean the player |
+| [AABB](v0.0.4-scope.md) | Axis-aligned bounding box. The player is `0.6 m` wide and `1.8 m` tall. | Current (v0.0.4) | hitbox |
+| [swept AABB](v0.0.4-scope.md) | Collision test that moves an AABB along one axis and stops at the first solid block. | Current (v0.0.4) | raycast |
+| [collision](v0.0.4-scope.md) | Resolving player movement against solid voxel AABBs. | Current (v0.0.4) | physics |
+| [raycast](v0.0.4-scope.md) | Casting a ray from the eye to find the first solid voxel and entered face. | Current (v0.0.4) | raymarch |
+| [DDA](v0.0.4-scope.md) | Digital differential analyzer; grid traversal used for voxel raycasts. | Current (v0.0.4) | raymarching |
+| [targeted block](v0.0.4-scope.md) | Solid voxel hit by the view ray and outlined before interaction. | Current (v0.0.4) | selected block, when you mean the hotbar |
+| [highlight](v0.0.4-scope.md) | Wireframe cube drawn around the targeted block. | Current (v0.0.4) | selection box |
+| [hotbar](v0.0.4-scope.md) | Selected block slot; number keys `1`-`5` choose it. There is no inventory UI. | Current (v0.0.4) | inventory |
+| [texture array](../decisions/0007-texture-array-for-block-textures.md) | GPU `texture_2d_array` with one layer per block tile, used instead of a flat atlas. | Current (v0.0.4) | atlas |
+| [tile](textures.md) | One 16x16 RGBA8 block texture stored in a texture-array layer. | Current (v0.0.4) | atlas tile |
 | [texture pack](textures.md) | External set of block tiles; deferred, and must preserve layer indices when introduced. | Deferred | asset pack |
 | [Sand](../specs/v0.0.7.md) | Solid desert surface block with ID 8 and texture layer 10. | Planned (v0.0.7) | dirt, when you mean sand |
 
@@ -72,11 +73,11 @@ something else; it does not ban the word everywhere.
 
 | Term | Meaning | Status | Avoid |
 |---|---|---|---|
-| [persistence](v0.0.4-scope.md) | Saving and loading chunks so edits survive a restart. | Planned (v0.0.4) | storage, when it is ambiguous |
+| [persistence](v0.0.4-scope.md) | Saving and loading chunks so edits survive a restart. | Current (v0.0.4) | storage, when it is ambiguous |
 | [modified chunk](../specs/v0.0.7.md) | Chunk changed by the player and therefore saved; unmodified chunks regenerate from the seed. | Planned (v0.0.7) | dirty chunk, when you mean light/mesh dirty |
 | [render distance](../decisions/0013-player-centred-chunk-streaming.md) | Horizontal streaming radius in chunks; configured as `world.render_distance_chunks`. | Planned (v0.0.7) | view distance, when you mean fog |
-| [`VCHK`](../decisions/0008-chunk-save-format.md) | Chunk save-file magic; v0.0.7 adds v3 and loads v1–v3. | Planned (v0.0.7) | save file, when you mean the format |
-| [format version](versioning.md#out-of-scope) | Version field inside a save format such as `VCHK`, separate from the package version. | Planned (v0.0.4) | package version |
+| [`VCHK`](../decisions/0008-chunk-save-format.md) | Chunk save-file magic; v1 ships in v0.0.4, and v0.0.7 adds v3 and loads v1-v3. | Current (v0.0.4) | save file, when you mean the format |
+| [format version](versioning.md#out-of-scope) | Version field inside a save format such as `VCHK`, separate from the package version. | Current (v0.0.4) | package version |
 
 ## Lighting and generation
 
@@ -101,7 +102,7 @@ something else; it does not ban the word everywhere.
 
 | Term | Meaning | Status | Avoid |
 |---|---|---|---|
-| [fly camera](controls.md) | Current free-flight camera controlled by WASD and mouse look. | Current | player |
+| [fly camera](controls.md) | Historical free-flight camera controlled by WASD and mouse look. | Historical (v0.0.2-v0.0.3) | player |
 | [yaw](coordinates.md#camera-and-direction) | Horizontal camera angle; `0` faces `-Z`, and positive yaw turns toward `+X`. | Current | heading |
 | [pitch](coordinates.md#camera-and-direction) | Vertical camera angle; positive looks up and is clamped to ±89°. | Current | elevation |
 | [FOV](coordinates.md#camera-and-direction) | Field of view; π/3 vertically. | Current | zoom |

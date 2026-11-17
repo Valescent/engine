@@ -6,15 +6,17 @@ Keyboard and mouse bindings for the current engine and the scoped milestones. Se
 
 | Area | Status |
 |---|---|
-| Fly-camera bindings | Current (v0.0.2) |
-| Chunk boundary demo toggle | Current (v0.0.3) |
-| Walking, interaction, hotbar, save | Planned (v0.0.4) |
+| Fly-camera bindings | Historical (v0.0.2) |
+| Chunk boundary demo toggle | Historical (v0.0.3) |
+| Walking, interaction, hotbar, save | Current (v0.0.4) |
+| Vsync toggle | Current (v0.0.4) |
+| FPS/frame-time overlay | Current (v0.0.4) |
 | Day/night debug key | Planned (v0.0.6) |
 | Remappable bindings | Planned, no milestone |
 
 ## Bindings by milestone
 
-| Input | v0.0.2 | v0.0.3 (current) | v0.0.4 (planned) |
+| Input | v0.0.2 | v0.0.3 | v0.0.4 (current) |
 |---|---|---|---|
 | `W` / `S` | Fly forward / back | Fly forward / back | Walk forward / back |
 | `A` / `D` | Strafe left / right | Strafe left / right | Walk left / right |
@@ -24,17 +26,16 @@ Keyboard and mouse bindings for the current engine and the scoped milestones. Se
 | `Space` | Toggle the demo voxel | Toggle the boundary demo voxel | Jump |
 | `1`–`5` | — | — | Select stone, dirt, grass, wood, leaves |
 | `Ctrl+S` | — | — | Save all non-empty chunks |
+| `V` | — | — | Toggle vsync |
+| `F3` | — | — | Toggle the FPS/frame-time overlay |
 | `Escape` | Release the cursor | Release the cursor | Release the cursor |
 
 Mouse look requires capture and window focus in every milestone.
 
-In v0.0.2 and v0.0.3, `W` / `S` follow the full view direction, including pitch, and `A` / `D`
-strafe horizontally. v0.0.4 replaces flight with walking.
+v0.0.4 replaces flight with walking. `W` / `S` use the camera yaw only, so looking up or down does
+not change the walk direction. The v0.0.3 demo toggle is not carried forward on `Space`.
 
-v0.0.4 also saves on exit. The v0.0.3 demo toggle is not carried forward on `Space`, and the
-scope assigns no replacement key.
-
-## Current capture and focus (v0.0.2–v0.0.3)
+## Current capture and focus (v0.0.4)
 
 - Gameplay input is handled only while the window is focused.
 - Mouse look requires both capture and focus. It reads raw mouse motion; sensitivity is
@@ -46,39 +47,42 @@ scope assigns no replacement key.
   simulation, or clear held movement keys.
 - Losing focus releases capture and clears held movement keys. Regaining focus does not
   recapture automatically.
-- WASD moves the camera while the window is focused, with or without capture.
-- Key repeat is ignored. Holding `Space` toggles the demo voxel once.
-- Movement uses a frame delta clamped to `100 ms`, so a stalled frame cannot teleport the
-  camera.
+- WASD walks the player while the window is focused, with or without capture.
+- Key repeat is ignored. Holding `Space` does not repeat the jump.
+- `V` switches between FIFO presentation (vsync) and immediate or mailbox presentation when the
+  surface supports it, falling back to FIFO otherwise. The engine starts with vsync on.
+- `F3` toggles the debug overlay. It shows FPS and frame time from the previous one-second sample.
+- Movement uses a frame delta clamped to `100 ms`. Collision is swept along each axis, so a
+  stalled frame cannot tunnel through terrain.
 
-## Interaction (planned, v0.0.4)
+## Interaction (current, v0.0.4)
 
 - Block interaction requires the cursor to be captured.
 - The first left click after the cursor is released captures only; it does not break or place.
 - Once captured, left click breaks the targeted block and right click places the selected block
   in the adjacent cell.
 - Capture is acquired by left click only. Right click is not a capture button.
-- Break and place are click actions; the scope does not specify hold-to-repeat.
+- Break and place are click actions; hold-to-repeat is not implemented.
+- Placement is rejected when the cell is occupied or the new block would intersect the player.
 - There is no pause menu. `Escape` still only releases the cursor.
 
 ## Tuning
 
 | Parameter | Value | Status |
 |---|---|---|
-| Fly speed | `8 m/s` | Current (v0.0.2) |
-| Mouse sensitivity | `0.0025 rad/px` | Current (v0.0.2) |
-| Walk speed | `4.5 m/s` | Planned (v0.0.4) |
-| Jump velocity | `8 m/s` | Planned (v0.0.4) |
-| Gravity | `24 m/s²` | Planned (v0.0.4) |
-| Interaction range | `6 m` | Planned (v0.0.4) |
-| Eye height | `1.62 m` | Planned (v0.0.4) |
-| Player AABB | `0.6 m` wide, `1.8 m` tall | Planned (v0.0.4) |
+| Mouse sensitivity | `0.0025 rad/px` | Current |
+| Walk speed | `4.5 m/s` | Current (v0.0.4) |
+| Jump velocity | `8 m/s` | Current (v0.0.4) |
+| Gravity | `24 m/s²` | Current (v0.0.4) |
+| Interaction range | `6 m` | Current (v0.0.4) |
+| Eye height | `1.62 m` | Current (v0.0.4) |
+| Player AABB | `0.6 m` wide, `1.8 m` tall | Current (v0.0.4) |
 
 ## Not bound
 
 | Action | Status |
 |---|---|
-| Sprint | No binding. Fly and walk speeds are fixed. |
+| Sprint | No binding. Walk speed is fixed. |
 | Crouch | No binding. |
 | Mouse-wheel hotbar | No binding. v0.0.4 selects with `1`–`5`. |
 | Pause / menu | No binding. `Escape` only releases the cursor. |

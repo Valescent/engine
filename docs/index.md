@@ -5,7 +5,7 @@
 
 Valescent Engine is a voxel engine written in Rust. Three milestones are shipped — a voxel scene, a fly camera, and chunked meshes — and every step after that is written down before it is built.
 
-This is **pre-alpha**. The current world is split into fixed 32×32×32 chunks, each with its own face-culled mesh, and a camera you can fly. Interaction and light are planned in public.
+This is **pre-alpha**. The current world is a walkable, editable set of 32×32×32 chunks with procedural block textures, swept collision, and `VCHK` saves. Lighting and larger draw distances are planned in public.
 
 <div class="hero-actions">
 
@@ -31,7 +31,7 @@ This is **pre-alpha**. The current world is split into fixed 32×32×32 chunks, 
 <span class="plate-label bl">Yaw <span data-yaw>028°</span></span>
 <span class="plate-label br">Drag / arrow keys</span>
 </div>
-<figcaption>Drawn from the current data model: voxels stored per chunk, meshed as face-culled non-indexed cubes, right-handed and Y-up. The highlighted cube stands in for the boundary voxel that <code>Space</code> toggles. Illustration, not a screenshot.</figcaption>
+<figcaption>Drawn from the current data model: block voxels stored per chunk, meshed as face-culled textured non-indexed cubes, right-handed and Y-up. The highlighted cube stands in for the block outline. Illustration, not a screenshot.</figcaption>
 </figure>
 </div>
 
@@ -73,20 +73,20 @@ This is **pre-alpha**. The current world is split into fixed 32×32×32 chunks, 
 
 ## Next on the bench
 
-<span class="version">v0.0.4</span>
+<span class="version">v0.0.5</span>
 
-### Playable
+### Scale and Performance
 
-The chunked world is in place. The next milestone adds walking and collision, block breaking and placing, a texture array, and chunk persistence, so the world survives a restart.
+The playable world is in place. The next milestone adds greedy meshing, two LOD levels, frustum culling, and async chunk rebuilds, so draw distance grows without losing frame rate.
 
-[Read the v0.0.4 scope](dev/v0.0.4-scope.md) · [Read the v0.0.4 spec](specs/v0.0.4.md)
+[Read the v0.0.5 scope](dev/v0.0.5-scope.md) · [Read the v0.0.5 spec](specs/v0.0.5.md)
 
 </div>
 <div>
 
-> **Definition of done.** A world you can walk through, edit, and reload.
+> **Definition of done.** A vast draw distance with a smooth frame rate, and block edits without hitches.
 
-The work after that is already scoped: greedy meshing, LOD, frustum culling, and async meshing in [v0.0.5 — Scale and Performance](dev/v0.0.5-scope.md).
+The work after that is already scoped: voxel lighting, day/night, fog, and water in [v0.0.6 — Atmosphere](dev/v0.0.6-scope.md).
 
 </div>
 </section>

@@ -40,10 +40,16 @@ CI also runs dependency licence and advisory checks, commit message checks, and 
 
 The headless suite covers:
 
-- Camera initial orientation, yaw, pitch clamping, angle wrapping, and frame-rate-independent movement.
+- Camera look direction, yaw/pitch clamping, and angle wrapping.
 - Mouse-look gating on capture and focus.
-- Chunk coordinate conversion including negative worlds, storage idempotence, and dirty-chunk sets for interior, border, corner, and last-voxel edits.
-- Missing and empty chunk meshes, cross-chunk face culling, exact face order, and deterministic chunk meshing.
+- Block IDs, solidity, face-layer mapping, and hotbar selection.
+- Chunk coordinate conversion including negative worlds, block storage idempotence, and dirty-chunk sets for interior, border, corner, and last-block edits.
+- Missing and empty chunk meshes, cross-chunk face culling, exact face order, UV order, texture layers, and deterministic chunk meshing.
+- Player AABB, gravity, jumping, ground detection, axis order, collision response, and tunnelling limits.
+- DDA ray hits, misses, range limits, tie-break order, and face normals.
+- Placement rejection for occupied cells and player intersection.
+- Procedural texture data size and determinism.
+- `VCHK` round-trip, negative chunks, local `0`/`31`, stale-file removal, missing versus empty directories, and every malformed-file error path.
 
 ## Manual GPU acceptance
 
@@ -67,11 +73,18 @@ RUST_LOG=engine=debug cargo run
 
 Check:
 
-- The window opens and shows the expected scene.
-- The camera responds to WASD and mouse look after clicking to capture.
-- `Escape` releases the cursor without closing the window.
-- `Space` changes the scene.
-- Startup logs four chunks and 312 vertices; `Space` logs three dirty chunks and 288 vertices, then 312 again.
+- The window opens and shows the demo world with grass, dirt, stone, wood, and leaves.
+- WASD walks using yaw; `Space` jumps; the player lands on solid blocks and cannot walk through walls.
+- Mouse look works after clicking to capture; `Escape` releases the cursor without closing.
+- The wireframe outline follows the targeted block and disappears when nothing is in range.
+- Left click breaks the targeted block; right click places the selected block.
+- Number keys `1`–`5` change the placed block type.
+- Placement inside the player or an occupied cell is rejected.
+- Block faces show the expected texture layers.
+- `Ctrl+S` and closing the window save `world/chunks/`; reopening restores the edits.
+- `V` toggles vsync without stopping rendering and logs the resulting state.
+- `F3` toggles the FPS/frame-time overlay; values update once per second.
+- A malformed `.vchk` file produces a typed startup error rather than a panic.
 - Resizing and minimizing/restoring keep the projection correct.
 - Frame-time logs show a stable rate while moving.
 - The output contains no `wgpu` validation errors or panics.

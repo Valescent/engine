@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Walking player with gravity, jumping, and swept AABB collision against voxel terrain.
+- Block types: stone, dirt, grass, wood, and leaves, stored per chunk in a block map.
+- Eight-layer procedural texture array with per-face block mapping and nearest sampling.
+- DDA voxel raycasting, a wireframe block outline, and break/place interaction.
+- Debug FPS/frame-time overlay on `F3`; it refreshes once per second.
+- `VCHK` v1 chunk persistence under `world/chunks/`, load on startup, save on exit and `Ctrl+S`.
+- A demo world with grass over dirt, stone, wood, and leaves, plus a safe spawn column.
+
+### Changed
+
+- WASD now walks on the ground instead of flying; `Space` jumps instead of toggling a demo voxel.
+- Number keys `1`–`5` select the block to place; the cursor still captures on left click.
+- Chunk meshes use the 36-byte textured vertex layout.
+- `V` toggles vsync by reconfiguring the surface between FIFO and immediate or mailbox presentation.
+
+### Removed
+
+- The v0.0.2 fly-camera movement and the v0.0.3 boundary-voxel toggle.
+
 ## [0.0.3] - 2026-11-17
 
 ### Added

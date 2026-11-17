@@ -1,9 +1,9 @@
-//! First-person camera state and movement.
+//! First-person camera state and look direction.
+
+use std::f32::consts::{PI, TAU};
 
 use glam::camera::rh::{proj::directx, view::look_to_mat4};
 use glam::{Mat4, Vec3};
-
-use std::f32::consts::{PI, TAU};
 
 const MAX_PITCH_RADIANS: f32 = 89.0 * PI / 180.0;
 
@@ -16,25 +16,19 @@ pub(crate) struct Camera {
     fov_y_radians: f32,
     z_near: f32,
     z_far: f32,
-    speed: f32,
     sensitivity: f32,
 }
 
 impl Camera {
     pub(crate) fn new(aspect: f32) -> Self {
-        let position = Vec3::new(37.0, 4.5, 38.0);
-        let target = Vec3::new(32.0, 0.5, 32.0);
-        let direction = (target - position).normalize();
-
         Self {
-            position,
-            yaw: direction.x.atan2(-direction.z),
-            pitch: direction.y.asin(),
+            position: Vec3::ZERO,
+            yaw: 0.0,
+            pitch: 0.0,
             aspect,
             fov_y_radians: std::f32::consts::FRAC_PI_3,
             z_near: 0.1,
             z_far: 100.0,
-            speed: 8.0,
             sensitivity: 0.0025,
         }
     }
@@ -43,16 +37,18 @@ impl Camera {
         self.aspect = aspect_ratio(width, height);
     }
 
+    pub(crate) fn set_position(&mut self, position: Vec3) {
+        self.position = position;
+    }
+
+    pub(crate) fn yaw(&self) -> f32 {
+        self.yaw
+    }
+
     pub(crate) fn look(&mut self, delta_x: f32, delta_y: f32) {
         self.yaw = wrap_angle(self.yaw + delta_x * self.sensitivity);
         self.pitch =
             (self.pitch - delta_y * self.sensitivity).clamp(-MAX_PITCH_RADIANS, MAX_PITCH_RADIANS);
-    }
-
-    pub(crate) fn move_by(&mut self, forward_axis: f32, right_axis: f32, delta_seconds: f32) {
-        let direction =
-            (self.forward() * forward_axis + self.right() * right_axis).normalize_or_zero();
-        self.position += direction * self.speed * delta_seconds;
     }
 
     pub(crate) fn view_projection(&self) -> Mat4 {
@@ -60,15 +56,10 @@ impl Camera {
             * look_to_mat4(self.position, self.forward(), Vec3::Y)
     }
 
-    fn forward(&self) -> Vec3 {
+    pub(crate) fn forward(&self) -> Vec3 {
         let (yaw_sin, yaw_cos) = self.yaw.sin_cos();
         let (pitch_sin, pitch_cos) = self.pitch.sin_cos();
         Vec3::new(yaw_sin * pitch_cos, pitch_sin, -yaw_cos * pitch_cos)
-    }
-
-    fn right(&self) -> Vec3 {
-        let (yaw_sin, yaw_cos) = self.yaw.sin_cos();
-        Vec3::new(yaw_cos, 0.0, yaw_sin)
     }
 }
 
@@ -90,14 +81,6 @@ mod tests {
         camera.yaw = 0.0;
         camera.pitch = 0.0;
         camera
-    }
-
-    #[test]
-    fn initial_camera_looks_at_the_scene() {
-        let camera = Camera::new(1.0);
-        let target_direction = (Vec3::new(32.0, 0.5, 32.0) - camera.position).normalize();
-
-        assert!(camera.forward().dot(target_direction) > 0.999);
     }
 
     #[test]
@@ -136,15 +119,12 @@ mod tests {
     }
 
     #[test]
-    fn movement_is_frame_rate_independent() {
-        let mut one_step = level_camera();
-        let mut two_steps = level_camera();
+    fn position_changes_the_view_projection() {
+        let mut camera = level_camera();
+        let origin = camera.view_projection();
 
-        one_step.move_by(1.0, 0.0, 1.0);
-        two_steps.move_by(1.0, 0.0, 0.5);
-        two_steps.move_by(1.0, 0.0, 0.5);
+        camera.set_position(Vec3::new(4.0, 5.0, 6.0));
 
-        assert!((one_step.position - two_steps.position).length() < 1e-5);
-        assert!((one_step.position - Vec3::new(37.0, 4.5, 30.0)).length() < 1e-5);
+        assert_ne!(camera.view_projection(), origin);
     }
 }

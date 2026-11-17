@@ -1,14 +1,13 @@
 # World management
 
-The engine has no world persistence yet. v0.0.2 keeps its demo voxels in memory, closing the
-window loses them, and no `world/` directory is read or written. This page is the intended
-operating procedure for the v0.0.4 save path and the v0.0.7 seed and modified-only changes. The
-file layout and commands below do not apply until persistence lands.
+The engine saves chunk data under `world/chunks/` on clean exit and on `Ctrl+S`. This page is the
+operating procedure for the current `VCHK` v1 save path and the planned v0.0.7 seed and
+modified-only changes.
 
 | Area | Status |
 |---|---|
-| `world/` save directory | Planned (v0.0.4) |
-| `VCHK` v1 chunks | Planned (v0.0.4) |
+| `world/` save directory | Current (v0.0.4) |
+| `VCHK` v1 chunks | Current (v0.0.4) |
 | `VCHK` v2 chunks | Planned (v0.0.6) |
 | `VCHK` v3, `world/seed`, modified-only saves | Planned (v0.0.7) |
 | Built-in backups | None; copy the world directory manually |
@@ -19,7 +18,7 @@ file layout and commands below do not apply until persistence lands.
 
 ## World directory
 
-The planned layout is:
+The layout is:
 
 ```text
 world/

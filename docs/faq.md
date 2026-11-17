@@ -1,7 +1,7 @@
 # FAQ and troubleshooting
 
 Short answers for the current pre-alpha engine and a symptom-first index into the detailed pages.
-Only v0.0.1 and v0.0.2 are built; v0.0.3 and later are planned. A planned feature is not a bug.
+Only v0.0.1 through v0.0.3 are released; v0.0.4 is implemented and awaiting release, and later milestones are planned. A planned feature is not a bug.
 
 | I need to... | Start here |
 |---|---|
@@ -14,22 +14,22 @@ Only v0.0.1 and v0.0.2 are built; v0.0.3 and later are planned. A planned featur
 
 ## Project and status
 
-The current build is **v0.0.2, pre-alpha**. It has a window, a depth-buffered `wgpu` renderer, one
-voxel scene stored in a `HashSet<IVec3>`, one mesh, a fly camera, cursor capture, and a frame-time
-log. It does not have chunks, textures, collision, block interaction, persistence, lighting, fog,
-water, or Tracy.
+The current release is **v0.0.3, pre-alpha**; v0.0.4 is implemented and awaiting release. The build has a
+window, a depth-buffered `wgpu` renderer, chunked face-culled meshes, walking and collision,
+block breaking and placing, procedural block textures, and `VCHK` chunk saves. It does not have
+lighting, fog, water, terrain generation, or Tracy.
 
 | Question | Answer |
 |---|---|
 | What is Valescent Engine? | A voxel engine written in Rust on `wgpu` and `winit`. It is source-available, not open source. See [the landing page](index.md) and [Architecture](dev/architecture.md). |
-| What is the current version? | `0.0.2`. v0.0.1 and v0.0.2 are shipped; v0.0.3-v0.0.7 are planned. See [Roadmap](roadmap.md) and [Changelog](https://github.com/Valescent/engine/blob/main/CHANGELOG.md). |
+| What is the current version? | `0.0.3` is released. `0.0.4` is implemented and awaiting release; v0.0.5-v0.0.7 are planned. See [Roadmap](roadmap.md) and [Changelog](https://github.com/Valescent/engine/blob/main/CHANGELOG.md). |
 | Is it stable? | No. It is pre-alpha and there is no public API stability before 1.0. See [Versioning](dev/versioning.md). |
 | Why is the version `0.0.x`? | Each roadmap milestone ships as the next `0.0.x` patch. There is no `0.1.0` or `1.0.0` target yet. See [Versioning](dev/versioning.md#semantic-versioning). |
-| What is next? | v0.0.3, chunks and meshes. See [the roadmap](roadmap.md) and [v0.0.3 scope](dev/v0.0.3-scope.md). |
-| Why is the world one mesh? | Chunking and face culling arrive in v0.0.3. The current renderer uses one vertex buffer. See [Architecture](dev/architecture.md#current-limitations). |
-| Why can't I walk, fall, jump, or collide? | The current camera flies. Walking, gravity, jumping, and collision are planned for v0.0.4. See [Controls](dev/controls.md#bindings-by-milestone). |
-| Why can't I break or place blocks? | Block targeting and interaction are planned for v0.0.4. The current `Space` key toggles one demo voxel. See [Controls](dev/controls.md#bindings-by-milestone). |
-| Why are there no textures, light, fog, or water? | Textures and persistence are planned for v0.0.4; light, AO, fog, and water for v0.0.6. See the [Roadmap](roadmap.md). |
+| What is next? | Release v0.0.4, then v0.0.5 for greedy meshing, LOD, frustum culling, and async meshing. See [the roadmap](roadmap.md). |
+| Why is the world one mesh? | It is not. Since v0.0.3 each non-empty chunk owns its mesh and GPU buffer. See [Architecture](dev/architecture.md#rendering-resources). |
+| Can I walk, fall, jump, or collide? | Yes. WASD walks, `Space` jumps, and swept AABB collision stops the player at solid blocks. See [Controls](dev/controls.md#bindings-by-milestone). |
+| Can I break or place blocks? | Yes, after the cursor is captured. Left click breaks and right click places the selected block. See [Interaction](dev/controls.md#interaction-current-v004). |
+| Why are there no light, fog, or water? | Lighting, AO, fog, and water are planned for v0.0.6. Procedural block textures ship in v0.0.4. See the [Roadmap](roadmap.md). |
 | Is there multiplayer, a server, modding, or scripting? | No. They are out of scope through v0.0.7. See the non-goals in the [Roadmap](roadmap.md). |
 | What platforms are supported? | Windows, Linux, and macOS through `winit`/`wgpu`, with Vulkan, Direct3D 12, or Metal. CI tests all three. See [Setup](dev/setup.md#platform-prerequisites) and [CI](dev/ci.md#ci-workflow). |
 | Are there release binaries? | No. The release workflow publishes changelog notes, not binaries. See [CI](dev/ci.md#release-workflow) and [Release checklist](dev/release-checklist.md). |
@@ -61,16 +61,16 @@ water, or Tracy.
 
 | Question or symptom | Answer |
 |---|---|
-| Mouse look does nothing | Click the window to capture the cursor. Mouse look also requires window focus. See [Current capture and focus](dev/controls.md#current-capture-and-focus-v002). |
-| The cursor is stuck or hidden | Press `Escape` to release it. A failed grab logs a warning. See [Current capture and focus](dev/controls.md#current-capture-and-focus-v002). |
-| WASD does nothing | The window must be focused. Movement is fly-camera movement, not walking. See [Controls](dev/controls.md#bindings-by-milestone). |
-| Why does `Space` change one voxel? | That is the v0.0.2 demo toggle. v0.0.4 changes `Space` to jump. See [Controls](dev/controls.md#bindings-by-milestone). |
-| Can I jump or fall? | Not yet. Gravity, jumping, and collision are planned for v0.0.4. |
-| Can I break or place blocks? | Not yet. Interaction is planned for v0.0.4. In v0.0.4, the first left click captures; later clicks act. See [Interaction](dev/controls.md#interaction-planned-v004). |
+| Mouse look does nothing | Click the window to capture the cursor. Mouse look also requires window focus. See [Current capture and focus](dev/controls.md#current-capture-and-focus-v004). |
+| The cursor is stuck or hidden | Press `Escape` to release it. A failed grab logs a warning. See [Current capture and focus](dev/controls.md#current-capture-and-focus-v004). |
+| WASD does nothing | The window must be focused. WASD walks the player; capture is not required for movement. See [Controls](dev/controls.md#bindings-by-milestone). |
+| Why does `Space` jump instead of toggling a voxel? | v0.0.4 replaced the demo toggle; `Space` is jump. See [Controls](dev/controls.md#bindings-by-milestone). |
+| Can I jump or fall? | Yes. Gravity, jumping, and swept collision are implemented. |
+| Can I break or place blocks? | Yes. The first left click captures; later left clicks break and right clicks place. See [Interaction](dev/controls.md#interaction-current-v004). |
 | Can I remap keys? | Not yet. Bindings are hardcoded physical key codes. An action map is planned with no milestone. See [Keybindings](dev/controls.md#keybindings). |
-| How fast is the camera, and how sensitive is the mouse? | Fly speed is `8 m/s`; mouse sensitivity is `0.0025 rad/px`. See [Tuning](dev/controls.md#tuning). |
-| Is there a crosshair, HUD, hotbar, or pause menu? | No. `Escape` only releases the cursor. See [Controls](dev/controls.md) and [Not implemented](dev/debugging.md#not-implemented). |
-| Why did input stop when I alt-tabbed? | Losing focus releases capture and clears held keys by design. See [Current capture and focus](dev/controls.md#current-capture-and-focus-v002). |
+| How fast does the player walk, and how sensitive is the mouse? | Walk speed is `4.5 m/s`, jump velocity `8 m/s`, and mouse sensitivity `0.0025 rad/px`. See [Tuning](dev/controls.md#tuning). |
+| Is there a crosshair, HUD, hotbar, or pause menu? | No UI. Number keys select the block and the targeted block is outlined. `Escape` only releases the cursor. See [Controls](dev/controls.md) and [Not implemented](dev/debugging.md#not-implemented). |
+| Why did input stop when I alt-tabbed? | Losing focus releases capture and clears held keys by design. See [Current capture and focus](dev/controls.md#current-capture-and-focus-v004). |
 
 ## Rendering, shaders, and textures
 
@@ -81,11 +81,13 @@ water, or Tracy.
 | Colours look washed out or too dark | The shader works in linear colour; the surface format usually encodes sRGB. Do not add gamma by hand. See [Coordinates, depth, and colour](dev/shaders.md#coordinates-depth-and-color). |
 | Faces are missing or inside-out | Check winding, front face, and cull mode. See [Shader debugging](dev/shaders.md#debug). |
 | Resizing or minimising breaks the image | The renderer reconfigures the surface and clamps zero-sized dimensions. See [Rendering resources](dev/architecture.md#rendering-resources). |
-| Why is everything one flat colour? | The current fragment shader returns a fixed colour. Block textures are planned for v0.0.4. See [Texture pipeline](dev/textures.md). |
-| Where are the game textures or assets? | There are none yet. v0.0.4 generates procedural placeholder tiles; `docs/assets/` is documentation-site material. See [Current texture state](dev/textures.md#current-state). |
+| Why do blocks show noise patterns? | The current tiles are deterministic procedural placeholders, not final art. See [Texture pipeline](dev/textures.md). |
+| Where are the game textures or assets? | There are no image assets yet. v0.0.4 generates eight procedural tiles; `docs/assets/` is documentation-site material. See [Current texture state](dev/textures.md#current-state). |
 | Can I use my own textures or a texture pack? | Not yet. The external asset pipeline and texture-pack format are deferred. See [External assets](dev/textures.md#external-assets-and-texture-packs). |
 | Why is there no lighting, fog, or water? | They are planned for v0.0.6. See the [Roadmap](roadmap.md) and [v0.0.6 spec](specs/v0.0.6.md). |
 | How do I add or change a shader? | Follow [Shader authoring](dev/shaders.md). A shader edit needs a rebuild; there is no hot reload. |
+| Can I disable vsync? | Press `V` to toggle between FIFO and immediate or mailbox presentation. See [Controls](dev/controls.md#bindings-by-milestone). |
+| Can I see the frame rate? | Press `F3` to toggle the FPS/frame-time overlay. It refreshes once per second. See [Debugging](dev/debugging.md#profiling). |
 | Can I inspect a frame in RenderDoc, Nsight, or PIX? | Yes, as external frame debuggers; the engine has no capture integration. See [External tools](dev/debugging.md#external-tools). |
 
 ## Performance and profiling
@@ -93,7 +95,7 @@ water, or Tracy.
 | Question or symptom | Answer |
 |---|---|
 | How do I measure FPS and frame time? | Run with `RUST_LOG=engine=debug` and read `fps` and `frame_ms`. See [Logging](dev/debugging.md#logging). |
-| Why is performance low? | The current world is one mesh with no chunking, async meshing, or LOD. Those arrive in v0.0.3 and v0.0.5. See [Current limitations](dev/architecture.md#current-limitations) and the [Roadmap](roadmap.md). |
+| Why is performance low? | The current world uses one draw per non-empty chunk with no greedy meshing, async meshing, or LOD. Those arrive in v0.0.5. See [Current limitations](dev/architecture.md#current-limitations) and the [Roadmap](roadmap.md). |
 | Is Tracy integrated? | Not yet. It is selected in ADR-0006, but there is no dependency, feature, span, or GPU zone. See [Profiling](dev/profiling.md). |
 | Why are there no GPU timings? | `wgpu-profiler` and timestamp queries are not integrated. See [Profiling](dev/profiling.md). |
 | What is `pool_sim`? | A benchmark that compares rayon with micropool on the v0.0.5 async-meshing frame loop. It is a decision aid, not a CI gate. See [Current aids](dev/debugging.md#current-aids) and [Benchmark results](dev/benchmarks.md). |
@@ -105,13 +107,13 @@ water, or Tracy.
 
 | Question or symptom | Answer |
 |---|---|
-| Where are my saves? | There are none today. v0.0.4 introduces `world/chunks/`; v0.0.7 adds `world/seed` and modified-only saves. See [World management](dev/world-management.md). |
-| Closing the window lost my edits | That is current behaviour; the voxel scene is in memory only. Persistence is planned for v0.0.4. See [World management](dev/world-management.md). |
+| Where are my saves? | Under `world/chunks/`, one `VCHK` file per non-empty chunk. v0.0.7 adds `world/seed` and modified-only saves. See [World management](dev/world-management.md). |
+| Closing the window lost my edits | The engine saves on a clean window close and on `Ctrl+S`. A crash or forced kill loses edits since the last save. See [World management](dev/world-management.md). |
 | How do I back up, restore, recover, or reset a world? | See [Backups](dev/world-management.md#backups), [Restore](dev/world-management.md#restore), [Corruption recovery](dev/world-management.md#corruption-recovery), and [Reset](dev/world-management.md#reset). |
-| Why is `world/` missing? | It is expected today; it is created on the first save after persistence lands. See [World directory](dev/world-management.md#world-directory). |
+| Why is `world/` missing? | It is created on the first save. A missing `world/chunks/` on startup seeds the demo world. See [World directory](dev/world-management.md#world-directory). |
 | What is `world/seed`? | A v0.0.7 file containing one decimal `u64`, used to regenerate unmodified chunks. See [World directory](dev/world-management.md#world-directory). |
 | Why is `world/` ignored by Git? | It is local save data, not source. Back it up outside the repository. See [Paths](dev/configuration.md#paths) and [World management](dev/world-management.md). |
-| Can I import or export a world? | No importer or exporter exists. The planned format is `VCHK`, one file per saved chunk. See [World management](dev/world-management.md) and [ADR-0008](decisions/0008-chunk-save-format.md). |
+| Can I import or export a world? | No importer or exporter exists. The format is `VCHK` v1, one file per saved chunk. See [World management](dev/world-management.md) and [ADR-0008](decisions/0008-chunk-save-format.md). |
 | Where is `config.toml`? | It is not read yet. Current inputs are environment variables and compile-time constants. See [Configuration](dev/configuration.md). |
 | Where are the logs? | They go to stderr today. A per-run `logs/` file is planned with no milestone. See [Logging](dev/debugging.md#logging). |
 | What is the stress scene? | `ENGINE_STRESS_SCENE=1` is a planned v0.0.5 in-memory scene that bypasses `world/chunks/` and saving. See [Configuration](dev/configuration.md) and the [v0.0.5 spec](specs/v0.0.5.md). |
