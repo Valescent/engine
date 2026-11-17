@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-11-17
+
 ### Added
 
 - Greedy meshing: adjacent coplanar block faces merge into one quad with UVs in block units; a flat 32x32 chunk now emits far fewer vertices than the v0.0.4 face-culled mesher.
