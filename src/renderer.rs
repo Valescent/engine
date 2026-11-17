@@ -411,30 +411,33 @@ impl Renderer {
     #[allow(clippy::cast_precision_loss)]
     pub(crate) fn render(&mut self, frustum: &Frustum) -> FrameStats {
         let mut stats = FrameStats::default();
-        let frame = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(frame) => frame,
-            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                return stats;
-            }
-            wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
-                drop(texture);
-                self.surface.configure(&self.device, &self.config);
-                self.window.request_redraw();
-                return stats;
-            }
-            wgpu::CurrentSurfaceTexture::Outdated => {
-                self.surface.configure(&self.device, &self.config);
-                self.window.request_redraw();
-                return stats;
-            }
-            wgpu::CurrentSurfaceTexture::Lost => {
-                self.recreate_surface();
-                self.window.request_redraw();
-                return stats;
-            }
-            wgpu::CurrentSurfaceTexture::Validation => {
-                error!("surface acquisition hit a validation error");
-                return stats;
+        let frame = {
+            profiling::scope!("acquire");
+            match self.surface.get_current_texture() {
+                wgpu::CurrentSurfaceTexture::Success(frame) => frame,
+                wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                    return stats;
+                }
+                wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
+                    drop(texture);
+                    self.surface.configure(&self.device, &self.config);
+                    self.window.request_redraw();
+                    return stats;
+                }
+                wgpu::CurrentSurfaceTexture::Outdated => {
+                    self.surface.configure(&self.device, &self.config);
+                    self.window.request_redraw();
+                    return stats;
+                }
+                wgpu::CurrentSurfaceTexture::Lost => {
+                    self.recreate_surface();
+                    self.window.request_redraw();
+                    return stats;
+                }
+                wgpu::CurrentSurfaceTexture::Validation => {
+                    error!("surface acquisition hit a validation error");
+                    return stats;
+                }
             }
         };
 
@@ -483,24 +486,33 @@ impl Renderer {
             }
         }
 
-        self.queue.submit(Some(encoder.finish()));
-        self.window.pre_present_notify();
-        self.queue.present(frame);
+        {
+            profiling::scope!("submit");
+            self.queue.submit(Some(encoder.finish()));
+            self.window.pre_present_notify();
+        }
+        {
+            profiling::scope!("present");
+            self.queue.present(frame);
+        }
 
         #[cfg(feature = "tracy")]
-        if let Some(profiler) = self.profiler.as_mut() {
-            if let Err(error) = profiler.end_frame() {
-                warn!(%error, "GPU profiler frame was not resolved");
-            }
-            let period = self.queue.get_timestamp_period();
-            if let Some(queries) = profiler.process_finished_frame(period) {
-                let gpu_ms = queries
-                    .iter()
-                    .filter_map(|query| query.time.as_ref())
-                    .map(|time| time.end - time.start)
-                    .sum::<f64>()
-                    * 1000.0;
-                crate::metrics::gpu_ms(gpu_ms);
+        {
+            profiling::scope!("profiler end");
+            if let Some(profiler) = self.profiler.as_mut() {
+                if let Err(error) = profiler.end_frame() {
+                    warn!(%error, "GPU profiler frame was not resolved");
+                }
+                let period = self.queue.get_timestamp_period();
+                if let Some(queries) = profiler.process_finished_frame(period) {
+                    let gpu_ms = queries
+                        .iter()
+                        .filter_map(|query| query.time.as_ref())
+                        .map(|time| time.end - time.start)
+                        .sum::<f64>()
+                        * 1000.0;
+                    crate::metrics::gpu_ms(gpu_ms);
+                }
             }
         }
 

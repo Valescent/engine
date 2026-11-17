@@ -240,6 +240,33 @@ above is the pre-fix baseline; the same command on the fixed commit gives:
 The frame is no longer collision-bound. What remains at this view is roughly 0.2 ms of
 encode/present overhead; the GPU zone was ~5.5 us.
 
+### Where the remaining 0.25 ms goes
+
+Captured with the `tracy` feature in release and vsync off, 11,034 frames in 3.1 s. The `frame`
+span averages 246.5 us; nested spans account for about 236 us of it:
+
+| Span | Mean | Share |
+|---|---:|---:|
+| `acquire` (swapchain image) | 87.1 us | 35% |
+| `submit` (encoder finish + `Queue::submit`) | 86.7 us | 35% |
+| `present` (`Queue::present`) | 47.6 us | 19% |
+| `encode` | 5.3 us | 2% |
+| `profiler end` (Tracy GPU readback) | 2.6 us | 1% |
+| `mesh request` | 2.9 us | 1% |
+| `select active` | 1.5 us | <1% |
+| `mesh upload` | 0.85 us | <1% |
+| `player update` | 0.81 us | <1% |
+| `highlight` | 0.5 us | <1% |
+| `frustum` | 0.13 us | <1% |
+
+Inside those spans, wgpu reports `vkQueueSubmit` at 32.8 us per call, `Device::wait` at 40.2 us,
+`CommandEncoder::finish` at 22.4 us, `vkQueuePresentKHR` at 24.6 us, and the per-frame camera
+`Queue::write_buffer` at 5.4 us. The engine's own logic is under 15 us of the frame; the rest is
+driver and present-path bookkeeping that scales with frame count, not with world size.
+
+So the uncapped ceiling is the swapchain/present path on this driver (~0.25 ms per frame), not
+mesh work, collision, or the GPU. Vsync hides it completely at 60 FPS.
+
 ## Run log
 
 | Date | Commit | Machine | Rust | Command | Workers | Result |

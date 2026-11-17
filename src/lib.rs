@@ -534,6 +534,7 @@ impl App {
         if let Some(pool) = self.mesher.clone() {
             self.request_levels(&*pool);
             self.upload_finished_meshes(&*pool);
+            profiling::scope!("select active");
             self.select_active_levels();
         }
 
@@ -543,7 +544,10 @@ impl App {
                 self.overlay_fps, self.overlay_frame_ms
             )
         });
-        let frustum = Frustum::from_view_projection(self.camera.view_projection());
+        let frustum = {
+            profiling::scope!("frustum");
+            Frustum::from_view_projection(self.camera.view_projection())
+        };
         if let Some(renderer) = &mut self.renderer {
             renderer.set_camera(&self.camera);
             renderer.set_overlay(overlay.as_deref());

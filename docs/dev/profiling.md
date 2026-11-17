@@ -199,14 +199,20 @@ cap fills and newer frames are dropped. The returned per-scope times are in seco
 
 ## CPU scopes
 
-| Scope | Thread | Covers |
+| Section | Thread | Covers |
 |---|---|---|
 | `frame` | main | Redraw handler through present |
 | `player update` | main | Gravity, walking, and the swept AABB collision query |
 | `highlight` | main | Targeted-block raycast and outline rebuild |
 | `mesh request` | main | LOD selection, snapshots, and job submission |
 | `mesh upload` | main | Draining finished meshes and creating vertex buffers |
+| `select active` | main | Picking the resident LOD mesh per chunk |
+| `frustum` | main | Extracting the six view planes |
+| `acquire` | main | Waiting for a swapchain image |
 | `encode` | main | Command encoding and the render pass |
+| `submit` | main | Encoder finish and `Queue::submit` |
+| `present` | main | `Queue::present` |
+| `profiler end` | main | `wgpu-profiler` frame end and timestamp readback |
 | `chunk mesh` | worker | One greedy mesh from a chunk snapshot |
 
 Rules:
