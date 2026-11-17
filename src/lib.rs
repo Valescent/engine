@@ -37,7 +37,7 @@ use block::Block;
 use camera::Camera;
 use frustum::Frustum;
 use mesh::Lod;
-use mesher::{MeshPool, MeshQueue, Priority, WorkerPool, collect_finished};
+use mesher::{MeshPool, MeshQueue, Priority, collect_finished, create_pool};
 use player::{Player, PlayerInput};
 use raycast::{RaycastHit, raycast};
 pub use renderer::RendererError;
@@ -721,7 +721,7 @@ impl ApplicationHandler for App {
         info!(width = size.width, height = size.height, "window ready");
         self.window = Some(window.clone());
         self.renderer = Some(renderer);
-        self.mesher = Some(Arc::new(WorkerPool::new()));
+        self.mesher = Some(create_pool());
         self.request_initial_meshes();
         if no_vsync_requested() {
             self.toggle_vsync();

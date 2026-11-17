@@ -89,27 +89,108 @@ impl MeshPool for WorkerPool {
         let sender = self.sender.clone();
         let counter = Arc::clone(&self.in_flight);
         drop(micropool::spawn_owned(move || {
-            name_worker_thread();
-            profiling::scope!("chunk mesh");
-            let started = Instant::now();
-            let mesh = build_mesh(&job.snapshot, &job.border, job.lod);
-            let result = MeshResult {
-                chunk: job.chunk,
-                lod: job.lod,
-                revision: job.revision,
-                mesh,
-                elapsed: started.elapsed(),
-            };
-            let _ = sender.send(result);
-            counter.fetch_sub(1, Ordering::Relaxed);
+            run_job(&job, &sender, &counter);
         }));
         true
     }
 
     fn try_recv(&self) -> Option<MeshResult> {
-        let receiver = self.receiver.lock().unwrap_or_else(PoisonError::into_inner);
-        receiver.try_recv().ok()
+        receive_result(&self.receiver)
     }
+}
+
+/// rayon-backed pool with the same admission rules, for A/B comparisons.
+#[cfg(feature = "rayon-pool")]
+#[derive(Debug)]
+pub(crate) struct RayonPool {
+    sender: Sender<MeshResult>,
+    receiver: Mutex<Receiver<MeshResult>>,
+    in_flight: Arc<AtomicUsize>,
+    capacity: usize,
+}
+
+#[cfg(feature = "rayon-pool")]
+impl RayonPool {
+    /// Creates a pool sized from rayon's default worker count.
+    pub(crate) fn new() -> Self {
+        let (sender, receiver) = mpsc::channel();
+        let workers = rayon::current_num_threads().max(1);
+        Self {
+            sender,
+            receiver: Mutex::new(receiver),
+            in_flight: Arc::new(AtomicUsize::new(0)),
+            capacity: workers * 4,
+        }
+    }
+}
+
+#[cfg(feature = "rayon-pool")]
+impl MeshPool for RayonPool {
+    fn submit(&self, job: MeshJob, priority: Priority) -> bool {
+        let in_flight = self.in_flight.load(Ordering::Relaxed);
+        if !admit(priority, in_flight, self.capacity) {
+            return false;
+        }
+        self.in_flight.fetch_add(1, Ordering::Relaxed);
+
+        let sender = self.sender.clone();
+        let counter = Arc::clone(&self.in_flight);
+        rayon::spawn(move || {
+            run_job(&job, &sender, &counter);
+        });
+        true
+    }
+
+    fn try_recv(&self) -> Option<MeshResult> {
+        receive_result(&self.receiver)
+    }
+}
+
+/// The pool selected by the build, defaulting to micropool.
+///
+/// With the `rayon-pool` feature, `ENGINE_MESH_POOL=rayon` selects the rayon
+/// pool at startup for A/B runs.
+pub(crate) fn create_pool() -> Arc<dyn MeshPool> {
+    #[cfg(feature = "rayon-pool")]
+    if std::env::var("ENGINE_MESH_POOL").is_ok_and(|value| value == "rayon") {
+        tracing::info!(
+            pool = "rayon",
+            workers = rayon::current_num_threads(),
+            "mesh worker pool ready"
+        );
+        return Arc::new(RayonPool::new());
+    }
+    tracing::info!(
+        pool = "micropool",
+        workers = micropool::num_threads(),
+        "mesh worker pool ready"
+    );
+    Arc::new(WorkerPool::new())
+}
+
+/// Runs one job and reports its result, then releases the in-flight slot.
+fn run_job(job: &MeshJob, sender: &Sender<MeshResult>, counter: &AtomicUsize) {
+    name_worker_thread();
+    profiling::scope!("chunk mesh");
+    let started = Instant::now();
+    let mesh = build_mesh(&job.snapshot, &job.border, job.lod);
+    let result = MeshResult {
+        chunk: job.chunk,
+        lod: job.lod,
+        revision: job.revision,
+        mesh,
+        elapsed: started.elapsed(),
+    };
+    let _ = sender.send(result);
+    counter.fetch_sub(1, Ordering::Relaxed);
+}
+
+fn receive_result(receiver: &Mutex<Receiver<MeshResult>>) -> Option<MeshResult> {
+    receiver
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .try_recv()
+        .ok()
 }
 
 /// Returns whether a job may be submitted to a queue of `capacity`.

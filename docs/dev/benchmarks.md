@@ -291,6 +291,40 @@ saturated p50 and max, so the result is a tail preference rather than a clean sw
 consistent with [ADR-0009](../decisions/0009-micropool-for-chunk-workers.md), and single runs
 remain noisy.
 
+## 2026-11-17 mesh pool A/B (real engine)
+
+`pool_sim` simulates the frame loop. This run compares the pools on the real engine by building
+with the optional `rayon-pool` feature and selecting the pool at startup:
+
+```console
+cargo build --release --features tracy,rayon-pool
+$env:ENGINE_STRESS_SCENE = "1"; $env:RUST_LOG = "engine=debug"
+$env:ENGINE_MESH_POOL = "rayon"   # omit for micropool
+target\release\engine.exe
+```
+
+Each run captures the first six to eight seconds with `tracy-capture`, which covers the startup
+burst: 64 urgent LOD0 jobs plus the LOD1 jobs for chunks outside the four-chunk radius, 72 jobs
+in total. Frame pacing is vsync-locked at 60 FPS, so this compares worker throughput and startup
+behaviour, not steady-state frame rate.
+
+| Run | Pool (workers) | Jobs | Mean job | Max job | Worker total |
+|---|---|---:|---:|---:|---:|
+| 1 | micropool (11) | 72 | 887 us | 1,952 us | 63.8 ms |
+| 2 | micropool (11) | 72 | 970 us | 4,337 us | 69.8 ms |
+| 1 | rayon (12) | 72 | 951 us | 2,194 us | 68.5 ms |
+| 2 | rayon (12) | 72 | 968 us | 2,121 us | 69.7 ms |
+
+- Per-job time is within noise: micropool averages 887 and 970 us, rayon 951 and 968 us, with
+  micropool one worker down.
+- Both complete the startup burst inside the first second and reach the same 60 FPS with 8
+  visible chunks; `frame` max in both traces is ~33 ms from the first frame, not from meshing.
+- Two runs lost their capture window before the startup burst was recorded and were discarded.
+  The engine state in those runs still rendered correctly.
+
+**Verdict:** no meaningful difference on the real workload. micropool stays the default under
+ADR-0009; the rayon path exists only for A/B runs.
+
 ## Run log
 
 | Date | Commit | Machine | Rust | Command | Workers | Result |
@@ -300,6 +334,7 @@ remain noisy.
 | 2026-11-17 | v0.0.5 release build | Ryzen 5 7600, 6C/12T, RTX 4060, Windows 11 | 1.99.1 | `ENGINE_NO_VSYNC=1 cargo run --release` | n/a | 779.6 FPS mean, 1.283 ms frame; `player update` 1.15 ms dominates |
 | 2026-11-17 | collision query fix | Ryzen 5 7600, 6C/12T, RTX 4060, Windows 11 | 1.99.1 | `ENGINE_NO_VSYNC=1 cargo run --release` | n/a | 4370 FPS mean, 0.229 ms frame; `player update` 0.9 us |
 | 2026-11-17 | `15ae656` | Ryzen 5 7600, 6C/12T, Windows 11 | 1.99.1 | `cargo bench --bench pool_sim -- both` (x2) | rayon 12, micropool 11 | `over = 0`; checksums identical; micropool saturated p99 4,249 / 4,397 vs rayon 4,309 / 8,581 |
+| 2026-11-17 | v0.0.5 + `rayon-pool` | Ryzen 5 7600, 6C/12T, RTX 4060, Windows 11 | 1.99.1 | `ENGINE_MESH_POOL=rayon` release captures | micropool 11 / rayon 12 | 72 startup jobs; per-job 887-970 us (micropool) vs 951-968 us (rayon); no frame difference |
 
 Add new runs below the latest row. Keep the raw output with the entry when possible.
 
