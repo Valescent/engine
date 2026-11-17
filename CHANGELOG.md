@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tracy-profiler` thread lanes are named `chunk worker` once per pool thread.
 - `ENGINE_NO_VSYNC=1` starts with vsync off for benchmark runs, and an ignored `bench_hot_paths` test measures snapshot preparation, LOD meshing, and collision in release. Results are recorded in [Benchmark results](docs/dev/benchmarks.md).
 
+### Fixed
+
+- Player collision no longer scans every block in the world. The swept AABB query visits only the blocks inside its bounds, cutting `Player::update` from 1.15 ms to 0.9 us per frame on the 64-chunk stress scene and the uncapped frame time from 1.28 ms to 0.23 ms.
+
 ### Changed
 
 - CI runs Clippy, tests, and rustdoc without `--all-features`, so the profiling feature's C++ client stays out of the runners.
@@ -29,7 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A deterministic 64-chunk stress scene on `ENGINE_STRESS_SCENE=1`; it never reads or writes `world/chunks/`.
 - Per-second debug metrics for frame time, visible and total chunks, visible vertices, draw calls, worker rebuild time, and upload time.
 
-### Changed
+### Fixed
+`n- Player collision no longer scans every block in the world. The swept AABB query visits only the blocks inside its bounds, cutting `Player::update` from 1.15 ms to 0.9 us per frame on the 64-chunk stress scene and the uncapped frame time from 1.28 ms to 0.23 ms.
+`n### Changed
 
 - The texture sampler repeats in U and V so merged greedy quads tile correctly instead of clamping.
 - The camera far plane moved from 100 m to 512 m so the 10-chunk stress draw distance is visible.
@@ -47,7 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `VCHK` v1 chunk persistence under `world/chunks/`, load on startup, save on exit and `Ctrl+S`.
 - A demo world with grass over dirt, stone, wood, and leaves, plus a safe spawn column.
 
-### Changed
+### Fixed
+`n- Player collision no longer scans every block in the world. The swept AABB query visits only the blocks inside its bounds, cutting `Player::update` from 1.15 ms to 0.9 us per frame on the 64-chunk stress scene and the uncapped frame time from 1.28 ms to 0.23 ms.
+`n### Changed
 
 - WASD now walks on the ground instead of flying; `Space` jumps instead of toggling a demo voxel.
 - Number keys `1`–`5` select the block to place; the cursor still captures on left click.
@@ -67,7 +75,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - One GPU vertex buffer and one draw call per non-empty chunk, with a per-chunk origin uniform.
 - Debug logging for dirty chunk count, total vertices, and rebuild time after an edit.
 
-### Changed
+### Fixed
+`n- Player collision no longer scans every block in the world. The swept AABB query visits only the blocks inside its bounds, cutting `Player::update` from 1.15 ms to 0.9 us per frame on the 64-chunk stress scene and the uncapped frame time from 1.28 ms to 0.23 ms.
+`n### Changed
 
 - The demo scene is a 4×4 floor spanning four chunks with a raised voxel on the chunk boundary.
 - `Space` toggles that boundary voxel and rebuilds only the affected chunks.

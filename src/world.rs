@@ -153,17 +153,21 @@ impl World {
     }
 
     /// Returns every solid block inside the inclusive world-coordinate bounds.
+    ///
+    /// Queries the box directly instead of scanning stored chunks, so the cost
+    /// scales with the requested volume rather than with the world size.
     pub(crate) fn solid_blocks_in(&self, min: IVec3, max: IVec3) -> Vec<IVec3> {
         let mut blocks = Vec::new();
-        for (coordinate, chunk) in &self.chunks {
-            let origin = coordinate.world_origin();
-            for (&local, &block) in &chunk.blocks {
-                if !block.is_solid() {
-                    continue;
-                }
-                let world = origin + local;
-                if world.cmpge(min).all() && world.cmple(max).all() {
-                    blocks.push(world);
+        if min.cmpgt(max).any() {
+            return blocks;
+        }
+        for x in min.x..=max.x {
+            for y in min.y..=max.y {
+                for z in min.z..=max.z {
+                    let world = IVec3::new(x, y, z);
+                    if self.is_solid(world) {
+                        blocks.push(world);
+                    }
                 }
             }
         }
@@ -651,6 +655,53 @@ mod tests {
         assert_eq!(world.iter_chunks().count(), 1);
         world.set_block(b, Block::Air);
         assert_eq!(world.iter_chunks().count(), 0);
+    }
+
+    #[test]
+    fn solid_blocks_in_matches_the_requested_box_across_chunks() {
+        let mut world = World::default();
+        let solids = [
+            IVec3::new(-1, 0, 0),
+            IVec3::new(0, 0, 0),
+            IVec3::new(31, 2, 0),
+            IVec3::new(32, 2, 0),
+            IVec3::new(33, 2, 0),
+        ];
+        for coordinate in solids {
+            world.set_block(coordinate, Block::Stone);
+        }
+
+        let mut found = world.solid_blocks_in(IVec3::new(-1, 0, 0), IVec3::new(32, 2, 0));
+        found.sort_by_key(|block| (block.x, block.y, block.z));
+
+        let mut expected = vec![
+            IVec3::new(-1, 0, 0),
+            IVec3::new(0, 0, 0),
+            IVec3::new(31, 2, 0),
+            IVec3::new(32, 2, 0),
+        ];
+        expected.sort_by_key(|block| (block.x, block.y, block.z));
+        assert_eq!(found, expected);
+    }
+
+    #[test]
+    fn solid_blocks_in_returns_nothing_for_empty_or_inverted_boxes() {
+        let world = World::default();
+        assert_eq!(
+            world.solid_blocks_in(IVec3::ZERO, IVec3::splat(4)),
+            Vec::new()
+        );
+
+        let mut world = World::default();
+        world.set_block(IVec3::new(0, 0, 0), Block::Stone);
+        assert_eq!(
+            world.solid_blocks_in(IVec3::new(1, 1, 1), IVec3::ZERO),
+            Vec::new()
+        );
+        assert_eq!(
+            world.solid_blocks_in(IVec3::new(1, 0, 0), IVec3::new(2, 2, 2)),
+            Vec::new()
+        );
     }
 
     #[test]

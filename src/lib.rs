@@ -1060,7 +1060,7 @@ mod tests {
         let mut player = Player::new(Vec3::new(16.5, 3.0, 16.5));
         let input = PlayerInput {
             forward: 0.0,
-            right: 0.0,
+            right: 1.0,
             jump: false,
             yaw: std::f32::consts::FRAC_PI_4,
         };

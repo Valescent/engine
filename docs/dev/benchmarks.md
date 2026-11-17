@@ -224,6 +224,22 @@ CPU/GPU split from a Tracy capture of the same scene (development profile, 349 f
 - These numbers come from one machine and one run. Treat them as a baseline, not a regression
   gate.
 
+### 2026-11-17 collision query fix
+
+`World::solid_blocks_in` used to scan every block of every stored chunk. It now visits only the
+coordinates inside the requested box, so the cost scales with the player's swept AABB. The run
+above is the pre-fix baseline; the same command on the fixed commit gives:
+
+| Metric | Before | After |
+|---|---:|---:|
+| `Player::update` (walking) | 1150-1167 us/frame | 0.9 us/frame |
+| FPS mean / p50 / min / max | 779.6 / 781.2 / 750.6 / 783.1 | 4370 / 4387 / 4088 / 4425 |
+| `frame_ms` mean / min / max | 1.283 / 1.277 / 1.332 | 0.229 / 0.226 / 0.245 |
+| Visible chunks / draw calls / vertices | 8 / 8 / 100,464 | 8 / 8 / 100,464 |
+
+The frame is no longer collision-bound. What remains at this view is roughly 0.2 ms of
+encode/present overhead; the GPU zone was ~5.5 us.
+
 ## Run log
 
 | Date | Commit | Machine | Rust | Command | Workers | Result |
@@ -231,6 +247,7 @@ CPU/GPU split from a Tracy capture of the same scene (development profile, 349 f
 | 2026-11-15 (ADR date; exact time not recorded) | Not recorded | Ryzen 5 7600, 6C/12T, Windows | 1.99.1 | `cargo bench --bench pool_sim -- both` | rayon 12, micropool 11 | All `over = 0`; checksums identical; micropool better saturated p99 and join max |
 | 2026-11-16 | `27c39b1` | Ryzen 5 7600, 6C/12T, Windows 11 26300 | 1.99.1 | `cargo bench --bench pool_sim -- both` | rayon 12, micropool 11 | All `over = 0`; checksums identical; micropool saturated p99 4,108 vs rayon 12,617; drops 350 each |
 | 2026-11-17 | v0.0.5 release build | Ryzen 5 7600, 6C/12T, RTX 4060, Windows 11 | 1.99.1 | `ENGINE_NO_VSYNC=1 cargo run --release` | n/a | 779.6 FPS mean, 1.283 ms frame; `player update` 1.15 ms dominates |
+| 2026-11-17 | collision query fix | Ryzen 5 7600, 6C/12T, RTX 4060, Windows 11 | 1.99.1 | `ENGINE_NO_VSYNC=1 cargo run --release` | n/a | 4370 FPS mean, 0.229 ms frame; `player update` 0.9 us |
 
 Add new runs below the latest row. Keep the raw output with the entry when possible.
 
