@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-11-17
+
 ### Added
 
 - Walking player with gravity, jumping, and swept AABB collision against voxel terrain.
