@@ -7,7 +7,8 @@
 use bytemuck::{Pod, Zeroable};
 use glam::{IVec3, Vec3};
 
-/// One mesh vertex: chunk-local position, normal, texture UV, and array layer.
+/// One mesh vertex: chunk-local position, normal, texture UV, array layer, and
+/// packed light/AO.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub(crate) struct Vertex {
@@ -15,6 +16,7 @@ pub(crate) struct Vertex {
     pub(crate) normal: [f32; 3],
     pub(crate) uv: [f32; 2],
     pub(crate) layer: u32,
+    pub(crate) light_ao: u32,
 }
 
 /// One wireframe vertex in world space.
@@ -145,6 +147,7 @@ fn push_voxel(
                 normal: normal.as_vec3().to_array(),
                 uv: UVS[index],
                 layer,
+                light_ao: 0,
             });
         }
     }
@@ -389,7 +392,7 @@ mod tests {
 
     #[test]
     fn vertex_layout_is_packed() {
-        assert_eq!(size_of::<Vertex>(), 36);
+        assert_eq!(size_of::<Vertex>(), 40);
         assert_eq!(size_of::<HighlightVertex>(), 12);
     }
 

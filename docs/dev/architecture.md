@@ -94,7 +94,7 @@ See [Coordinates](coordinates.md) for the full conventions, including chunk and 
 - Right-handed, Y-up.
 - A voxel at `(x, y, z)` occupies `[x, x + 1] × [y, y + 1] × [z, z + 1]`.
 - The world stores 32³ chunks of `Block` values. Missing chunks are air, and stored chunks never contain `Air`.
-- Chunk meshes use chunk-local positions, 36-byte textured vertices, and merge coplanar faces whose world-space neighbour is air, including across chunk borders.
+- Chunk meshes use chunk-local positions, 40-byte vertices (position, normal, UV, layer, and packed light/AO), and merge coplanar faces whose world-space neighbour is air, including across chunk borders.
 - LOD0 is the full-resolution greedy mesh; LOD1 is the same mesher over a 2x2x2 downsample at half the cell count. LOD1 emits every chunk-boundary face so LOD transitions cannot crack.
 - Chunks at or within four chunk units of the player use LOD0, chunks at eight or more use LOD1, and the range between keeps the current LOD.
 - Greedy quads UVs are in block units, so the sampler repeats the texture tile across merged faces.

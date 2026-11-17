@@ -1022,8 +1022,8 @@ mod tests {
         for (chunk, _) in world.iter_chunks() {
             let snapshot = mesh::ChunkSnapshot::new(&world, chunk);
             let border = mesh::BorderBlocks::new(&world, chunk);
-            let lod0 = mesh::build_mesh(&snapshot, &border, Lod::Lod0);
-            let lod1 = mesh::build_mesh(&snapshot, &border, Lod::Lod1);
+            let lod0 = mesh::build_mesh(&snapshot, &border, None, Lod::Lod0);
+            let lod1 = mesh::build_mesh(&snapshot, &border, None, Lod::Lod1);
 
             assert_ne!(lod0.len(), 0);
             assert_ne!(lod1.len(), 0);
@@ -1043,11 +1043,16 @@ mod tests {
         let chunk_count = chunks.len();
 
         let started = Instant::now();
+        world.relight();
+        let relight = started.elapsed();
+
+        let started = Instant::now();
         let mut snapshots = Vec::with_capacity(chunk_count);
         for &chunk in &chunks {
             snapshots.push((
                 mesh::ChunkSnapshot::new(&world, chunk),
                 mesh::BorderBlocks::new(&world, chunk),
+                world.light_field(chunk).cloned(),
             ));
         }
         let prepare = started.elapsed();
@@ -1055,14 +1060,18 @@ mod tests {
         let started = Instant::now();
         let lod0_vertices: usize = snapshots
             .iter()
-            .map(|(snapshot, border)| mesh::build_mesh(snapshot, border, Lod::Lod0).len())
+            .map(|(snapshot, border, light)| {
+                mesh::build_mesh(snapshot, border, light.as_deref(), Lod::Lod0).len()
+            })
             .sum();
         let lod0 = started.elapsed();
 
         let started = Instant::now();
         let lod1_vertices: usize = snapshots
             .iter()
-            .map(|(snapshot, border)| mesh::build_mesh(snapshot, border, Lod::Lod1).len())
+            .map(|(snapshot, border, light)| {
+                mesh::build_mesh(snapshot, border, light.as_deref(), Lod::Lod1).len()
+            })
             .sum();
         let lod1 = started.elapsed();
 
@@ -1079,10 +1088,6 @@ mod tests {
             player.update(&world, input, 1.0 / 60.0);
         }
         let update = started.elapsed();
-
-        let started = Instant::now();
-        world.relight();
-        let relight = started.elapsed();
 
         let per_chunk = |elapsed: Duration| elapsed.as_secs_f64() * 1000.0 / chunk_count as f64;
         eprintln!(

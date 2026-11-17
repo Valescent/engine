@@ -6,6 +6,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use crate::light::LightField;
 use crate::mesh::{BorderBlocks, ChunkSnapshot, Lod, build_mesh, select_lod};
 use crate::voxel::Vertex;
 use crate::world::{ChunkCoord, DirtyChunks, World};
@@ -36,6 +37,7 @@ pub(crate) struct MeshJob {
     pub(crate) revision: u64,
     pub(crate) snapshot: ChunkSnapshot,
     pub(crate) border: BorderBlocks,
+    pub(crate) light: Option<Arc<LightField>>,
 }
 
 /// One finished mesh, tagged so stale results can be discarded.
@@ -173,7 +175,7 @@ fn run_job(job: &MeshJob, sender: &Sender<MeshResult>, counter: &AtomicUsize) {
     name_worker_thread();
     profiling::scope!("chunk mesh");
     let started = Instant::now();
-    let mesh = build_mesh(&job.snapshot, &job.border, job.lod);
+    let mesh = build_mesh(&job.snapshot, &job.border, job.light.as_deref(), job.lod);
     let result = MeshResult {
         chunk: job.chunk,
         lod: job.lod,
@@ -253,6 +255,7 @@ impl MeshQueue {
             revision,
             snapshot: ChunkSnapshot::new(world, chunk),
             border: BorderBlocks::new(world, chunk),
+            light: world.light_field(chunk).cloned(),
         };
         if pool.submit(job, priority) {
             self.pending.insert((chunk, lod), revision);

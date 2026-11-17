@@ -143,10 +143,10 @@ padding.
 
 ### Vertex inputs
 
-- `Vertex` is `#[repr(C)]`, derives `Pod` and `Zeroable`, and is 36 bytes: `position` at offset
-  `0`, `normal` at `12`, `uv` at `24`, and `layer` at `32`.
+- `Vertex` is `#[repr(C)]`, derives `Pod` and `Zeroable`, and is 40 bytes: `position` at offset
+  `0`, `normal` at `12`, `uv` at `24`, `layer` at `32`, and `light_ao` at `36`.
 - The buffer layout uses `array_stride = size_of::<Vertex>()` and attributes at those offsets:
-  `Float32x3`, `Float32x3`, `Float32x2`, and `Uint32`. `shader_location` `0`–`3` are the
+  `Float32x3`, `Float32x3`, `Float32x2`, `Uint32`, and `Uint32`. `shader_location` `0`–`4` are the
   `@location` numbers in `VertexIn`.
 - Every `@location` in `VertexIn` needs exactly one matching `VertexAttribute`, and the WGSL type
   must match the format. `Float32x3` is a `vec3<f32>`; `Uint32` is a `u32`.
@@ -232,7 +232,7 @@ padding.
    floats in the vertex stage instead.
 6. Run `cargo test` for the CPU-side layout and mesh vectors, then `cargo run` for GPU validation.
 7. If the layout is normative, update the spec or ADR before changing shipped data. The current
-   shader is v0.0.4; the 40-byte v0.0.6 layout is a planned contract, not current code.
+   shader uses the 40-byte v0.0.6 light/AO vertex; day/night, fog, and water are still planned.
 
 ## Changing bindings
 
@@ -258,12 +258,12 @@ the Rust layout and document them in the change.
 | v0.0.3 | Chunk-local vertices and chunk origins | Implemented as a 16-byte origin uniform in group `1`. The vertex stage adds the chunk origin to the position. Normals are unchanged. |
 | v0.0.4 | 36-byte vertex with UV and layer, texture array | Implemented. The vertex stage forwards UV and layer; the fragment stage samples `texture_2d_array<f32>` with nearest filtering and no mipmaps. The highlight is a separate line-list pipeline. |
 | v0.0.5 | Greedy quads and LOD1 | Implemented. UVs are in block units and the sampler repeats in U and V. LOD1 uses the same shader; the CPU scales positions and UVs, so the shader does not branch on LOD. |
-| v0.0.6 | 40-byte light/AO vertex, day/night, fog, water | The vertex stage unpacks sky light, block light, and AO into separate float varyings; the fragment stage applies the spec's lighting and fog formulas and uses a separate transparent water pipeline with animated normals. |
+| v0.0.6 | 40-byte light/AO vertex, day/night, fog, water | Partially implemented: the 40-byte vertex carries packed light/AO, the vertex stage unpacks it into an interpolated `vec3` varying, and the fragment stage applies the AO term. Day/night, fog, and the water pipeline remain. |
 | v0.0.7 | Eleven texture layers and Sand | The texture array grows; the layer index is data. The lighting and water shader logic do not change. |
 
 ### Textures (v0.0.4)
 
-The textured vertex is 36 bytes: `position`, `normal`, `uv`, and `layer`. The layer is an integer
+The textured vertex is 40 bytes: `position`, `normal`, `uv`, `layer`, and `light_ao`. The layer is an integer
 varying and must be flat. The fragment shader samples the array with the per-vertex layer. The
 layer table, procedural tile generation, and upload path are in
 [Texture and asset pipeline](textures.md).
@@ -325,9 +325,9 @@ The v0.0.6 vertex is 40 bytes and adds one packed `light_ao` field:
 | 8-9 | AO level `0..=3` |
 | 10-31 | Zero |
 
-`light_ao` is per-corner data. Unpack it in the vertex stage into separate `f32` varyings so the
-corner values interpolate across the quad. Do not pass the packed `u32` across the stage boundary
-as a flat varying; flat interpolation would collapse the four corner values into one.
+`light_ao` is per-corner data. Unpack it in the vertex stage into an interpolated varying so the
+corner values blend across the quad. Do not pass the packed `u32` across the stage boundary as a
+flat varying; flat interpolation would collapse the four corner values into one.
 
 ```wgsl
 struct VertexIn {
@@ -337,30 +337,31 @@ struct VertexIn {
 
 struct VertexOut {
     // ... clip_position, normal, uv, flat layer ...
-    @location(3) sky_light: f32,
-    @location(4) block_light: f32,
-    @location(5) ao_level: f32,
+    @location(3) light: vec3<f32>,   // sky, block, AO
 };
 
 @vertex
 fn vs_main(input: VertexIn) -> VertexOut {
     var output: VertexOut;
     // ... clip_position, normal, uv, layer ...
-    output.sky_light = f32(input.light_ao & 0xFu);
-    output.block_light = f32((input.light_ao >> 4u) & 0xFu);
-    output.ao_level = f32((input.light_ao >> 8u) & 0x3u);
+    output.light = vec3<f32>(
+        f32(input.light_ao & 0xFu) / 15.0,
+        f32((input.light_ao >> 4u) & 0xFu) / 15.0,
+        f32((input.light_ao >> 8u) & 0x3u),
+    );
     return output;
 }
 
 @fragment
 fn fs_main(input: VertexOut) -> @location(0) vec4<f32> {
-    let sky = input.sky_light / 15.0;
-    let block = input.block_light / 15.0;
-    let ao = 0.55 + 0.15 * input.ao_level;
-    // Apply the lighting and fog formulas from the spec.
-    return vec4<f32>(sky, block, ao, 1.0);
+    let ao = 0.55 + 0.15 * input.light.z;
+    // Sky and block light feed the lighting formula from the spec.
+    return vec4<f32>(input.light.x, input.light.y, ao, 1.0);
 }
 ```
+
+Until the day/night model lands, the fragment stage multiplies the v0.0.4 face shading by the AO
+term and carries sky/block light for the lighting pass.
 
 The lighting formula, keyframes, fog range, and water animation are in the
 [v0.0.6 spec](../specs/v0.0.6.md). [ADR-0011](../decisions/0011-voxel-light-and-baked-ao.md)

@@ -47,6 +47,8 @@ The headless suite covers:
 - Missing and empty chunk meshes, cross-chunk face culling, exact greedy quads, block-unit UVs, texture layers, LOD1 boundary faces, and deterministic chunk meshing.
 - LOD1 downsampling, LOD thresholds and hysteresis, and greedy reduction against the v0.0.4 mesher.
 - Frustum plane extraction and conservative AABB rejection for inside, outside, and straddling boxes.
+- Light storage and BFS: open columns, overhang falloff, dark caves, lamp falloff, water transmission, and cross-chunk borders.
+- Per-corner AO, packed light/AO, greedy splitting at light/AO changes, and LOD1 representative sampling.
 - Mesh revisions, stale-result rejection, queue priority, background dropping, and the two-upload cap.
 - The deterministic 8x8 stress fixture and the stress-mode world path.
 - Player AABB, gravity, jumping, ground detection, axis order, collision response, and tunnelling limits.

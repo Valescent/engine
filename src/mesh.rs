@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use glam::IVec3;
 
 use crate::block::Block;
+use crate::light::LightField;
 use crate::voxel::Vertex;
 use crate::world::{CHUNK_SIZE, ChunkCoord, World};
 
@@ -133,52 +134,92 @@ impl BorderBlocks {
 }
 
 /// Builds one non-indexed greedy mesh for a chunk snapshot.
-pub(crate) fn build_mesh(snapshot: &ChunkSnapshot, border: &BorderBlocks, lod: Lod) -> Vec<Vertex> {
+///
+/// `light` supplies per-corner sky and block light; without it, light values are
+/// zero and only AO is baked.
+pub(crate) fn build_mesh(
+    snapshot: &ChunkSnapshot,
+    border: &BorderBlocks,
+    light: Option<&LightField>,
+    lod: Lod,
+) -> Vec<Vertex> {
+    let full_block = |local: IVec3| {
+        if in_chunk(local) {
+            snapshot.block(local)
+        } else {
+            border.block(local)
+        }
+    };
+
     match lod {
-        Lod::Lod0 => greedy(lod.cell_count(), lod.scale(), |cell| {
-            if in_chunk(cell) {
-                snapshot.block(cell)
-            } else {
-                border.block(cell)
-            }
-        }),
+        Lod::Lod0 => greedy(
+            lod.cell_count(),
+            lod.scale(),
+            &full_block,
+            &|cell| cell,
+            &full_block,
+            light,
+        ),
         Lod::Lod1 => {
-            let cells = downsample(snapshot);
-            greedy(lod.cell_count(), lod.scale(), |cell| {
+            let (cells, representatives) = downsample(snapshot);
+            let cell_block = |cell: IVec3| {
                 if in_grid(cell, LOD1_SIZE) {
                     cells[index_in(cell, LOD1_SIZE)]
                 } else {
                     Block::Air
                 }
-            })
+            };
+            let anchor = |cell: IVec3| {
+                if in_grid(cell, LOD1_SIZE) {
+                    representatives[index_in(cell, LOD1_SIZE)]
+                } else {
+                    IVec3::ZERO
+                }
+            };
+            greedy(
+                lod.cell_count(),
+                lod.scale(),
+                &cell_block,
+                &anchor,
+                &full_block,
+                light,
+            )
         }
     }
 }
 
 /// Downsamples a chunk to one block per LOD1 cell: solid when any source block
 /// is solid, typed by the topmost solid source, then lowest X, then lowest Z.
-fn downsample(snapshot: &ChunkSnapshot) -> Box<[Block]> {
+///
+/// Also returns the full-resolution local coordinate of each cell's
+/// representative block, which light and AO sampling use.
+fn downsample(snapshot: &ChunkSnapshot) -> (Box<[Block]>, Box<[IVec3]>) {
     let cells = usize::try_from(LOD1_SIZE * LOD1_SIZE * LOD1_SIZE).expect("grid fits");
     let mut grid = vec![Block::Air; cells].into_boxed_slice();
+    let mut representatives = vec![IVec3::ZERO; cells].into_boxed_slice();
     for cell in grid_coords(LOD1_SIZE) {
-        grid[index_in(cell, LOD1_SIZE)] = downsample_cell(snapshot, cell);
+        let (block, representative) = downsample_cell(snapshot, cell);
+        let index = index_in(cell, LOD1_SIZE);
+        grid[index] = block;
+        representatives[index] = representative;
     }
-    grid
+    (grid, representatives)
 }
 
-fn downsample_cell(snapshot: &ChunkSnapshot, cell: IVec3) -> Block {
+fn downsample_cell(snapshot: &ChunkSnapshot, cell: IVec3) -> (Block, IVec3) {
     let base = cell * LOD1_SCALE;
     for y in (0..LOD1_SCALE).rev() {
         for x in 0..LOD1_SCALE {
             for z in 0..LOD1_SCALE {
-                let block = snapshot.block(base + IVec3::new(x, y, z));
+                let local = base + IVec3::new(x, y, z);
+                let block = snapshot.block(local);
                 if block.is_solid() {
-                    return block;
+                    return (block, local);
                 }
             }
         }
     }
-    Block::Air
+    (Block::Air, IVec3::ZERO)
 }
 
 /// Face order from the v0.0.5 spec: `+X`, `-X`, `+Y`, `-Y`, `+Z`, `-Z`.
@@ -192,7 +233,18 @@ const FACE_NORMALS: [IVec3; 6] = [
 ];
 
 /// Builds a width-first greedy mesh of the solid cells returned by `block_at`.
-fn greedy(n: i32, scale: f32, block_at: impl Fn(IVec3) -> Block) -> Vec<Vertex> {
+///
+/// `anchor` maps a cell to the full-resolution coordinate whose light and AO
+/// are sampled; LOD0 uses the cell itself and LOD1 uses its representative
+/// block. `full_block_at` resolves solidity for that sampling.
+fn greedy(
+    n: i32,
+    scale: f32,
+    block_at: &impl Fn(IVec3) -> Block,
+    anchor: &impl Fn(IVec3) -> IVec3,
+    full_block_at: &impl Fn(IVec3) -> Block,
+    light: Option<&LightField>,
+) -> Vec<Vertex> {
     let cells = usize::try_from(n * n).expect("mask fits");
     let mut vertices = Vec::new();
 
@@ -209,7 +261,7 @@ fn greedy(n: i32, scale: f32, block_at: impl Fn(IVec3) -> Block) -> Vec<Vertex> 
                     mask[mask_index(u, v, n)] = Some(MaskKey {
                         block,
                         layer: face_layer(block, normal),
-                        ao: corner_ao(&block_at, cell, face),
+                        corners: corner_values(full_block_at, light, anchor(cell), face),
                     });
                 }
             }
@@ -248,6 +300,7 @@ fn greedy(n: i32, scale: f32, block_at: impl Fn(IVec3) -> Block) -> Vec<Vertex> 
                         (slice, u, v, width, height),
                         scale,
                         key.layer,
+                        key.corners,
                     );
                 }
             }
@@ -262,27 +315,54 @@ fn greedy(n: i32, scale: f32, block_at: impl Fn(IVec3) -> Block) -> Vec<Vertex> 
 struct MaskKey {
     block: Block,
     layer: u32,
-    /// Ambient occlusion at the four cell corners, in quad corner order.
-    ao: [u8; 4],
+    /// Packed light/AO at the four cell corners, in quad corner order.
+    corners: [u32; 4],
 }
 
-/// Ambient occlusion at the four corners of one exposed face.
+/// Ambient occlusion and light at the four corners of one exposed face.
 ///
 /// Each corner inspects the outside cell and its two edge neighbours plus the
-/// diagonal in the plane of the face. Two solid edges fully occlude the corner.
-fn corner_ao(block_at: &impl Fn(IVec3) -> Block, cell: IVec3, face: usize) -> [u8; 4] {
-    let outside = cell + FACE_NORMALS[face];
+/// diagonal in the plane of the face. Two solid edges fully occlude the corner;
+/// light is the component-wise maximum over the non-solid cells in that set.
+fn corner_values(
+    block_at: &impl Fn(IVec3) -> Block,
+    light: Option<&LightField>,
+    anchor: IVec3,
+    face: usize,
+) -> [u32; 4] {
+    let outside = anchor + FACE_NORMALS[face];
     let (u_axis, v_axis) = face_axes(face);
     [(-1, -1), (-1, 1), (1, 1), (1, -1)].map(|(su, sv)| {
-        let side_a = block_at(outside + u_axis * su).is_solid();
-        let side_b = block_at(outside + v_axis * sv).is_solid();
-        let diagonal = block_at(outside + u_axis * su + v_axis * sv).is_solid();
-        if side_a && side_b {
+        let side_a = outside + u_axis * su;
+        let side_b = outside + v_axis * sv;
+        let diagonal = side_a + v_axis * sv;
+        let solid_a = block_at(side_a).is_solid();
+        let solid_b = block_at(side_b).is_solid();
+        let solid_diagonal = block_at(diagonal).is_solid();
+        let ao = if solid_a && solid_b {
             0
         } else {
-            3 - (u8::from(side_a) + u8::from(side_b) + u8::from(diagonal))
+            3 - (u8::from(solid_a) + u8::from(solid_b) + u8::from(solid_diagonal))
+        };
+
+        let mut sky = 0;
+        let mut block = 0;
+        if let Some(light) = light {
+            for candidate in [outside, side_a, side_b, diagonal] {
+                if block_at(candidate).is_solid() {
+                    continue;
+                }
+                sky = sky.max(light.sky(candidate));
+                block = block.max(light.block(candidate));
+            }
         }
+        pack_light_ao(sky, block, ao)
     })
+}
+
+/// Packs sky light, block light, and AO into the vertex field.
+pub(crate) fn pack_light_ao(sky: u8, block: u8, ao: u8) -> u32 {
+    u32::from(sky & 0xF) | (u32::from(block & 0xF) << 4) | (u32::from(ao & 0x3) << 8)
 }
 
 fn face_axes(face: usize) -> (IVec3, IVec3) {
@@ -324,6 +404,7 @@ fn push_quad(
     quad: (i32, i32, i32, i32, i32),
     scale: f32,
     layer: u32,
+    corner_light: [u32; 4],
 ) {
     let (slice, u0, v0, width, height) = quad;
     let corners = quad_corners(face, slice, u0, v0, width, height);
@@ -338,6 +419,7 @@ fn push_quad(
             normal,
             uv: uvs[index],
             layer,
+            light_ao: corner_light[index],
         });
     }
 }
@@ -446,8 +528,22 @@ mod tests {
         build_mesh(
             &ChunkSnapshot::new(world, chunk),
             &BorderBlocks::new(world, chunk),
+            None,
             lod,
         )
+    }
+
+    fn lit_mesh(world: &World, chunk: ChunkCoord, lod: Lod) -> Vec<Vertex> {
+        build_mesh(
+            &ChunkSnapshot::new(world, chunk),
+            &BorderBlocks::new(world, chunk),
+            world.light_field(chunk).map(std::convert::AsRef::as_ref),
+            lod,
+        )
+    }
+
+    fn ao(aos: [u8; 4]) -> [u32; 4] {
+        aos.map(|ao| pack_light_ao(0, 0, ao))
     }
 
     /// One expected quad: `(face, slice, u0, v0, width, height, scale, layer)`.
@@ -467,6 +563,7 @@ mod tests {
                 normal,
                 uv: uvs[index],
                 layer,
+                light_ao: pack_light_ao(0, 0, 3),
             })
             .to_vec()
     }
@@ -599,7 +696,7 @@ mod tests {
     fn lod1_downsample_is_solid_when_any_source_is_solid() {
         let world = world_with(&[(IVec3::new(1, 1, 1), Block::Stone)]);
         let snapshot = ChunkSnapshot::new(&world, chunk_at(IVec3::ZERO));
-        let cells = downsample(&snapshot);
+        let (cells, _) = downsample(&snapshot);
 
         assert_eq!(cells[index_in(IVec3::ZERO, LOD1_SIZE)], Block::Stone);
         assert_eq!(cells[index_in(IVec3::X, LOD1_SIZE)], Block::Air);
@@ -616,14 +713,14 @@ mod tests {
         let snapshot = ChunkSnapshot::new(&world, chunk_at(IVec3::ZERO));
 
         assert_eq!(
-            downsample(&snapshot)[index_in(IVec3::ZERO, LOD1_SIZE)],
+            downsample(&snapshot).0[index_in(IVec3::ZERO, LOD1_SIZE)],
             Block::Dirt
         );
 
         let mut tie = World::default();
         tie.set_block(IVec3::new(1, 1, 1), Block::Leaves);
         tie.set_block(IVec3::new(0, 1, 1), Block::Wood);
-        let tie = downsample(&ChunkSnapshot::new(&tie, chunk_at(IVec3::ZERO)));
+        let tie = downsample(&ChunkSnapshot::new(&tie, chunk_at(IVec3::ZERO))).0;
         assert_eq!(tie[index_in(IVec3::ZERO, LOD1_SIZE)], Block::Wood);
     }
 
@@ -684,7 +781,10 @@ mod tests {
             }
         };
 
-        assert_eq!(corner_ao(&block_at, IVec3::ZERO, 2), [3, 3, 3, 3]);
+        assert_eq!(
+            corner_values(&block_at, None, IVec3::ZERO, 2),
+            ao([3, 3, 3, 3])
+        );
     }
 
     #[test]
@@ -704,7 +804,10 @@ mod tests {
             }
         };
 
-        assert_eq!(corner_ao(&block_at, IVec3::ZERO, 2), [3, 3, 2, 2]);
+        assert_eq!(
+            corner_values(&block_at, None, IVec3::ZERO, 2),
+            ao([3, 3, 2, 2])
+        );
     }
 
     #[test]
@@ -725,7 +828,10 @@ mod tests {
             }
         };
 
-        assert_eq!(corner_ao(&block_at, IVec3::ZERO, 2), [3, 2, 0, 2]);
+        assert_eq!(
+            corner_values(&block_at, None, IVec3::ZERO, 2),
+            ao([3, 2, 0, 2])
+        );
     }
 
     #[test]
@@ -745,7 +851,10 @@ mod tests {
             }
         };
 
-        assert_eq!(corner_ao(&block_at, IVec3::ZERO, 2), [3, 3, 2, 3]);
+        assert_eq!(
+            corner_values(&block_at, None, IVec3::ZERO, 2),
+            ao([3, 3, 2, 3])
+        );
     }
 
     #[test]
@@ -768,6 +877,76 @@ mod tests {
 
         assert_eq!(top_vertices(&flat), 6);
         assert_eq!(top_vertices(&occluded), 18);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn lit_faces_carry_sky_light() {
+        let mut world = World::default();
+        for x in 0..4 {
+            for z in 0..4 {
+                world.set_block(IVec3::new(x, 0, z), Block::Stone);
+            }
+        }
+        world.relight();
+
+        let vertices = lit_mesh(&world, chunk_at(IVec3::ZERO), Lod::Lod0);
+        let top = vertices
+            .iter()
+            .find(|vertex| vertex.normal == [0.0, 1.0, 0.0])
+            .expect("top face");
+
+        assert_eq!(top.light_ao & 0xF, 15);
+        assert_eq!((top.light_ao >> 4) & 0xF, 0);
+        assert_eq!((top.light_ao >> 8) & 0x3, 3);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn faces_carry_block_light_from_a_nearby_lamp() {
+        let mut world = World::default();
+        world.set_block(IVec3::ZERO, Block::Stone);
+        world.set_block(IVec3::new(2, 0, 0), Block::Lamp);
+        world.relight();
+
+        let vertices = lit_mesh(&world, chunk_at(IVec3::ZERO), Lod::Lod0);
+        let side = vertices
+            .iter()
+            .find(|vertex| vertex.normal == [1.0, 0.0, 0.0])
+            .expect("+X face");
+
+        assert_eq!((side.light_ao >> 4) & 0xF, 13);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn lod1_light_uses_the_representative_block() {
+        let mut world = World::default();
+        for x in 0..4 {
+            for z in 0..4 {
+                world.set_block(IVec3::new(x, 0, z), Block::Stone);
+            }
+        }
+        world.relight();
+
+        let vertices = lit_mesh(&world, chunk_at(IVec3::ZERO), Lod::Lod1);
+        let top = vertices
+            .iter()
+            .find(|vertex| vertex.normal == [0.0, 1.0, 0.0] && vertex.position[1] == 2.0)
+            .expect("LOD1 top face");
+
+        assert_eq!(top.light_ao & 0xF, 15);
+        assert_eq!((top.light_ao >> 8) & 0x3, 3);
+    }
+
+    #[test]
+    fn pack_light_ao_matches_the_spec_bit_ranges() {
+        assert_eq!(pack_light_ao(0, 0, 0), 0);
+        assert_eq!(pack_light_ao(15, 0, 0), 0xF);
+        assert_eq!(pack_light_ao(0, 15, 0), 0xF0);
+        assert_eq!(pack_light_ao(0, 0, 3), 0x300);
+        assert_eq!(pack_light_ao(0xF, 0xF, 3), 0x3FF);
+        assert_eq!(pack_light_ao(0xFF, 0xFF, 0xFF), 0x3FF);
     }
 
     #[test]

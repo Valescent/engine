@@ -201,7 +201,7 @@ See [v0.0.6 scope](dev/v0.0.6-scope.md) for the concrete deliverables, technical
 
 #### 1. Voxel lighting
 - [x] Flood-fill (BFS) propagation for sky light and block light
-- [ ] Bake light values / ambient occlusion into vertex data
+- [x] Bake light values / ambient occlusion into vertex data
 
 #### 2. Shader lighting and fog
 - [ ] Dynamic directional light (sun/moon)

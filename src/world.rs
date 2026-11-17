@@ -9,6 +9,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use glam::{IVec3, Vec3};
 use thiserror::Error;
@@ -134,6 +135,7 @@ pub(crate) fn local_index(local: IVec3) -> usize {
 #[derive(Debug, Default)]
 pub(crate) struct World {
     chunks: HashMap<ChunkCoord, Chunk>,
+    light: HashMap<ChunkCoord, Arc<LightField>>,
 }
 
 impl World {
@@ -168,6 +170,7 @@ impl World {
             chunk_data.blocks.remove(&local);
             if chunk_data.is_empty() {
                 self.chunks.remove(&chunk);
+                self.light.remove(&chunk);
             }
         } else {
             self.chunks
@@ -196,18 +199,25 @@ impl World {
             .map(|(coordinate, chunk)| (*coordinate, chunk))
     }
 
+    /// Light field for a chunk, when light has been computed.
+    pub(crate) fn light_field(&self, chunk: ChunkCoord) -> Option<&Arc<LightField>> {
+        self.light.get(&chunk)
+    }
+
     /// Recomputes sky and block light for every stored chunk.
     ///
     /// Light is derived state, so this runs after loading and whenever a world
     /// is built in memory.
     pub(crate) fn relight(&mut self) {
         let ceiling = light::sky_ceiling(self);
-        let fields: Vec<(ChunkCoord, LightField)> = self
+        let fields: Vec<(ChunkCoord, Arc<LightField>)> = self
             .chunks
             .keys()
-            .map(|&chunk| (chunk, light::compute(self, chunk, &ceiling)))
+            .map(|&chunk| (chunk, Arc::new(light::compute(self, chunk, &ceiling))))
             .collect();
+        self.light.clear();
         for (chunk, field) in fields {
+            self.light.insert(chunk, Arc::clone(&field));
             let Some(data) = self.chunks.get_mut(&chunk) else {
                 continue;
             };

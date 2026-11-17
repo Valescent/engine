@@ -24,6 +24,7 @@ struct VertexIn {
     @location(1) normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
     @location(3) layer: u32,
+    @location(4) light_ao: u32,
 };
 
 struct VertexOut {
@@ -31,6 +32,7 @@ struct VertexOut {
     @location(0) normal: vec3<f32>,
     @location(1) uv: vec2<f32>,
     @location(2) @interpolate(flat) layer: u32,
+    @location(3) light: vec3<f32>,
 };
 
 @vertex
@@ -41,6 +43,11 @@ fn vs_main(input: VertexIn) -> VertexOut {
     output.normal = input.normal;
     output.uv = input.uv;
     output.layer = input.layer;
+    output.light = vec3<f32>(
+        f32(input.light_ao & 0xFu) / 15.0,
+        f32((input.light_ao >> 4u) & 0xFu) / 15.0,
+        f32((input.light_ao >> 8u) & 0x3u),
+    );
     return output;
 }
 
@@ -48,11 +55,12 @@ fn vs_main(input: VertexIn) -> VertexOut {
 fn fs_main(input: VertexOut) -> @location(0) vec4<f32> {
     let light_direction = normalize(vec3<f32>(0.35, 0.85, 0.45));
     let shade = 0.45 + 0.55 * max(dot(normalize(input.normal), light_direction), 0.0);
+    let ao = 0.55 + 0.15 * input.light.z;
     let albedo = textureSample(
         block_texture,
         block_sampler,
         input.uv,
         i32(input.layer),
     );
-    return vec4<f32>(albedo.rgb * shade, 1.0);
+    return vec4<f32>(albedo.rgb * shade * ao, 1.0);
 }

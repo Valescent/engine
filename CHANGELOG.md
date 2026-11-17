@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Optional `rayon-pool` feature plus `ENGINE_MESH_POOL=rayon` to run the same binary with a rayon mesh pool instead of micropool for real-engine A/B comparisons.
 - 4-bit sky and block light per chunk with BFS propagation across a 3x3x3 chunk neighbourhood, including the one-cell border field meshing will sample. Light is derived state and is recomputed after loading.
 - `Lamp` (solid, emits block light 14) and `Water` (non-solid, passes light without attenuation) blocks, with lamp and water texture layers; the array grows to ten layers.
+- Ambient occlusion shading and per-corner sky/block light in chunk meshes: vertices carry a packed `light_ao` field from a 40-byte layout, quads split at light and AO discontinuities, and corners darken in crevices.
 
 ### Fixed
 

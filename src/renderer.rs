@@ -887,6 +887,11 @@ fn create_pipeline(
                 offset: 32,
                 shader_location: 3,
             },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Uint32,
+                offset: 36,
+                shader_location: 4,
+            },
         ],
     };
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {

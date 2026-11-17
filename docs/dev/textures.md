@@ -19,7 +19,7 @@ tiles.
 ## Current state
 
 - `src/shader.wgsl` samples the `texture_2d_array` with the per-vertex UV and layer.
-- `src/voxel.rs` defines `Vertex { position, normal, uv, layer }`, 36 bytes.
+- `src/voxel.rs` defines `Vertex { position, normal, uv, layer, light_ao }`, 40 bytes.
 - `src/renderer.rs` has three bind groups: group 0 camera uniform, group 1 per-chunk origin, and
   group 2 texture array plus sampler.
 - The ten tiles are generated procedurally in `src/renderer.rs`; there is no image decoder or
@@ -254,7 +254,7 @@ serve every chunk draw; do not create a bind group per block type.
 
 ## Vertex and shader contract
 
-- The vertex is 36 bytes: position, normal, UV, and layer.
+- The vertex is 40 bytes: position, normal, UV, layer, and packed light/AO. Light/AO is described in [Shader authoring](shaders.md#light-ao-and-water-v006).
 - Greedy quad UVs are in block units, so a merged face can span several tiles; the repeat sampler tiles the texture within the array layer.
 - The layer is a `u32` vertex attribute and a flat interstage value. All four vertices of a face or
   greedy quad carry the same layer.
@@ -320,7 +320,7 @@ CPU tests should cover:
 - `TEXTURE_LAYERS` matches the spec and the generated array depth.
 - Every solid block returns `Some(FaceLayers)`; Air returns `None`; Water returns `Some`.
 - The top, side, and bottom mapping for every block, including Grass and Wood.
-- The 36-byte vertex layout, UV offsets, and layer offset.
+- The 40-byte vertex layout, UV offsets, layer offset, and light/AO offset.
 - Deterministic tile generation: the same layer produces the same bytes; every tile is exactly
   16x16 RGBA8.
 - Layer indices are contiguous from `0` to `TEXTURE_LAYERS - 1`.
@@ -346,7 +346,7 @@ Nsight, or PIX to inspect the array view and sampler state.
 - The texture is one `D2Array` with the expected size, format, layer count, and one mip.
 - The sampler is nearest, repeat in U/V, no mipmaps, and no anisotropy.
 - The bind group layout and WGSL group/binding declarations match.
-- The vertex UV/layer fields match the 36-byte layout and the mesher.
+- The vertex UV/layer/light-AO fields match the 40-byte layout and the mesher.
 - No flat atlas, per-block texture binding, or runtime image loader was added.
 - Tile generation is deterministic and does not pin non-normative pixels.
 - CPU mapping tests and manual GPU acceptance pass.
