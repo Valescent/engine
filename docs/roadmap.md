@@ -8,7 +8,7 @@ Milestones move from **planned** to **in progress** to **shipped**. Each one nam
 | 0.0.2   | Camera                | Shipped  |
 | 0.0.3   | Chunks and Meshes     | Shipped  |
 | 0.0.4   | Playable              | Shipped  |
-| 0.0.5   | Scale and Performance | In progress |
+| 0.0.5   | Scale and Performance | Shipped  |
 | 0.0.6   | Atmosphere            | Planned  |
 | 0.0.7   | Advanced Horizons     | Planned  |
 
@@ -156,7 +156,7 @@ See [v0.0.4 scope](dev/v0.0.4-scope.md) for the concrete deliverables, technical
 
 ## v0.0.5: Scale and Performance
 
-**Status:** In progress - implementation complete, release pending.
+**Status:** Shipped
 
 **Goal:** Large view distances at a smooth frame rate.
 

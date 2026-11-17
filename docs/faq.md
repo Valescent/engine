@@ -1,7 +1,7 @@
 # FAQ and troubleshooting
 
 Short answers for the current pre-alpha engine and a symptom-first index into the detailed pages.
-Only v0.0.1 through v0.0.4 are released; v0.0.5 is implemented and awaiting release, and v0.0.6-v0.0.7 are planned. A planned feature is not a bug.
+Only v0.0.1 through v0.0.5 are released; v0.0.6-v0.0.7 are planned. A planned feature is not a bug.
 
 | I need to... | Start here |
 |---|---|
@@ -14,7 +14,7 @@ Only v0.0.1 through v0.0.4 are released; v0.0.5 is implemented and awaiting rele
 
 ## Project and status
 
-The current release is **v0.0.4, pre-alpha**; v0.0.5 is implemented and awaiting release. The build has a
+The current release is **v0.0.5, pre-alpha**. The build has a
 window, a depth-buffered `wgpu` renderer, chunked greedy meshes with two LODs, frustum culling, asynchronous remeshing, walking and collision,
 block breaking and placing, procedural block textures, and `VCHK` chunk saves. It does not have
 lighting, fog, water, terrain generation, or Tracy.
@@ -22,10 +22,10 @@ lighting, fog, water, terrain generation, or Tracy.
 | Question | Answer |
 |---|---|
 | What is Valescent Engine? | A voxel engine written in Rust on `wgpu` and `winit`. It is source-available, not open source. See [the landing page](index.md) and [Architecture](dev/architecture.md). |
-| What is the current version? | `0.0.4` is released. `0.0.5` is implemented and awaiting release; v0.0.6-v0.0.7 are planned. See [Roadmap](roadmap.md) and [Changelog](https://github.com/Valescent/engine/blob/main/CHANGELOG.md). |
+| What is the current version? | `0.0.5` is released. v0.0.6-v0.0.7 are planned. See [Roadmap](roadmap.md) and [Changelog](https://github.com/Valescent/engine/blob/main/CHANGELOG.md). |
 | Is it stable? | No. It is pre-alpha and there is no public API stability before 1.0. See [Versioning](dev/versioning.md). |
 | Why is the version `0.0.x`? | Each roadmap milestone ships as the next `0.0.x` patch. There is no `0.1.0` or `1.0.0` target yet. See [Versioning](dev/versioning.md#semantic-versioning). |
-| What is next? | Release v0.0.5, then v0.0.6 for lighting, fog, and water. See [the roadmap](roadmap.md). |
+| What is next? | v0.0.6 for lighting, fog, and water. See [the roadmap](roadmap.md). |
 | Why is the world one mesh? | It is not. Since v0.0.3 each non-empty chunk owns its mesh and GPU buffer. See [Architecture](dev/architecture.md#rendering-resources). |
 | Can I walk, fall, jump, or collide? | Yes. WASD walks, `Space` jumps, and swept AABB collision stops the player at solid blocks. See [Controls](dev/controls.md#bindings-by-milestone). |
 | Can I break or place blocks? | Yes, after the cursor is captured. Left click breaks and right click places the selected block. See [Interaction](dev/controls.md#interaction-current-v004). |
