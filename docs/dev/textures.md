@@ -11,7 +11,7 @@ tiles.
 | `docs/assets/` documentation assets | Current, not game textures |
 | Procedural block tiles | Current (v0.0.4) |
 | Texture array, sampler, and UV/layer vertex | Current (v0.0.4) |
-| Eight layers now; ten and eleven planned | Current (v0.0.4); v0.0.6 and v0.0.7 extend it |
+| Ten layers now; eleven planned | Current; v0.0.7 adds sand |
 | External asset pipeline and texture packs | Deferred; needs a separate decision |
 | Mipmaps, anisotropy, and compression | Not used; deferred |
 | Automated GPU texture tests | Not implemented; CPU mapping tests and manual GPU checks |
@@ -22,7 +22,7 @@ tiles.
 - `src/voxel.rs` defines `Vertex { position, normal, uv, layer }`, 36 bytes.
 - `src/renderer.rs` has three bind groups: group 0 camera uniform, group 1 per-chunk origin, and
   group 2 texture array plus sampler.
-- The eight tiles are generated procedurally in `src/renderer.rs`; there is no image decoder or
+- The ten tiles are generated procedurally in `src/renderer.rs`; there is no image decoder or
   texture asset crate.
 - `docs/assets/` holds documentation-site files such as `custom.js` and `voxel-fallback.svg`. It is
   not a game texture directory.

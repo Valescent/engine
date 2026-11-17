@@ -1,7 +1,7 @@
 //! Block types and their texture-array layers.
 
 /// Number of layers in the block texture array.
-pub(crate) const TEXTURE_LAYERS: u32 = 8;
+pub(crate) const TEXTURE_LAYERS: u32 = 10;
 
 /// Edge length of one block texture tile in pixels.
 pub(crate) const TEXTURE_SIZE: u32 = 16;
@@ -16,6 +16,8 @@ pub(crate) enum Block {
     Grass = 3,
     Wood = 4,
     Leaves = 5,
+    Lamp = 6,
+    Water = 7,
 }
 
 /// Texture-array layers used by one block's top, side, and bottom faces.
@@ -29,7 +31,7 @@ pub(crate) struct FaceLayers {
 impl Block {
     /// Returns whether the block blocks movement and culls faces.
     pub(crate) fn is_solid(self) -> bool {
-        self != Self::Air
+        !matches!(self, Self::Air | Self::Water)
     }
 
     /// Returns the face layers for a solid block, or `None` for air.
@@ -54,6 +56,8 @@ impl Block {
                 bottom: 5,
             }),
             Self::Leaves => Some(uniform(7)),
+            Self::Lamp => Some(uniform(8)),
+            Self::Water => Some(uniform(9)),
         }
     }
 
@@ -66,6 +70,8 @@ impl Block {
             3 => Some(Self::Grass),
             4 => Some(Self::Wood),
             5 => Some(Self::Leaves),
+            6 => Some(Self::Lamp),
+            7 => Some(Self::Water),
             _ => None,
         }
     }
@@ -101,24 +107,28 @@ mod tests {
             Block::Grass,
             Block::Wood,
             Block::Leaves,
+            Block::Lamp,
+            Block::Water,
         ];
 
         for (id, block) in blocks.into_iter().enumerate() {
             assert_eq!(block.id(), u8::try_from(id).unwrap());
             assert_eq!(Block::from_id(block.id()), Some(block));
         }
-        assert_eq!(Block::from_id(6), None);
+        assert_eq!(Block::from_id(8), None);
     }
 
     #[test]
-    fn only_air_is_not_solid() {
+    fn only_air_and_water_are_not_solid() {
         assert!(!Block::Air.is_solid());
+        assert!(!Block::Water.is_solid());
         for block in [
             Block::Stone,
             Block::Dirt,
             Block::Grass,
             Block::Wood,
             Block::Leaves,
+            Block::Lamp,
         ] {
             assert!(block.is_solid());
         }
@@ -137,6 +147,8 @@ mod tests {
             (Block::Grass, 2, 3, 4),
             (Block::Wood, 5, 6, 5),
             (Block::Leaves, 7, 7, 7),
+            (Block::Lamp, 8, 8, 8),
+            (Block::Water, 9, 9, 9),
         ];
 
         for (block, top, side, bottom) in expected {

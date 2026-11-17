@@ -7,6 +7,7 @@
 mod block;
 mod camera;
 mod frustum;
+mod light;
 mod mesh;
 mod mesher;
 mod metrics;
@@ -122,11 +123,15 @@ fn no_vsync_requested() -> bool {
 /// Stress mode never touches `directory`.
 fn world_for(stress: bool, directory: &Path) -> Result<World, SaveError> {
     if stress {
-        Ok(stress_world())
+        let mut world = stress_world();
+        world.relight();
+        Ok(world)
     } else if directory.exists() {
         World::load_chunks(directory)
     } else {
-        Ok(demo_world())
+        let mut world = demo_world();
+        world.relight();
+        Ok(world)
     }
 }
 
@@ -1033,7 +1038,7 @@ mod tests {
     #[ignore = "benchmark; run with cargo test --release --lib bench_hot_paths -- --ignored --nocapture"]
     #[allow(clippy::cast_precision_loss)]
     fn bench_hot_paths() {
-        let world = stress_world();
+        let mut world = stress_world();
         let chunks: Vec<_> = world.iter_chunks().map(|(chunk, _)| chunk).collect();
         let chunk_count = chunks.len();
 
@@ -1075,13 +1080,18 @@ mod tests {
         }
         let update = started.elapsed();
 
+        let started = Instant::now();
+        world.relight();
+        let relight = started.elapsed();
+
         let per_chunk = |elapsed: Duration| elapsed.as_secs_f64() * 1000.0 / chunk_count as f64;
         eprintln!(
-            "chunks={chunk_count} prepare_ms/chunk={:.3} lod0_ms/chunk={:.3} lod1_ms/chunk={:.3} lod0_vertices={lod0_vertices} lod1_vertices={lod1_vertices} update_us/frame={:.1}",
+            "chunks={chunk_count} prepare_ms/chunk={:.3} lod0_ms/chunk={:.3} lod1_ms/chunk={:.3} lod0_vertices={lod0_vertices} lod1_vertices={lod1_vertices} update_us/frame={:.1} relight_ms/chunk={:.3}",
             elapsed_ms(prepare, chunk_count),
             per_chunk(lod0),
             per_chunk(lod1),
             update.as_secs_f64() * 1e6 / f64::from(frames),
+            per_chunk(relight),
         );
     }
 

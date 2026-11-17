@@ -9,7 +9,7 @@ Milestones move from **planned** to **in progress** to **shipped**. Each one nam
 | 0.0.3   | Chunks and Meshes     | Shipped  |
 | 0.0.4   | Playable              | Shipped  |
 | 0.0.5   | Scale and Performance | Shipped  |
-| 0.0.6   | Atmosphere            | Planned  |
+| 0.0.6   | Atmosphere            | In progress |
 | 0.0.7   | Advanced Horizons     | Planned  |
 
 ## v0.0.1: The Foundation
@@ -189,7 +189,7 @@ See [v0.0.5 scope](dev/v0.0.5-scope.md) for the concrete deliverables, technical
 
 ## v0.0.6: Atmosphere
 
-**Status:** Planned
+**Status:** In progress - light storage and propagation implemented.
 
 **Goal:** Make the world look good.
 
@@ -200,7 +200,7 @@ See [v0.0.6 scope](dev/v0.0.6-scope.md) for the concrete deliverables, technical
 ### Milestones
 
 #### 1. Voxel lighting
-- [ ] Flood-fill (BFS) propagation for sky light and block light
+- [x] Flood-fill (BFS) propagation for sky light and block light
 - [ ] Bake light values / ambient occlusion into vertex data
 
 #### 2. Shader lighting and fog

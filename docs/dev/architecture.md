@@ -108,7 +108,7 @@ See [Coordinates](coordinates.md) for the full conventions, including chunk and 
 - The chunk pipeline uses `Depth32Float`, depth write enabled, and `Less` depth comparison.
 - The camera uniform is a 64-byte `mat4x4<f32>` in bind group 0.
 - Each non-empty chunk owns an origin uniform in bind group 1 and up to two vertex buffers, one per LOD. The vertex shader adds the origin to the chunk-local vertex position.
-- Bind group 2 holds one eight-layer `texture_2d_array` and a nearest-filtering sampler that repeats in U and V and clamps in W. The table is in [Texture and asset pipeline](textures.md).
+- Bind group 2 holds one ten-layer `texture_2d_array` and a nearest-filtering sampler that repeats in U and V and clamps in W. The table is in [Texture and asset pipeline](textures.md).
 - A chunk's previous buffer stays visible until a newer mesh for its LOD is uploaded. Edits invalidate both LODs; a chunk with an empty mesh releases that buffer.
 - Draw calls are frustum-culled per chunk AABB and counted with visible chunks, visible vertices, draw calls, worker rebuild time, and upload time in the once-per-second debug log.
 - With the local `tracy` feature, the renderer requests timestamp queries when the adapter supports them, wraps the pass in a `wgpu-profiler` GPU zone, and ends the profiler frame after present. See [Profiling](profiling.md).

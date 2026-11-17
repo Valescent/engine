@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tracy-profiler` thread lanes are named `chunk worker` once per pool thread.
 - `ENGINE_NO_VSYNC=1` starts with vsync off for benchmark runs, and an ignored `bench_hot_paths` test measures snapshot preparation, LOD meshing, and collision in release. Results are recorded in [Benchmark results](docs/dev/benchmarks.md).
 - Optional `rayon-pool` feature plus `ENGINE_MESH_POOL=rayon` to run the same binary with a rayon mesh pool instead of micropool for real-engine A/B comparisons.
+- 4-bit sky and block light per chunk with BFS propagation across a 3x3x3 chunk neighbourhood, including the one-cell border field meshing will sample. Light is derived state and is recomputed after loading.
+- `Lamp` (solid, emits block light 14) and `Water` (non-solid, passes light without attenuation) blocks, with lamp and water texture layers; the array grows to ten layers.
 
 ### Fixed
 
@@ -20,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `VCHK` writes format version 2 and still loads version 1; v2 accepts block IDs `1..=7` and v1 `1..=5`.
 - CI runs Clippy, tests, and rustdoc without `--all-features`, so the profiling feature's C++ client stays out of the runners.
 - The engine keeps rendering while the window is unfocused, so a live profiler keeps receiving frames instead of freezing the capture. Input remains focus-gated and occlusion still pauses the loop.
 

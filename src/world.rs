@@ -14,15 +14,21 @@ use glam::{IVec3, Vec3};
 use thiserror::Error;
 
 use crate::block::Block;
+use crate::light::{self, LightField};
 
 /// Edge length of a chunk on every axis.
 pub(crate) const CHUNK_SIZE: i32 = 32;
+
+/// Cells in one chunk.
+pub(crate) const CHUNK_CELLS: usize = (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) as usize;
 
 /// Chunks touched by an edit, in deterministic order.
 pub(crate) type DirtyChunks = BTreeSet<ChunkCoord>;
 
 const MAGIC: [u8; 4] = *b"VCHK";
-const FORMAT_VERSION: u16 = 1;
+const FORMAT_VERSION: u16 = 2;
+const OLDEST_FORMAT_VERSION: u16 = 1;
+const V1_MAX_BLOCK_ID: u8 = 5;
 const HEADER_BYTES: usize = 22;
 const RECORD_BYTES: usize = 4;
 const MAX_BLOCK_COUNT: u32 = 32_768;
@@ -73,15 +79,53 @@ impl PartialOrd for ChunkCoord {
 }
 
 /// Blocks owned by one chunk, stored in local coordinates.
-#[derive(Debug, Default)]
+///
+/// Light is derived state: it is recomputed from blocks and never saved. Both
+/// arrays hold one `0..=15` value per cell in local coordinates.
+#[derive(Debug)]
 pub(crate) struct Chunk {
     pub(crate) blocks: HashMap<IVec3, Block>,
+    pub(crate) sky_light: Box<[u8]>,
+    pub(crate) block_light: Box<[u8]>,
+}
+
+impl Default for Chunk {
+    fn default() -> Self {
+        Self {
+            blocks: HashMap::new(),
+            sky_light: vec![0; CHUNK_CELLS].into_boxed_slice(),
+            block_light: vec![0; CHUNK_CELLS].into_boxed_slice(),
+        }
+    }
 }
 
 impl Chunk {
     fn is_empty(&self) -> bool {
         self.blocks.is_empty()
     }
+
+    /// Returns `(sky, block)` light at a local coordinate.
+    #[cfg(test)]
+    pub(crate) fn light(&self, local: IVec3) -> (u8, u8) {
+        let index = local_index(local);
+        (self.sky_light[index], self.block_light[index])
+    }
+
+    /// Stores `(sky, block)` light at a local coordinate.
+    pub(crate) fn set_light(&mut self, local: IVec3, sky: u8, block: u8) {
+        let index = local_index(local);
+        self.sky_light[index] = sky;
+        self.block_light[index] = block;
+    }
+}
+
+/// Linear index of a chunk-local coordinate.
+pub(crate) fn local_index(local: IVec3) -> usize {
+    let stride = usize::try_from(CHUNK_SIZE).expect("chunk size fits");
+    let x = usize::try_from(local.x).expect("local coordinate fits");
+    let y = usize::try_from(local.y).expect("local coordinate fits");
+    let z = usize::try_from(local.z).expect("local coordinate fits");
+    (x * stride + y) * stride + z
 }
 
 /// Chunked block world.
@@ -150,6 +194,32 @@ impl World {
         self.chunks
             .iter()
             .map(|(coordinate, chunk)| (*coordinate, chunk))
+    }
+
+    /// Recomputes sky and block light for every stored chunk.
+    ///
+    /// Light is derived state, so this runs after loading and whenever a world
+    /// is built in memory.
+    pub(crate) fn relight(&mut self) {
+        let ceiling = light::sky_ceiling(self);
+        let fields: Vec<(ChunkCoord, LightField)> = self
+            .chunks
+            .keys()
+            .map(|&chunk| (chunk, light::compute(self, chunk, &ceiling)))
+            .collect();
+        for (chunk, field) in fields {
+            let Some(data) = self.chunks.get_mut(&chunk) else {
+                continue;
+            };
+            for x in 0..CHUNK_SIZE {
+                for y in 0..CHUNK_SIZE {
+                    for z in 0..CHUNK_SIZE {
+                        let local = IVec3::new(x, y, z);
+                        data.set_light(local, field.sky(local), field.block(local));
+                    }
+                }
+            }
+        }
     }
 
     /// Returns every solid block inside the inclusive world-coordinate bounds.
@@ -224,6 +294,7 @@ impl World {
             }
             world.chunks.insert(header_chunk, chunk);
         }
+        world.relight();
         Ok(world)
     }
 
@@ -360,7 +431,7 @@ fn parse_chunk(bytes: &[u8]) -> Result<(ChunkCoord, Chunk), SaveError> {
         return Err(SaveError::Truncated);
     }
     let version = u16::from_le_bytes([bytes[4], bytes[5]]);
-    if version != FORMAT_VERSION {
+    if !(OLDEST_FORMAT_VERSION..=FORMAT_VERSION).contains(&version) {
         return Err(SaveError::UnsupportedVersion(version));
     }
     if bytes.len() < HEADER_BYTES {
@@ -402,15 +473,26 @@ fn parse_chunk(bytes: &[u8]) -> Result<(ChunkCoord, Chunk), SaveError> {
         }
 
         let block_id = bytes[offset + 3];
+        let max_id = if version == 1 {
+            V1_MAX_BLOCK_ID
+        } else {
+            u8::MAX
+        };
         let block = Block::from_id(block_id)
-            .filter(|block| *block != Block::Air)
+            .filter(|block| *block != Block::Air && block_id <= max_id)
             .ok_or(SaveError::InvalidBlockId(block_id))?;
         if blocks.insert(local, block).is_some() {
             return Err(SaveError::DuplicateRecord(local));
         }
     }
 
-    Ok((header_chunk, Chunk { blocks }))
+    Ok((
+        header_chunk,
+        Chunk {
+            blocks,
+            ..Chunk::default()
+        },
+    ))
 }
 
 fn serialize_chunk(chunk_coord: ChunkCoord, chunk: &Chunk) -> Vec<u8> {
@@ -800,13 +882,13 @@ mod tests {
     fn unsupported_version_is_rejected() {
         let directory = temp_dir("version");
         let mut bytes = header(ChunkCoord(IVec3::ZERO), 1);
-        bytes[4..6].copy_from_slice(&2_u16.to_le_bytes());
+        bytes[4..6].copy_from_slice(&3_u16.to_le_bytes());
         bytes.extend_from_slice(&[0, 0, 0, 1]);
         write_raw(&directory, "chunk_0_0_0.vchk", &bytes);
 
         assert!(matches!(
             World::load_chunks(&directory),
-            Err(SaveError::UnsupportedVersion(2))
+            Err(SaveError::UnsupportedVersion(3))
         ));
         fs::remove_dir_all(directory).unwrap();
     }
@@ -845,7 +927,7 @@ mod tests {
 
     #[test]
     fn invalid_or_air_block_ids_are_rejected() {
-        for block_id in [0, 6] {
+        for block_id in [0, 8] {
             let directory = temp_dir("block-id");
             let mut bytes = header(ChunkCoord(IVec3::ZERO), 1);
             bytes.extend_from_slice(&[0, 0, 0, block_id]);
@@ -857,6 +939,74 @@ mod tests {
             ));
             fs::remove_dir_all(directory).unwrap();
         }
+    }
+
+    #[test]
+    fn version_2_round_trips_lamp_and_water() {
+        let directory = temp_dir("v2-round-trip");
+        let mut world = World::default();
+        world.set_block(IVec3::new(1, 0, 0), Block::Lamp);
+        world.set_block(IVec3::new(2, 0, 0), Block::Water);
+        world.save_chunks(&directory).unwrap();
+
+        let loaded = World::load_chunks(&directory).unwrap();
+
+        assert_eq!(loaded.block(IVec3::new(1, 0, 0)), Block::Lamp);
+        assert_eq!(loaded.block(IVec3::new(2, 0, 0)), Block::Water);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn version_1_rejects_the_new_block_ids() {
+        for block_id in [6, 7] {
+            let directory = temp_dir("v1-block-id");
+            let mut bytes = header(ChunkCoord(IVec3::ZERO), 1);
+            bytes[4..6].copy_from_slice(&1_u16.to_le_bytes());
+            bytes.extend_from_slice(&[0, 0, 0, block_id]);
+            write_raw(&directory, "chunk_0_0_0.vchk", &bytes);
+
+            assert!(matches!(
+                World::load_chunks(&directory),
+                Err(SaveError::InvalidBlockId(value)) if value == block_id
+            ));
+            fs::remove_dir_all(directory).unwrap();
+        }
+    }
+
+    #[test]
+    fn version_1_loads_the_old_block_ids() {
+        let directory = temp_dir("v1-load");
+        let mut bytes = header(ChunkCoord(IVec3::ZERO), 2);
+        bytes[4..6].copy_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&[0, 0, 0, 1, 1, 0, 0, 5]);
+        write_raw(&directory, "chunk_0_0_0.vchk", &bytes);
+
+        let world = World::load_chunks(&directory).unwrap();
+
+        assert_eq!(world.block(IVec3::new(0, 0, 0)), Block::Stone);
+        assert_eq!(world.block(IVec3::new(1, 0, 0)), Block::Leaves);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn loading_recomputes_light_and_never_reads_it_from_disk() {
+        let directory = temp_dir("relight");
+        let mut world = World::default();
+        for x in 0..4 {
+            for z in 0..4 {
+                world.set_block(IVec3::new(x, 0, z), Block::Dirt);
+            }
+        }
+        world.set_block(IVec3::new(2, 1, 2), Block::Lamp);
+        world.save_chunks(&directory).unwrap();
+
+        let loaded = World::load_chunks(&directory).unwrap();
+        let chunk = loaded.chunk(chunk_at(IVec3::ZERO)).unwrap();
+
+        assert_eq!(chunk.light(IVec3::new(2, 1, 2)), (0, 14));
+        assert_eq!(chunk.light(IVec3::new(2, 3, 2)).0, 15);
+        assert_eq!(chunk.sky_light.iter().copied().max(), Some(15));
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

@@ -108,7 +108,7 @@ must match:
   size, `min_binding_size`, and the Rust write together.
 - The chunk origin buffer holds `vec3<f32>` plus one padding float, which matches the uniform
   address-space alignment. The padding is not read.
-- The texture is an eight-layer `Rgba8UnormSrgb` array with one mip level. The sampler is nearest
+- The texture is a ten-layer `Rgba8UnormSrgb` array with one mip level. The sampler is nearest
   on every filter and repeats in U and V, clamping in W.
 - WGSL matrices are column-major. `Mat4::to_cols_array()` writes them column by column, so
   `view_projection * vec4(position, 1.0)` is correct. Do not transpose the matrix on the CPU or in

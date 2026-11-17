@@ -439,7 +439,7 @@ world; it also removes other ignored files. Use the backup and move procedure ab
 
 ### Stress mode
 
-`ENGINE_STRESS_SCENE=1` (planned v0.0.5) selects an in-memory stress world. It must not read or
+`ENGINE_STRESS_SCENE=1` selects an in-memory stress world. It must not read or
 modify `world/chunks/`, and it disables save on exit and `Ctrl+S`. Do not use stress mode to test
 backups, restores, or resets. Unset it to use the normal world.
 
@@ -451,7 +451,7 @@ backups, restores, or resets. Unset it to use the normal world.
 | v2 | v0.0.6 | `1..=7` | Lamp and Water; no seed file |
 | v3 | v0.0.7 | `1..=8` | Sand, empty modified chunks, modified-only saves, `world/seed` |
 
-- The v0.0.7 loader accepts v1, v2, and v3. Older builds accept only the versions they know. The
+- The current loader accepts v1 and v2; v0.0.7 adds v3. Older builds accept only the versions they know. The
   writer writes the latest version supported by that build.
 - Older chunk files load in newer builds. Newer chunk files may not load in older builds.
 - Do not edit the version byte or unknown block IDs to force a load. Upgrade the engine or restore

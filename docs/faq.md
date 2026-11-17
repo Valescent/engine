@@ -82,7 +82,7 @@ lighting, fog, water, or terrain generation.
 | Faces are missing or inside-out | Check winding, front face, and cull mode. See [Shader debugging](dev/shaders.md#debug). |
 | Resizing or minimising breaks the image | The renderer reconfigures the surface and clamps zero-sized dimensions. See [Rendering resources](dev/architecture.md#rendering-resources). |
 | Why do blocks show noise patterns? | The current tiles are deterministic procedural placeholders, not final art. See [Texture pipeline](dev/textures.md). |
-| Where are the game textures or assets? | There are no image assets yet. v0.0.4 generates eight procedural tiles; `docs/assets/` is documentation-site material. See [Current texture state](dev/textures.md#current-state). |
+| Where are the game textures or assets? | There are no image assets yet. v0.0.6 generates ten procedural tiles; `docs/assets/` is documentation-site material. See [Current texture state](dev/textures.md#current-state). |
 | Can I use my own textures or a texture pack? | Not yet. The external asset pipeline and texture-pack format are deferred. See [External assets](dev/textures.md#external-assets-and-texture-packs). |
 | Why is there no lighting, fog, or water? | They are planned for v0.0.6. See the [Roadmap](roadmap.md) and [v0.0.6 spec](specs/v0.0.6.md). |
 | How do I add or change a shader? | Follow [Shader authoring](dev/shaders.md). A shader edit needs a rebuild; there is no hot reload. |
