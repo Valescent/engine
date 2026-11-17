@@ -2,7 +2,7 @@
 
 A voxel engine written in Rust.
 
-**Status: pre-alpha.** `0.0.1` through `0.0.3` are released. `0.0.4` (walking, block interaction, textures, and persistence) is implemented and awaiting release. Nothing past that is built yet.
+**Status: pre-alpha.** `0.0.1` through `0.0.4` are released. You can walk, break and place blocks, and keep the world across restarts. Nothing past that is built yet.
 
 This is **source-available, not open source**. The code is under the [PolyForm Shield License 1.0.0](LICENSE): you may read, run, modify, and redistribute it, but not use it to provide a product that competes with it. PolyForm Shield is not OSI-approved.
 

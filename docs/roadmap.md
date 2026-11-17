@@ -7,7 +7,7 @@ Milestones move from **planned** to **in progress** to **shipped**. Each one nam
 | 0.0.1   | The Foundation        | Shipped  |
 | 0.0.2   | Camera                | Shipped  |
 | 0.0.3   | Chunks and Meshes     | Shipped  |
-| 0.0.4   | Playable              | In progress |
+| 0.0.4   | Playable              | Shipped  |
 | 0.0.5   | Scale and Performance | Planned  |
 | 0.0.6   | Atmosphere            | Planned  |
 | 0.0.7   | Advanced Horizons     | Planned  |
@@ -119,7 +119,7 @@ See [v0.0.3 scope](dev/v0.0.3-scope.md) for the concrete deliverables, technical
 
 ## v0.0.4: Playable
 
-**Status:** In progress — implementation complete, release pending.
+**Status:** Shipped
 
 **Goal:** Walk around, break and place blocks, persist the world.
 
