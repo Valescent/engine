@@ -6,10 +6,12 @@
 //! as a [`LightField`].
 
 use std::collections::{HashMap, VecDeque};
+use std::time::Duration;
 
 use glam::IVec3;
 
 use crate::block::Block;
+use crate::mesh::ChunkSnapshot;
 use crate::world::{CHUNK_SIZE, ChunkCoord, World};
 
 /// Maximum light level.
@@ -36,8 +38,43 @@ const NEIGHBOURS: [IVec3; 6] = [
     IVec3::NEG_Z,
 ];
 
-/// Highest solid block per world column, or absent when the column is empty.
-pub(crate) type SkyCeiling = HashMap<(i32, i32), i32>;
+/// Immutable blocks a light job needs: the 3x3x3 neighbourhood plus every
+/// loaded chunk above it in the same 3x3 footprint.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct LightSnapshot {
+    cells: HashMap<ChunkCoord, ChunkSnapshot>,
+}
+
+impl LightSnapshot {
+    /// Copies the blocks a light job for `chunk` needs out of the world.
+    pub(crate) fn new(world: &World, chunk: ChunkCoord) -> Self {
+        let origin = chunk.coordinates();
+        let mut cells = HashMap::new();
+        for (coordinate, _) in world.iter_chunks() {
+            let delta = coordinate.coordinates() - origin;
+            if delta.x.abs() <= 1 && delta.z.abs() <= 1 && delta.y >= -1 {
+                cells.insert(coordinate, ChunkSnapshot::new(world, coordinate));
+            }
+        }
+        Self { cells }
+    }
+}
+
+/// One light computation queued on the worker pool.
+pub(crate) struct LightJob {
+    pub(crate) chunk: ChunkCoord,
+    pub(crate) revision: u64,
+    pub(crate) snapshot: LightSnapshot,
+}
+
+/// A finished light field, tagged for stale-result rejection.
+#[derive(Debug)]
+pub(crate) struct LightResult {
+    pub(crate) chunk: ChunkCoord,
+    pub(crate) revision: u64,
+    pub(crate) light: LightField,
+    pub(crate) elapsed: Duration,
+}
 
 /// Sky and block light for a chunk plus one border cell.
 ///
@@ -61,26 +98,31 @@ impl LightField {
     }
 }
 
-/// Computes light for one chunk from the world's blocks and sky ceiling.
-pub(crate) fn compute(world: &World, chunk: ChunkCoord, ceiling: &SkyCeiling) -> LightField {
+/// Computes light for one chunk from an immutable snapshot.
+pub(crate) fn compute(snapshot: &LightSnapshot, chunk: ChunkCoord) -> LightField {
     let cells = usize::try_from(GRID * GRID * GRID).expect("light grid fits in usize");
     let base = chunk.world_origin() - IVec3::splat(SIZE);
 
     let mut blocks = vec![Block::Air; cells];
-    for dx in -1..=1 {
-        for dy in -1..=1 {
-            for dz in -1..=1 {
-                let neighbour = chunk.offset(IVec3::new(dx, dy, dz));
-                let Some(data) = world.chunk(neighbour) else {
-                    continue;
-                };
-                let offset = data_origin_offset(neighbour, base);
-                for (&local, &block) in &data.blocks {
-                    let cell = offset + local;
-                    if in_grid(cell) {
-                        blocks[grid_index(cell)] = block;
-                    }
-                }
+    let mut ceiling: HashMap<(i32, i32), i32> = HashMap::new();
+    for (coordinate, data) in &snapshot.cells {
+        let origin = coordinate.world_origin();
+        let offset = origin - base;
+        for cell in chunk_cells() {
+            let block = data.block(cell);
+            if block == Block::Air {
+                continue;
+            }
+            if block.is_solid() {
+                let world = origin + cell;
+                ceiling
+                    .entry((world.x, world.z))
+                    .and_modify(|top| *top = (*top).max(world.y))
+                    .or_insert(world.y);
+            }
+            let grid_cell = offset + cell;
+            if in_grid(grid_cell) {
+                blocks[grid_index(grid_cell)] = block;
             }
         }
     }
@@ -141,25 +183,6 @@ pub(crate) fn compute(world: &World, chunk: ChunkCoord, ceiling: &SkyCeiling) ->
     }
 }
 
-/// Highest solid block in every column of the world.
-pub(crate) fn sky_ceiling(world: &World) -> SkyCeiling {
-    let mut ceiling = SkyCeiling::new();
-    for (chunk, data) in world.iter_chunks() {
-        let origin = chunk.world_origin();
-        for (&local, &block) in &data.blocks {
-            if !block.is_solid() {
-                continue;
-            }
-            let world = origin + local;
-            ceiling
-                .entry((world.x, world.z))
-                .and_modify(|top: &mut i32| *top = (*top).max(world.y))
-                .or_insert(world.y);
-        }
-    }
-    ceiling
-}
-
 /// Spreads queued values through six-connected non-solid cells.
 ///
 /// A step into `Water` keeps the value; every other step loses one level.
@@ -201,13 +224,13 @@ fn extract(values: &[u8]) -> Box<[u8]> {
     field
 }
 
+fn chunk_cells() -> impl Iterator<Item = IVec3> {
+    (0..SIZE).flat_map(|x| (0..SIZE).flat_map(move |y| (0..SIZE).map(move |z| IVec3::new(x, y, z))))
+}
+
 fn grid_coords() -> impl Iterator<Item = IVec3> {
     (-1..=SIZE)
         .flat_map(|x| (-1..=SIZE).flat_map(move |y| (-1..=SIZE).map(move |z| IVec3::new(x, y, z))))
-}
-
-fn data_origin_offset(chunk: ChunkCoord, base: IVec3) -> IVec3 {
-    chunk.world_origin() - base
 }
 
 fn in_grid(cell: IVec3) -> bool {
@@ -248,7 +271,7 @@ mod tests {
     }
 
     fn field(world: &World, chunk: ChunkCoord) -> LightField {
-        compute(world, chunk, &sky_ceiling(world))
+        compute(&LightSnapshot::new(world, chunk), chunk)
     }
 
     #[test]

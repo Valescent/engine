@@ -322,8 +322,10 @@ END {
 		for (j = 1; j <= open_count[inprogress]; j++)
 			printf "  <li>%s</li>\n", openitem[inprogress, j]
 		print "</ul>"
+	} else if (inprogress > 0) {
+		print "**Every box in " secname[inprogress] " is ticked — ship it.**"
 	} else {
-		print "No open boxes in the current milestone. Pick the next one from the [roadmap](roadmap.md)."
+		print "No milestone is in progress. Pick one from the [roadmap](roadmap.md)."
 	}
 	print ""
 	print "See the [roadmap](roadmap.md) for the full milestone text."

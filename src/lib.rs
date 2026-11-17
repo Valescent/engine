@@ -288,11 +288,16 @@ impl App {
         }
         debug!(spawn = ?player.position, stress, "player spawned");
 
+        let mut queue = MeshQueue::default();
+        for (chunk, _) in world.iter_chunks() {
+            queue.mark_light_built(chunk);
+        }
+
         Self {
             window: None,
             renderer: None,
             mesher: None,
-            queue: MeshQueue::default(),
+            queue,
             stats: FrameAccumulator::default(),
             stress,
             world,
@@ -324,43 +329,26 @@ impl App {
         event_loop.exit();
     }
 
-    /// Queues an urgent full-detail rebuild and a background coarse rebuild.
+    /// Invalidates the edited chunks and queues urgent light work.
+    ///
+    /// Meshes wait for the accepted light field, then rebuild through the
+    /// normal request path.
     fn invalidate_chunks(&mut self, dirty: &DirtyChunks) {
         let started = Instant::now();
-        self.queue.invalidate(dirty);
+        let light_dirty = self.world.light_dirty(dirty);
+        self.queue.invalidate(&light_dirty);
 
         if let Some(pool) = self.mesher.clone() {
-            for chunk in dirty {
-                if self.world.chunk(*chunk).is_some() {
-                    self.queue.request(
-                        &*pool,
-                        &self.world,
-                        *chunk,
-                        Lod::Lod0,
-                        MeshKind::Opaque,
-                        Priority::Urgent,
-                    );
-                    self.queue.request(
-                        &*pool,
-                        &self.world,
-                        *chunk,
-                        Lod::Lod1,
-                        MeshKind::Opaque,
-                        Priority::Background,
-                    );
-                    self.queue.request(
-                        &*pool,
-                        &self.world,
-                        *chunk,
-                        Lod::Lod0,
-                        MeshKind::Water,
-                        Priority::Background,
-                    );
-                } else {
-                    self.queue.remove(*chunk);
-                    if let Some(renderer) = &mut self.renderer {
-                        renderer.remove_chunk(*chunk);
-                    }
+            for chunk in &light_dirty {
+                self.queue
+                    .request_light(&*pool, &self.world, *chunk, Priority::Urgent);
+            }
+        }
+        for chunk in dirty {
+            if self.world.chunk(*chunk).is_none() {
+                self.queue.remove(*chunk);
+                if let Some(renderer) = &mut self.renderer {
+                    renderer.remove_chunk(*chunk);
                 }
             }
         }
@@ -370,7 +358,7 @@ impl App {
         }
 
         debug!(
-            dirty_chunks = dirty.len(),
+            dirty_chunks = light_dirty.len(),
             vertices = self.renderer.as_ref().map_or(0, Renderer::total_vertices),
             rebuild_ms = started.elapsed().as_secs_f64() * 1000.0,
             "rebuilt chunks"
@@ -408,6 +396,11 @@ impl App {
         let player_chunk = ChunkCoord::from_world(feet).0;
 
         for (chunk, _) in self.world.iter_chunks() {
+            if !self.queue.light_is_current(chunk) {
+                self.queue
+                    .request_light(pool, &self.world, chunk, Priority::Background);
+                continue;
+            }
             let lod = self.queue.desired_lod(chunk, player_chunk);
             if !self.queue.is_built(chunk, lod, MeshKind::Opaque) {
                 self.queue.request(
@@ -436,10 +429,15 @@ impl App {
 
     fn upload_finished_meshes(&mut self, pool: &dyn MeshPool) {
         profiling::scope!("mesh upload");
-        let (results, rebuild) = collect_finished(&mut self.queue, pool, MAX_UPLOADS_PER_FRAME);
+        let (results, lights, rebuild) =
+            collect_finished(&mut self.queue, pool, MAX_UPLOADS_PER_FRAME);
         let rebuild_ms = rebuild.as_secs_f64() * 1000.0;
         self.stats.rebuild_ms += rebuild_ms;
         self.stats.last_rebuild_ms = rebuild_ms;
+
+        for light in lights {
+            self.world.set_light_field(light.chunk, light.light);
+        }
 
         let Some(renderer) = &mut self.renderer else {
             return;
@@ -897,8 +895,11 @@ fn hotbar_block(code: KeyCode) -> Option<Block> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
+    use mesher::{Job, JobResult};
 
     #[test]
     fn mouse_look_requires_capture_and_focus() {
@@ -956,6 +957,82 @@ mod tests {
                 .aabb()
                 .intersects_block(IVec3::new(SPAWN_X, 1, SPAWN_Z))
         );
+    }
+
+    #[derive(Debug, Default)]
+    struct InlinePool {
+        light_jobs: AtomicUsize,
+        mesh_jobs: AtomicUsize,
+        results: Mutex<Vec<JobResult>>,
+    }
+
+    impl MeshPool for InlinePool {
+        fn submit(&self, job: Job, _priority: Priority) -> bool {
+            match job {
+                Job::Light(job) => {
+                    self.light_jobs.fetch_add(1, Ordering::Relaxed);
+                    let light = light::compute(&job.snapshot, job.chunk);
+                    self.results.lock().unwrap().push(JobResult::Light(
+                        crate::light::LightResult {
+                            chunk: job.chunk,
+                            revision: job.revision,
+                            light,
+                            elapsed: Duration::ZERO,
+                        },
+                    ));
+                }
+                Job::Mesh(_) => {
+                    self.mesh_jobs.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            true
+        }
+
+        fn try_recv(&self) -> Option<JobResult> {
+            self.results.lock().unwrap().pop()
+        }
+    }
+
+    #[test]
+    fn an_edit_waits_for_light_before_requesting_meshes() {
+        let mut app = App::new(demo_world());
+        app.player = Player::new(Vec3::new(32.5, 2.5, 32.5));
+        app.camera.set_position(app.player.eye_position());
+        app.camera.look(0.0, 100_000.0);
+
+        let pool = Arc::new(InlinePool::default());
+        app.mesher = Some(pool.clone());
+        let target = IVec3::new(SPAWN_X, 1, SPAWN_Z);
+        let chunk = ChunkCoord::from_world(target).0;
+
+        app.break_block();
+        assert!(!app.queue.light_is_current(chunk));
+        assert!(pool.light_jobs.load(Ordering::Relaxed) >= 1);
+        assert_eq!(pool.mesh_jobs.load(Ordering::Relaxed), 0);
+
+        app.upload_finished_meshes(&*pool);
+        assert!(app.queue.light_is_current(chunk));
+        assert!(app.world.light_field(chunk).is_some());
+
+        app.request_levels(&*pool);
+        assert!(pool.mesh_jobs.load(Ordering::Relaxed) > 0);
+    }
+
+    #[test]
+    fn breaking_a_block_invalidates_light_and_waits_for_rebuild() {
+        let mut app = App::new(demo_world());
+        app.player = Player::new(Vec3::new(32.5, 2.5, 32.5));
+        app.camera.set_position(app.player.eye_position());
+        app.camera.look(0.0, 100_000.0);
+
+        let target = IVec3::new(SPAWN_X, 1, SPAWN_Z);
+        let chunk = ChunkCoord::from_world(target).0;
+        assert!(app.queue.light_is_current(chunk));
+
+        app.break_block();
+
+        assert_eq!(app.world.block(target), Block::Air);
+        assert!(!app.queue.light_is_current(chunk));
     }
 
     #[test]

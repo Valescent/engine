@@ -146,19 +146,21 @@ pub(crate) fn build_mesh(
     let full_block = |local: IVec3| full_block(snapshot, border, local);
 
     let matches = Block::is_solid;
-    let exposed = |cell: IVec3, normal: IVec3| !full_block(cell + normal).is_solid();
     let corners = |anchor: IVec3, face: usize| corner_values(&full_block, light, anchor, face);
 
     match lod {
-        Lod::Lod0 => greedy(
-            lod.cell_count(),
-            lod.scale(),
-            &full_block,
-            &matches,
-            &exposed,
-            &|cell| cell,
-            &corners,
-        ),
+        Lod::Lod0 => {
+            let exposed = |cell: IVec3, normal: IVec3| !full_block(cell + normal).is_solid();
+            greedy(
+                lod.cell_count(),
+                lod.scale(),
+                &full_block,
+                &matches,
+                &exposed,
+                &|cell| cell,
+                &corners,
+            )
+        }
         Lod::Lod1 => {
             let (cells, representatives) = downsample(snapshot);
             let cell_block = |cell: IVec3| {
@@ -175,6 +177,7 @@ pub(crate) fn build_mesh(
                     IVec3::ZERO
                 }
             };
+            let exposed = |cell: IVec3, normal: IVec3| !cell_block(cell + normal).is_solid();
             greedy(
                 lod.cell_count(),
                 lod.scale(),

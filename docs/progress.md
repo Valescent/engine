@@ -8,14 +8,14 @@ tree — by <code>scripts/progress.sh</code>. Regenerate it with
 <div class="pg-hero">
   <div class="pg-panel">
     <span class="pg-kicker">Level 6 · Stonecutter</span>
-    <div class="pg-xp"><span class="pg-xp-num">2,879</span><span class="pg-xp-unit">XP</span></div>
-    <div class="pg-bar pg-bar-lg"><span style="width: 76%"></span></div>
-    <span class="pg-mono">121 XP to level 7</span>
+    <div class="pg-xp"><span class="pg-xp-num">2,934</span><span class="pg-xp-unit">XP</span></div>
+    <div class="pg-bar pg-bar-lg"><span style="width: 87%"></span></div>
+    <span class="pg-mono">66 XP to level 7</span>
   </div>
   <div class="pg-tiles">
     <div class="pg-tile">
       <span class="pg-mono">Commits</span>
-      <span class="pg-num">48</span>
+      <span class="pg-num">49</span>
     </div>
     <div class="pg-tile">
       <span class="pg-mono">Tests</span>
@@ -23,7 +23,7 @@ tree — by <code>scripts/progress.sh</code>. Regenerate it with
     </div>
     <div class="pg-tile">
       <span class="pg-mono">Boxes ticked</span>
-      <span class="pg-num">43/49</span>
+      <span class="pg-num">45/49</span>
     </div>
     <div class="pg-tile">
       <span class="pg-mono">Releases</span>
@@ -73,8 +73,8 @@ in-progress version is the only score that can move right now.
   </div>
   <div class="pg-row">
     <span class="pg-row-name">v0.0.6: Atmosphere</span>
-    <span class="pg-row-meta">4/6 · In progress</span>
-    <div class="pg-bar "><span style="width: 67%"></span></div>
+    <span class="pg-row-meta">6/6 · In progress</span>
+    <div class="pg-bar "><span style="width: 100%"></span></div>
   </div>
   <div class="pg-row">
     <span class="pg-row-name">v0.0.7: Advanced Horizons</span>
@@ -83,7 +83,7 @@ in-progress version is the only score that can move right now.
   </div>
 </div>
 
-**Overall: 43 of 49 boxes, 88%.**
+**Overall: 45 of 49 boxes, 92%.**
 
 ## Momentum
 
@@ -105,7 +105,7 @@ it is regenerated.
   </div>
   <div class="pg-tile">
     <span class="pg-mono">Last 7 days</span>
-    <span class="pg-num">48 commits</span>
+    <span class="pg-num">49 commits</span>
   </div>
 </div>
 
@@ -127,8 +127,8 @@ it is regenerated.
 </div>
 <span class="pg-mono">14 days ending 2026-11-17 · busiest day 2026-11-14 with 15 commits</span>
 
-Since 2026-11-13: 48 commits across 4 active days, 52 documented changelog entries, 58 docs pages.
-In flight right now: 15 changes waiting in [Unreleased] (added 11, changed 3, fixed 1).
+Since 2026-11-13: 49 commits across 4 active days, 54 documented changelog entries, 58 docs pages.
+In flight right now: 17 changes waiting in [Unreleased] (added 13, changed 3, fixed 1).
 
 ## Achievements
 
@@ -166,7 +166,7 @@ In flight right now: 15 changes waiting in [Unreleased] (added 11, changed 3, fi
   <div class="pg-badge is-locked">
     <span class="pg-badge-mark">07</span>
     <strong>Century Club</strong>
-    <span class="pg-mono">48 of 100 commits.</span>
+    <span class="pg-mono">49 of 100 commits.</span>
   </div>
   <div class="pg-badge is-unlocked">
     <span class="pg-badge-mark">08</span>
@@ -197,12 +197,7 @@ In flight right now: 15 changes waiting in [Unreleased] (added 11, changed 3, fi
 
 ## Next up
 
-The open boxes in **v0.0.6: Atmosphere** — the only score that can move right now:
-
-<ul class="pg-next">
-  <li>Separate mesh layer for transparent blocks</li>
-  <li>Water shader (animated normals; reflections/refractions optional)</li>
-</ul>
+**Every box in v0.0.6: Atmosphere is ticked — ship it.**
 
 See the [roadmap](roadmap.md) for the full milestone text.
 

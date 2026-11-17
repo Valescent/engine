@@ -15,7 +15,7 @@ The engine is a small `winit` and `wgpu` application. This page describes the cu
 | `src/raycast.rs` | DDA voxel traversal, hit result, tie-breaking, and tests. |
 | `src/world.rs` | Chunk and block storage, coordinate conversion, dirty-chunk tracking, `VCHK` save/load, and tests. |
 | `src/mesh.rs` | Greedy meshing, the 2x2x2 LOD1 downsample, LOD selection, chunk snapshots, border blocks, and tests. |
-| `src/mesher.rs` | Mesh jobs, revisions, the bounded micropool `WorkerPool`, finished-result collection, and tests. |
+| `src/mesher.rs` | Mesh and light jobs, revisions, the bounded micropool `WorkerPool`, finished-result collection, and tests. |
 | `src/frustum.rs` | Six-plane frustum extraction and conservative AABB tests. |
 | `src/metrics.rs` | Tracy plots for frame, GPU, chunk, draw, rebuild, upload, and queue metrics; no-ops without the `tracy` feature. |
 | `src/light.rs` | Sky/block light storage accessors, BFS propagation, and the padded `LightField`. |
@@ -34,7 +34,7 @@ The engine is a small `winit` and `wgpu` application. This page describes the cu
 - `Player` owns feet position, velocity, and ground state; it does not read input devices.
 - `World` owns the chunk map and the cached light fields; every stored chunk is non-empty.
 - `mesh::build_mesh` is a pure function over a chunk snapshot and its border blocks.
-- `mesher::WorkerPool` owns the worker threads; `MeshQueue` owns revisions, pending jobs, and desired LODs.
+- `mesher::WorkerPool` owns the worker threads for mesh and light jobs; `MeshQueue` owns revisions, pending jobs, built state, and desired LODs.
 
 The renderer holds an `Arc<Window>` and creates a `Surface<'static>` from it. The application also holds a window clone for redraw requests and cursor capture.
 
@@ -61,7 +61,7 @@ RedrawRequested
   -> raycast and update the block outline
   -> advance the day/night cycle
   -> recalculate each chunk's desired LOD and request missing meshes
-  -> collect up to two finished meshes from the worker pool
+  -> drain finished light and mesh results (two mesh uploads per frame)
   -> upload them and select the active LOD per chunk
   -> extract the frustum from the view-projection
   -> write camera uniform
@@ -88,7 +88,7 @@ See [Controls](controls.md) for binding tables and capture rules.
 - Number keys `1`–`5` select Stone, Dirt, Grass, Wood, or Leaves.
 - `Ctrl+S` saves the world; closing the window saves before exit.
 - `Escape` releases the cursor; losing focus clears held keys and releases the cursor.
-- Breaking and placing call `World::set_block`, invalidate the edited chunks, and queue an urgent LOD0 rebuild plus a background LOD1 rebuild. The dirty count, total vertices, and enqueue time are logged.
+- Breaking and placing call `World::set_block`, then invalidate the owning chunk, its 3x3x3 neighbourhood, and every loaded chunk below it. Urgent light jobs run first; each chunk is remeshed only after its new light field is accepted. The dirty count, total vertices, and enqueue time are logged.
 
 ## Coordinates and data
 

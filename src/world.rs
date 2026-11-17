@@ -199,6 +199,47 @@ impl World {
             .map(|(coordinate, chunk)| (*coordinate, chunk))
     }
 
+    /// Chunks affected by an edit, including light propagation and covered columns.
+    pub(crate) fn light_dirty(&self, dirty: &DirtyChunks) -> DirtyChunks {
+        let mut result = DirtyChunks::new();
+        for chunk in dirty {
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for dz in -1..=1 {
+                        let candidate = chunk.offset(IVec3::new(dx, dy, dz));
+                        if self.chunks.contains_key(&candidate) {
+                            result.insert(candidate);
+                        }
+                    }
+                }
+            }
+            for candidate in self.chunks.keys() {
+                if candidate.0.x == chunk.0.x
+                    && candidate.0.z == chunk.0.z
+                    && candidate.0.y < chunk.0.y
+                {
+                    result.insert(*candidate);
+                }
+            }
+        }
+        result
+    }
+
+    /// Stores an accepted light field and its centre in the chunk arrays.
+    pub(crate) fn set_light_field(&mut self, chunk: ChunkCoord, field: LightField) {
+        if let Some(data) = self.chunks.get_mut(&chunk) {
+            for x in 0..CHUNK_SIZE {
+                for y in 0..CHUNK_SIZE {
+                    for z in 0..CHUNK_SIZE {
+                        let local = IVec3::new(x, y, z);
+                        data.set_light(local, field.sky(local), field.block(local));
+                    }
+                }
+            }
+        }
+        self.light.insert(chunk, Arc::new(field));
+    }
+
     /// Light field for a chunk, when light has been computed.
     pub(crate) fn light_field(&self, chunk: ChunkCoord) -> Option<&Arc<LightField>> {
         self.light.get(&chunk)
@@ -209,11 +250,13 @@ impl World {
     /// Light is derived state, so this runs after loading and whenever a world
     /// is built in memory.
     pub(crate) fn relight(&mut self) {
-        let ceiling = light::sky_ceiling(self);
         let fields: Vec<(ChunkCoord, Arc<LightField>)> = self
             .chunks
             .keys()
-            .map(|&chunk| (chunk, Arc::new(light::compute(self, chunk, &ceiling))))
+            .map(|&chunk| {
+                let snapshot = light::LightSnapshot::new(self, chunk);
+                (chunk, Arc::new(light::compute(&snapshot, chunk)))
+            })
             .collect();
         self.light.clear();
         for (chunk, field) in fields {
@@ -747,6 +790,34 @@ mod tests {
         assert_eq!(world.iter_chunks().count(), 1);
         world.set_block(b, Block::Air);
         assert_eq!(world.iter_chunks().count(), 0);
+    }
+
+    #[test]
+    fn light_dirty_covers_neighbours_and_columns_below() {
+        let mut world = World::default();
+        let chunks = [
+            IVec3::new(0, 0, 0),
+            IVec3::new(1, 0, 0),
+            IVec3::new(0, 0, 1),
+            IVec3::new(0, 1, 0),
+            IVec3::new(0, -1, 0),
+            IVec3::new(2, 0, 0),
+            IVec3::new(0, 0, 2),
+        ];
+        for origin in chunks {
+            world.set_block(origin * CHUNK_SIZE, Block::Stone);
+        }
+
+        let dirty = DirtyChunks::from([chunk_at(IVec3::new(0, 32, 0))]);
+        let light = world.light_dirty(&dirty);
+
+        assert!(light.contains(&chunk_at(IVec3::new(0, 32, 0))));
+        assert!(light.contains(&chunk_at(IVec3::new(32, 0, 0))));
+        assert!(light.contains(&chunk_at(IVec3::new(0, 0, 32))));
+        assert!(light.contains(&chunk_at(IVec3::new(0, 0, 0))));
+        assert!(light.contains(&chunk_at(IVec3::new(0, -32, 0))));
+        assert!(!light.contains(&chunk_at(IVec3::new(64, 0, 0))));
+        assert!(!light.contains(&chunk_at(IVec3::new(0, 0, 64))));
     }
 
     #[test]

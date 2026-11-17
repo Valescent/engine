@@ -189,7 +189,7 @@ See [v0.0.5 scope](dev/v0.0.5-scope.md) for the concrete deliverables, technical
 
 ## v0.0.6: Atmosphere
 
-**Status:** In progress - light storage and propagation implemented.
+**Status:** In progress - implementation complete, release pending.
 
 **Goal:** Make the world look good.
 

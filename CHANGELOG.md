@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `T` skips one hour and `F4` toggles the v0.0.4 unlit debug shading.
 - Water (`Water`, block ID 7) renders as a separate transparent full-resolution mesh with animated normals, alpha `0.65`, depth writes off, and blending after all opaque chunks.
 - The demo world has a small pond; water is not on the hotbar.
+- Edits recompute sky and block light on the worker pool: the edited chunk, its 3x3x3 neighbourhood, and loaded chunks below are invalidated, and each is remeshed after its new light field is accepted.
 
 ### Fixed
 

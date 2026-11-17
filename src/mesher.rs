@@ -6,7 +6,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use crate::light::LightField;
+use crate::light::{LightField, LightJob, LightResult, LightSnapshot};
 use crate::mesh::{BorderBlocks, ChunkSnapshot, Lod, build_mesh, build_water_mesh, select_lod};
 use crate::voxel::Vertex;
 use crate::world::{ChunkCoord, DirtyChunks, World};
@@ -48,6 +48,19 @@ pub(crate) struct MeshJob {
     pub(crate) light: Option<Arc<LightField>>,
 }
 
+/// One unit of work for the pool.
+pub(crate) enum Job {
+    Mesh(MeshJob),
+    Light(LightJob),
+}
+
+/// A finished job of either kind.
+#[derive(Debug)]
+pub(crate) enum JobResult {
+    Mesh(MeshResult),
+    Light(LightResult),
+}
+
 /// One finished mesh, tagged so stale results can be discarded.
 #[derive(Debug)]
 pub(crate) struct MeshResult {
@@ -62,15 +75,15 @@ pub(crate) struct MeshResult {
 /// Non-blocking access to worker threads.
 pub(crate) trait MeshPool: Send + Sync {
     /// Submits a job, returning whether it was accepted.
-    fn submit(&self, job: MeshJob, priority: Priority) -> bool;
-    fn try_recv(&self) -> Option<MeshResult>;
+    fn submit(&self, job: Job, priority: Priority) -> bool;
+    fn try_recv(&self) -> Option<JobResult>;
 }
 
 /// micropool-backed pool, with a bounded backlog that drops background work.
 #[derive(Debug)]
 pub(crate) struct WorkerPool {
-    sender: Sender<MeshResult>,
-    receiver: Mutex<Receiver<MeshResult>>,
+    sender: Sender<JobResult>,
+    receiver: Mutex<Receiver<JobResult>>,
     in_flight: Arc<AtomicUsize>,
     capacity: usize,
 }
@@ -90,7 +103,7 @@ impl WorkerPool {
 }
 
 impl MeshPool for WorkerPool {
-    fn submit(&self, job: MeshJob, priority: Priority) -> bool {
+    fn submit(&self, job: Job, priority: Priority) -> bool {
         let in_flight = self.in_flight.load(Ordering::Relaxed);
         if !admit(priority, in_flight, self.capacity) {
             return false;
@@ -105,7 +118,7 @@ impl MeshPool for WorkerPool {
         true
     }
 
-    fn try_recv(&self) -> Option<MeshResult> {
+    fn try_recv(&self) -> Option<JobResult> {
         receive_result(&self.receiver)
     }
 }
@@ -114,8 +127,8 @@ impl MeshPool for WorkerPool {
 #[cfg(feature = "rayon-pool")]
 #[derive(Debug)]
 pub(crate) struct RayonPool {
-    sender: Sender<MeshResult>,
-    receiver: Mutex<Receiver<MeshResult>>,
+    sender: Sender<JobResult>,
+    receiver: Mutex<Receiver<JobResult>>,
     in_flight: Arc<AtomicUsize>,
     capacity: usize,
 }
@@ -137,7 +150,7 @@ impl RayonPool {
 
 #[cfg(feature = "rayon-pool")]
 impl MeshPool for RayonPool {
-    fn submit(&self, job: MeshJob, priority: Priority) -> bool {
+    fn submit(&self, job: Job, priority: Priority) -> bool {
         let in_flight = self.in_flight.load(Ordering::Relaxed);
         if !admit(priority, in_flight, self.capacity) {
             return false;
@@ -152,7 +165,7 @@ impl MeshPool for RayonPool {
         true
     }
 
-    fn try_recv(&self) -> Option<MeshResult> {
+    fn try_recv(&self) -> Option<JobResult> {
         receive_result(&self.receiver)
     }
 }
@@ -180,27 +193,44 @@ pub(crate) fn create_pool() -> Arc<dyn MeshPool> {
 }
 
 /// Runs one job and reports its result, then releases the in-flight slot.
-fn run_job(job: &MeshJob, sender: &Sender<MeshResult>, counter: &AtomicUsize) {
+fn run_job(job: &Job, sender: &Sender<JobResult>, counter: &AtomicUsize) {
     name_worker_thread();
-    profiling::scope!("chunk mesh");
     let started = Instant::now();
-    let mesh = match job.kind {
-        MeshKind::Opaque => build_mesh(&job.snapshot, &job.border, job.light.as_deref(), job.lod),
-        MeshKind::Water => build_water_mesh(&job.snapshot, &job.border, job.light.as_deref()),
-    };
-    let result = MeshResult {
-        chunk: job.chunk,
-        lod: job.lod,
-        kind: job.kind,
-        revision: job.revision,
-        mesh,
-        elapsed: started.elapsed(),
+    let result = match job {
+        Job::Mesh(job) => {
+            profiling::scope!("chunk mesh");
+            let mesh = match job.kind {
+                MeshKind::Opaque => {
+                    build_mesh(&job.snapshot, &job.border, job.light.as_deref(), job.lod)
+                }
+                MeshKind::Water => {
+                    build_water_mesh(&job.snapshot, &job.border, job.light.as_deref())
+                }
+            };
+            JobResult::Mesh(MeshResult {
+                chunk: job.chunk,
+                lod: job.lod,
+                kind: job.kind,
+                revision: job.revision,
+                mesh,
+                elapsed: started.elapsed(),
+            })
+        }
+        Job::Light(job) => {
+            profiling::scope!("chunk light");
+            JobResult::Light(LightResult {
+                chunk: job.chunk,
+                revision: job.revision,
+                light: crate::light::compute(&job.snapshot, job.chunk),
+                elapsed: started.elapsed(),
+            })
+        }
     };
     let _ = sender.send(result);
     counter.fetch_sub(1, Ordering::Relaxed);
 }
 
-fn receive_result(receiver: &Mutex<Receiver<MeshResult>>) -> Option<MeshResult> {
+fn receive_result(receiver: &Mutex<Receiver<JobResult>>) -> Option<JobResult> {
     receiver
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
@@ -222,6 +252,8 @@ pub(crate) struct MeshQueue {
     revisions: HashMap<ChunkCoord, u64>,
     pending: HashMap<(ChunkCoord, Lod, MeshKind), u64>,
     built: HashMap<(ChunkCoord, Lod, MeshKind), u64>,
+    light_pending: HashMap<ChunkCoord, u64>,
+    light_built: HashMap<ChunkCoord, u64>,
     desired: HashMap<ChunkCoord, Lod>,
 }
 
@@ -240,6 +272,8 @@ impl MeshQueue {
             *self.revisions.entry(*chunk).or_insert(0) += 1;
             self.pending.retain(|(pending, _, _), _| pending != chunk);
             self.built.retain(|(built, _, _), _| built != chunk);
+            self.light_pending.remove(chunk);
+            self.light_built.remove(chunk);
         }
     }
 
@@ -250,6 +284,8 @@ impl MeshQueue {
         self.desired.remove(&chunk);
         self.pending.retain(|(pending, _, _), _| *pending != chunk);
         self.built.retain(|(built, _, _), _| *built != chunk);
+        self.light_pending.remove(&chunk);
+        self.light_built.remove(&chunk);
     }
 
     /// Submits a mesh job unless the same revision is already in flight.
@@ -275,9 +311,57 @@ impl MeshQueue {
             border: BorderBlocks::new(world, chunk),
             light: world.light_field(chunk).cloned(),
         };
-        if pool.submit(job, priority) {
+        if pool.submit(Job::Mesh(job), priority) {
             self.pending.insert((chunk, lod, kind), revision);
         }
+    }
+
+    /// Submits a light job unless the same revision is already in flight.
+    pub(crate) fn request_light(
+        &mut self,
+        pool: &dyn MeshPool,
+        world: &World,
+        chunk: ChunkCoord,
+        priority: Priority,
+    ) {
+        let revision = self.revision(chunk);
+        if self.light_pending.get(&chunk) == Some(&revision)
+            || self.light_built.get(&chunk) == Some(&revision)
+        {
+            return;
+        }
+        let job = LightJob {
+            chunk,
+            revision,
+            snapshot: LightSnapshot::new(world, chunk),
+        };
+        if pool.submit(Job::Light(job), priority) {
+            self.light_pending.insert(chunk, revision);
+        }
+    }
+
+    /// Marks a chunk as carrying current light, used after a synchronous relight.
+    pub(crate) fn mark_light_built(&mut self, chunk: ChunkCoord) {
+        self.light_pending.remove(&chunk);
+        self.light_built.insert(chunk, self.revision(chunk));
+    }
+
+    /// Returns whether the chunk has an accepted light field at its revision.
+    pub(crate) fn light_is_current(&self, chunk: ChunkCoord) -> bool {
+        self.light_built.get(&chunk) == Some(&self.revision(chunk))
+    }
+
+    /// Accepts a light result only when its revision and request are current.
+    pub(crate) fn accept_light(&mut self, result: &LightResult) -> bool {
+        if result.revision != self.revision(result.chunk) {
+            return false;
+        }
+        if self.light_pending.get(&result.chunk) != Some(&result.revision) {
+            return false;
+        }
+        self.light_pending.remove(&result.chunk);
+        self.light_built.insert(result.chunk, result.revision);
+        true
     }
 
     /// Accepts a result only when its revision and request are still current.
@@ -326,19 +410,30 @@ pub(crate) fn collect_finished(
     queue: &mut MeshQueue,
     pool: &dyn MeshPool,
     budget: usize,
-) -> (Vec<MeshResult>, Duration) {
-    let mut accepted = Vec::new();
+) -> (Vec<MeshResult>, Vec<LightResult>, Duration) {
+    let mut meshes = Vec::new();
+    let mut lights = Vec::new();
     let mut worker_time = Duration::ZERO;
-    while accepted.len() < budget {
+    while meshes.len() < budget {
         let Some(result) = pool.try_recv() else {
             break;
         };
-        worker_time += result.elapsed;
-        if queue.accept(&result) {
-            accepted.push(result);
+        match result {
+            JobResult::Mesh(result) => {
+                worker_time += result.elapsed;
+                if queue.accept(&result) {
+                    meshes.push(result);
+                }
+            }
+            JobResult::Light(result) => {
+                worker_time += result.elapsed;
+                if queue.accept_light(&result) {
+                    lights.push(result);
+                }
+            }
         }
     }
-    (accepted, worker_time)
+    (meshes, lights, worker_time)
 }
 
 #[cfg(test)]
@@ -349,26 +444,26 @@ mod tests {
 
     #[derive(Debug, Default)]
     struct FakePool {
-        results: Mutex<Vec<MeshResult>>,
+        results: Mutex<Vec<JobResult>>,
         submissions: AtomicUsize,
     }
 
     impl FakePool {
         fn with(results: Vec<MeshResult>) -> Self {
             Self {
-                results: Mutex::new(results),
+                results: Mutex::new(results.into_iter().map(JobResult::Mesh).collect()),
                 submissions: AtomicUsize::new(0),
             }
         }
     }
 
     impl MeshPool for FakePool {
-        fn submit(&self, _job: MeshJob, _priority: Priority) -> bool {
+        fn submit(&self, _job: Job, _priority: Priority) -> bool {
             self.submissions.fetch_add(1, Ordering::Relaxed);
             true
         }
 
-        fn try_recv(&self) -> Option<MeshResult> {
+        fn try_recv(&self) -> Option<JobResult> {
             self.results
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
@@ -397,6 +492,36 @@ mod tests {
             mesh: Vec::new(),
             elapsed: Duration::from_millis(1),
         }
+    }
+
+    fn light_result(chunk: ChunkCoord, revision: u64) -> LightResult {
+        LightResult {
+            chunk,
+            revision,
+            light: crate::light::compute(&LightSnapshot::default(), chunk),
+            elapsed: Duration::from_millis(1),
+        }
+    }
+
+    #[test]
+    fn light_results_follow_revisions_and_pending_state() {
+        let pool = FakePool::default();
+        let mut queue = MeshQueue::default();
+        let target = chunk(0);
+
+        assert!(!queue.light_is_current(target));
+        queue.request_light(&pool, &World::default(), target, Priority::Urgent);
+        assert!(!queue.light_is_current(target));
+
+        assert!(queue.accept_light(&light_result(target, 0)));
+        assert!(queue.light_is_current(target));
+
+        queue.invalidate(&DirtyChunks::from([target]));
+        assert!(!queue.light_is_current(target));
+        assert!(!queue.accept_light(&light_result(target, 0)));
+
+        queue.request_light(&pool, &World::default(), target, Priority::Urgent);
+        assert!(queue.accept_light(&light_result(target, 1)));
     }
 
     #[test]
@@ -554,11 +679,12 @@ mod tests {
             );
         }
 
-        let (first, worker_time) = collect_finished(&mut queue, &pool, 2);
+        let (first, lights, worker_time) = collect_finished(&mut queue, &pool, 2);
         assert_eq!(first.len(), 2);
+        assert!(lights.is_empty());
         assert_eq!(worker_time, Duration::from_millis(2));
 
-        let (second, _) = collect_finished(&mut queue, &pool, 2);
+        let (second, _, _) = collect_finished(&mut queue, &pool, 2);
         assert_eq!(second.len(), 2);
     }
 
@@ -567,9 +693,10 @@ mod tests {
         let pool = FakePool::default();
         let mut queue = MeshQueue::default();
 
-        let (results, worker_time) = collect_finished(&mut queue, &pool, 2);
+        let (results, lights, worker_time) = collect_finished(&mut queue, &pool, 2);
 
         assert!(results.is_empty());
+        assert!(lights.is_empty());
         assert!(worker_time.is_zero());
     }
 
@@ -579,11 +706,11 @@ mod tests {
         struct RefusingPool;
 
         impl MeshPool for RefusingPool {
-            fn submit(&self, _job: MeshJob, _priority: Priority) -> bool {
+            fn submit(&self, _job: Job, _priority: Priority) -> bool {
                 false
             }
 
-            fn try_recv(&self) -> Option<MeshResult> {
+            fn try_recv(&self) -> Option<JobResult> {
                 None
             }
         }
