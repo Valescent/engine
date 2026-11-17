@@ -26,6 +26,7 @@ files for builds, checks, docs, and releases. Runtime settings are not read from
 |---|---|---|
 | `RUST_LOG` | Engine (`tracing-subscriber` `EnvFilter`) | Sets the log filter. Unset or invalid falls back to `info`. Examples: `engine=debug`, `engine=debug,wgpu=warn`. |
 | `ENGINE_STRESS_SCENE` | Engine (`run`) | `1` builds the deterministic 8x8 stress scene in memory and disables world load and save. Any other value or unset uses `world/chunks/`. |
+| `ENGINE_NO_VSYNC` | Engine (`App::resumed`) | `1` starts the surface with vsync off, for benchmark runs. `V` still toggles it at runtime. |
 | `WGPU_BACKEND` | `wgpu` | Forces a backend such as `dx12`, `vulkan`, or `metal`, depending on the platform. Unset lets `wgpu` choose. The engine does not parse it. |
 
 See [Testing](testing.md) for manual-run examples, [Setup](setup.md) for backend selection, and

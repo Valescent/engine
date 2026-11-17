@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Optional `tracy` feature for local profiling: CPU spans for the frame, player update, highlight, mesh request, mesh upload, encode, and chunk worker jobs; allocation events from a global allocator; GPU timer zones from `wgpu-profiler`; and eight per-frame plots (frame, GPU, chunks, draws, vertices, rebuild, upload, queued jobs).
 - `tracy-profiler` thread lanes are named `chunk worker` once per pool thread.
+- `ENGINE_NO_VSYNC=1` starts with vsync off for benchmark runs, and an ignored `bench_hot_paths` test measures snapshot preparation, LOD meshing, and collision in release. Results are recorded in [Benchmark results](docs/dev/benchmarks.md).
 
 ### Changed
 

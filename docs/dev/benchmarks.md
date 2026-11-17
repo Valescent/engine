@@ -11,6 +11,7 @@ run in CI. The benchmark source is the methodology; this page is the run log.
 | Run in CI | No |
 | Real renderer or GPU measurement | No; see [Profiling](profiling.md) |
 | Worker-pool decision | [ADR-0009](../decisions/0009-micropool-for-chunk-workers.md) |
+| Engine run (v0.0.5) | Current; see [Engine run](#engine-run-v005-release) |
 
 ## Run it
 
@@ -150,12 +151,86 @@ micropool stayed at `4,108`. Both backends dropped `350` background jobs under s
 gap is consistent with the ADR's tail argument, but this single run is not evidence of a code
 regression; repeat it before drawing a trend.
 
+## Engine run (v0.0.5, release)
+
+End-to-end run of the real engine on the v0.0.5 stress scene, plus a headless hot-path
+measurement. This is not a CI gate; record a new row when the hot paths change.
+
+### How to run
+
+```console
+# End-to-end: stress fixture, vsync off, one-second frame samples
+$env:ENGINE_STRESS_SCENE = "1"; $env:ENGINE_NO_VSYNC = "1"; $env:RUST_LOG = "engine=debug"
+cargo run --release
+```
+
+```console
+# Headless hot paths: snapshot preparation, LOD0/LOD1 meshing, and player collision
+cargo test --release --lib bench_hot_paths -- --ignored --nocapture
+```
+
+`ENGINE_NO_VSYNC=1` starts the surface without vsync so the frame time is not clamped to the
+display rate. The engine keeps rendering while unfocused, so the numbers stay valid when the
+terminal has focus.
+
+### Measurement
+
+- **Machine:** AMD Ryzen 5 7600 (6C/12T), NVIDIA GeForce RTX 4060, Vulkan backend, Windows 11
+  Home, 1280x720 window.
+- **Toolchain:** `rustc 1.99.1 (58cf8f9c3 2026-10-13)`, `--release` profile (thin LTO,
+  `codegen-units = 1`).
+- **Scene:** `ENGINE_STRESS_SCENE=1`, spec spawn `(16.5, 3.0, 16.5)`, yaw `pi/4`, pitch `0`.
+- **Sample:** 32 one-second samples after the first two seconds; no other work on the machine.
+
+| Metric | Value |
+|---|---:|
+| FPS mean / p50 / min / max | 779.6 / 781.2 / 750.6 / 783.1 |
+| `frame_ms` mean / min / max | 1.283 / 1.277 / 1.332 |
+| Loaded chunks | 64 |
+| Visible chunks / draw calls | 8 / 8 |
+| Visible vertices | 100,464 |
+
+Hot paths, 64 chunks, release:
+
+| Hot path | Result |
+|---|---:|
+| Snapshot + border preparation | 0.049-0.050 ms/chunk |
+| LOD0 greedy mesh | 0.477-0.488 ms/chunk |
+| LOD1 greedy mesh | 0.099-0.101 ms/chunk |
+| LOD0 vertices, all 64 chunks | 795,072 |
+| LOD1 vertices, all 64 chunks | 81,984 |
+| `Player::update` (collision scan) | 1150-1167 us/frame |
+
+CPU/GPU split from a Tracy capture of the same scene (development profile, 349 frames):
+
+| Zone | Mean | Max |
+|---|---:|---:|
+| `frame` | 16.52 ms (vsync on) | 33.19 ms |
+| `player update` | 1.09 ms | 1.44 ms |
+| `chunk mesh` (worker, 72 jobs) | 1.54 ms | 3.42 ms |
+| `mesh upload` | 22 us | 431 us |
+| `encode` | 13 us | 65 us |
+| GPU `terrain` | ~5.5 us | — |
+
+### Reading the result
+
+- The frame is **CPU-bound and collision-bound**: `Player::update` is 1.15 ms of the 1.28 ms
+  frame. It scans every block of every loaded chunk three times per frame, so it scales with
+  world size rather than with the player's surroundings.
+- Meshing is off the main thread; the per-chunk cost above is worker time, not frame time.
+- GPU time is negligible at this view. The spec spawn faces out of the fixture, so only 8 of 64
+  chunks are inside the frustum; a view across the map draws more chunks and is not covered by
+  this run.
+- These numbers come from one machine and one run. Treat them as a baseline, not a regression
+  gate.
+
 ## Run log
 
 | Date | Commit | Machine | Rust | Command | Workers | Result |
 |---|---|---|---|---|---|---|
 | 2026-11-15 (ADR date; exact time not recorded) | Not recorded | Ryzen 5 7600, 6C/12T, Windows | 1.99.1 | `cargo bench --bench pool_sim -- both` | rayon 12, micropool 11 | All `over = 0`; checksums identical; micropool better saturated p99 and join max |
 | 2026-11-16 | `27c39b1` | Ryzen 5 7600, 6C/12T, Windows 11 26300 | 1.99.1 | `cargo bench --bench pool_sim -- both` | rayon 12, micropool 11 | All `over = 0`; checksums identical; micropool saturated p99 4,108 vs rayon 12,617; drops 350 each |
+| 2026-11-17 | v0.0.5 release build | Ryzen 5 7600, 6C/12T, RTX 4060, Windows 11 | 1.99.1 | `ENGINE_NO_VSYNC=1 cargo run --release` | n/a | 779.6 FPS mean, 1.283 ms frame; `player update` 1.15 ms dominates |
 
 Add new runs below the latest row. Keep the raw output with the entry when possible.
 

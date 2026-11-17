@@ -112,6 +112,11 @@ fn save_directory(stress: bool) -> Option<&'static Path> {
     }
 }
 
+/// Returns whether to start with vsync off, for benchmark runs.
+fn no_vsync_requested() -> bool {
+    std::env::var("ENGINE_NO_VSYNC").is_ok_and(|value| value == "1")
+}
+
 /// Loads the stress scene or the saved (or demo) world.
 ///
 /// Stress mode never touches `directory`.
@@ -714,6 +719,9 @@ impl ApplicationHandler for App {
         self.renderer = Some(renderer);
         self.mesher = Some(Arc::new(WorkerPool::new()));
         self.request_initial_meshes();
+        if no_vsync_requested() {
+            self.toggle_vsync();
+        }
         self.last_frame = Instant::now();
         window.request_redraw();
     }
@@ -1015,5 +1023,66 @@ mod tests {
         }
 
         assert!(greedy < naive, "greedy {greedy} naive {naive}");
+    }
+
+    #[test]
+    #[ignore = "benchmark; run with cargo test --release --lib bench_hot_paths -- --ignored --nocapture"]
+    #[allow(clippy::cast_precision_loss)]
+    fn bench_hot_paths() {
+        let world = stress_world();
+        let chunks: Vec<_> = world.iter_chunks().map(|(chunk, _)| chunk).collect();
+        let chunk_count = chunks.len();
+
+        let started = Instant::now();
+        let mut snapshots = Vec::with_capacity(chunk_count);
+        for &chunk in &chunks {
+            snapshots.push((
+                mesh::ChunkSnapshot::new(&world, chunk),
+                mesh::BorderBlocks::new(&world, chunk),
+            ));
+        }
+        let prepare = started.elapsed();
+
+        let started = Instant::now();
+        let lod0_vertices: usize = snapshots
+            .iter()
+            .map(|(snapshot, border)| mesh::build_mesh(snapshot, border, Lod::Lod0).len())
+            .sum();
+        let lod0 = started.elapsed();
+
+        let started = Instant::now();
+        let lod1_vertices: usize = snapshots
+            .iter()
+            .map(|(snapshot, border)| mesh::build_mesh(snapshot, border, Lod::Lod1).len())
+            .sum();
+        let lod1 = started.elapsed();
+
+        let mut player = Player::new(Vec3::new(16.5, 3.0, 16.5));
+        let input = PlayerInput {
+            forward: 0.0,
+            right: 0.0,
+            jump: false,
+            yaw: std::f32::consts::FRAC_PI_4,
+        };
+        let frames = 600_u32;
+        let started = Instant::now();
+        for _ in 0..frames {
+            player.update(&world, input, 1.0 / 60.0);
+        }
+        let update = started.elapsed();
+
+        let per_chunk = |elapsed: Duration| elapsed.as_secs_f64() * 1000.0 / chunk_count as f64;
+        eprintln!(
+            "chunks={chunk_count} prepare_ms/chunk={:.3} lod0_ms/chunk={:.3} lod1_ms/chunk={:.3} lod0_vertices={lod0_vertices} lod1_vertices={lod1_vertices} update_us/frame={:.1}",
+            elapsed_ms(prepare, chunk_count),
+            per_chunk(lod0),
+            per_chunk(lod1),
+            update.as_secs_f64() * 1e6 / f64::from(frames),
+        );
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    fn elapsed_ms(elapsed: Duration, count: usize) -> f64 {
+        elapsed.as_secs_f64() * 1000.0 / count as f64
     }
 }
