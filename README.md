@@ -34,6 +34,8 @@ cargo run
 - `F3` — toggle the FPS/frame-time overlay
 - `Escape` — release the cursor
 
+Water is drawn after opaque geometry without per-face sorting, so overlapping water can blend out of order. The demo world has a small pond.
+
 The world saves to `world/chunks/` on exit and on `Ctrl+S`. Set `ENGINE_STRESS_SCENE=1` to load
 the deterministic 64-chunk stress scene instead; it never touches `world/chunks/`.
 
@@ -79,6 +81,7 @@ See [`docs/dev/setup.md`](docs/dev/setup.md) for platform details and [`docs/dev
 The documentation site is published at **https://valescent.github.io/engine/**.
 
 - [Roadmap](docs/roadmap.md) - versioned milestones, definitions of done, and non-goals.
+- [Progress](docs/progress.md) - the computed scoreboard: level, streaks, roadmap bars, and achievements.
 - [FAQ and troubleshooting](docs/faq.md) - common questions and a symptom-first index.
 - [Architecture decision records](docs/decisions/index.md) - why the engine uses Rust, `wgpu`, `winit`, `glam`, `bytemuck`, and Tracy.
 - [Architecture overview](docs/dev/architecture.md) - module ownership and the current frame flow.

@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use crate::light::LightField;
-use crate::mesh::{BorderBlocks, ChunkSnapshot, Lod, build_mesh, select_lod};
+use crate::mesh::{BorderBlocks, ChunkSnapshot, Lod, build_mesh, build_water_mesh, select_lod};
 use crate::voxel::Vertex;
 use crate::world::{ChunkCoord, DirtyChunks, World};
 
@@ -30,10 +30,18 @@ pub(crate) enum Priority {
     Background,
 }
 
+/// Which mesh of a chunk a job builds.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum MeshKind {
+    Opaque,
+    Water,
+}
+
 /// One immutable meshing request for a worker.
 pub(crate) struct MeshJob {
     pub(crate) chunk: ChunkCoord,
     pub(crate) lod: Lod,
+    pub(crate) kind: MeshKind,
     pub(crate) revision: u64,
     pub(crate) snapshot: ChunkSnapshot,
     pub(crate) border: BorderBlocks,
@@ -45,6 +53,7 @@ pub(crate) struct MeshJob {
 pub(crate) struct MeshResult {
     pub(crate) chunk: ChunkCoord,
     pub(crate) lod: Lod,
+    pub(crate) kind: MeshKind,
     pub(crate) revision: u64,
     pub(crate) mesh: Vec<Vertex>,
     pub(crate) elapsed: Duration,
@@ -175,10 +184,14 @@ fn run_job(job: &MeshJob, sender: &Sender<MeshResult>, counter: &AtomicUsize) {
     name_worker_thread();
     profiling::scope!("chunk mesh");
     let started = Instant::now();
-    let mesh = build_mesh(&job.snapshot, &job.border, job.light.as_deref(), job.lod);
+    let mesh = match job.kind {
+        MeshKind::Opaque => build_mesh(&job.snapshot, &job.border, job.light.as_deref(), job.lod),
+        MeshKind::Water => build_water_mesh(&job.snapshot, &job.border, job.light.as_deref()),
+    };
     let result = MeshResult {
         chunk: job.chunk,
         lod: job.lod,
+        kind: job.kind,
         revision: job.revision,
         mesh,
         elapsed: started.elapsed(),
@@ -207,7 +220,8 @@ pub(crate) fn admit(priority: Priority, in_flight: usize, capacity: usize) -> bo
 #[derive(Debug, Default)]
 pub(crate) struct MeshQueue {
     revisions: HashMap<ChunkCoord, u64>,
-    pending: HashMap<(ChunkCoord, Lod), u64>,
+    pending: HashMap<(ChunkCoord, Lod, MeshKind), u64>,
+    built: HashMap<(ChunkCoord, Lod, MeshKind), u64>,
     desired: HashMap<ChunkCoord, Lod>,
 }
 
@@ -224,7 +238,8 @@ impl MeshQueue {
     pub(crate) fn invalidate(&mut self, dirty: &DirtyChunks) {
         for chunk in dirty {
             *self.revisions.entry(*chunk).or_insert(0) += 1;
-            self.pending.retain(|(pending, _), _| pending != chunk);
+            self.pending.retain(|(pending, _, _), _| pending != chunk);
+            self.built.retain(|(built, _, _), _| built != chunk);
         }
     }
 
@@ -233,7 +248,8 @@ impl MeshQueue {
     /// Revisions are kept so an in-flight result is still rejected.
     pub(crate) fn remove(&mut self, chunk: ChunkCoord) {
         self.desired.remove(&chunk);
-        self.pending.retain(|(pending, _), _| *pending != chunk);
+        self.pending.retain(|(pending, _, _), _| *pending != chunk);
+        self.built.retain(|(built, _, _), _| *built != chunk);
     }
 
     /// Submits a mesh job unless the same revision is already in flight.
@@ -243,22 +259,24 @@ impl MeshQueue {
         world: &World,
         chunk: ChunkCoord,
         lod: Lod,
+        kind: MeshKind,
         priority: Priority,
     ) {
         let revision = self.revision(chunk);
-        if self.pending.get(&(chunk, lod)) == Some(&revision) {
+        if self.pending.get(&(chunk, lod, kind)) == Some(&revision) {
             return;
         }
         let job = MeshJob {
             chunk,
             lod,
             revision,
+            kind,
             snapshot: ChunkSnapshot::new(world, chunk),
             border: BorderBlocks::new(world, chunk),
             light: world.light_field(chunk).cloned(),
         };
         if pool.submit(job, priority) {
-            self.pending.insert((chunk, lod), revision);
+            self.pending.insert((chunk, lod, kind), revision);
         }
     }
 
@@ -267,12 +285,18 @@ impl MeshQueue {
         if result.revision != self.revision(result.chunk) {
             return false;
         }
-        let key = (result.chunk, result.lod);
+        let key = (result.chunk, result.lod, result.kind);
         if self.pending.get(&key) != Some(&result.revision) {
             return false;
         }
         self.pending.remove(&key);
+        self.built.insert(key, result.revision);
         true
+    }
+
+    /// Returns whether a mesh for this chunk, LOD, and kind is current.
+    pub(crate) fn is_built(&self, chunk: ChunkCoord, lod: Lod, kind: MeshKind) -> bool {
+        self.built.get(&(chunk, lod, kind)) == Some(&self.revision(chunk))
     }
 
     /// Recalculates the desired LOD from the player's chunk with hysteresis.
@@ -357,13 +381,46 @@ mod tests {
     }
 
     fn result(chunk: ChunkCoord, lod: Lod, revision: u64) -> MeshResult {
+        result_of(chunk, lod, MeshKind::Opaque, revision)
+    }
+
+    fn water_result(chunk: ChunkCoord, lod: Lod, revision: u64) -> MeshResult {
+        result_of(chunk, lod, MeshKind::Water, revision)
+    }
+
+    fn result_of(chunk: ChunkCoord, lod: Lod, kind: MeshKind, revision: u64) -> MeshResult {
         MeshResult {
             chunk,
             lod,
+            kind,
             revision,
             mesh: Vec::new(),
             elapsed: Duration::from_millis(1),
         }
+    }
+
+    #[test]
+    fn water_meshes_track_their_own_build_state() {
+        let pool = FakePool::default();
+        let mut queue = MeshQueue::default();
+        let target = chunk(0);
+
+        queue.request(
+            &pool,
+            &World::default(),
+            target,
+            Lod::Lod0,
+            MeshKind::Water,
+            Priority::Background,
+        );
+        assert!(!queue.is_built(target, Lod::Lod0, MeshKind::Water));
+
+        assert!(queue.accept(&water_result(target, Lod::Lod0, 0)));
+        assert!(queue.is_built(target, Lod::Lod0, MeshKind::Water));
+        assert!(!queue.is_built(target, Lod::Lod0, MeshKind::Opaque));
+
+        queue.invalidate(&DirtyChunks::from([target]));
+        assert!(!queue.is_built(target, Lod::Lod0, MeshKind::Water));
     }
 
     #[test]
@@ -398,6 +455,7 @@ mod tests {
             &World::default(),
             target,
             Lod::Lod0,
+            MeshKind::Opaque,
             Priority::Urgent,
         );
 
@@ -408,6 +466,7 @@ mod tests {
             &World::default(),
             target,
             Lod::Lod0,
+            MeshKind::Opaque,
             Priority::Urgent,
         );
         queue.invalidate(&DirtyChunks::from([target]));
@@ -419,6 +478,7 @@ mod tests {
             &World::default(),
             target,
             Lod::Lod0,
+            MeshKind::Opaque,
             Priority::Urgent,
         );
         assert!(queue.accept(&result(target, Lod::Lod0, 1)));
@@ -435,6 +495,7 @@ mod tests {
             &World::default(),
             target,
             Lod::Lod0,
+            MeshKind::Opaque,
             Priority::Urgent,
         );
         queue.request(
@@ -442,6 +503,7 @@ mod tests {
             &World::default(),
             target,
             Lod::Lod0,
+            MeshKind::Opaque,
             Priority::Urgent,
         );
 
@@ -461,6 +523,7 @@ mod tests {
             &World::default(),
             target,
             Lod::Lod0,
+            MeshKind::Opaque,
             Priority::Urgent,
         );
         queue.request(
@@ -468,6 +531,7 @@ mod tests {
             &World::default(),
             target,
             Lod::Lod1,
+            MeshKind::Opaque,
             Priority::Background,
         );
 
@@ -485,6 +549,7 @@ mod tests {
                 &World::default(),
                 chunk(x),
                 Lod::Lod0,
+                MeshKind::Opaque,
                 Priority::Urgent,
             );
         }
@@ -531,6 +596,7 @@ mod tests {
             &World::default(),
             target,
             Lod::Lod1,
+            MeshKind::Opaque,
             Priority::Background,
         );
 

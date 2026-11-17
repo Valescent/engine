@@ -49,6 +49,7 @@ The headless suite covers:
 - Frustum plane extraction and conservative AABB rejection for inside, outside, and straddling boxes.
 - Light storage and BFS: open columns, overhang falloff, dark caves, lamp falloff, water transmission, and cross-chunk borders.
 - Per-corner AO, packed light/AO, greedy splitting at light/AO changes, and LOD1 representative sampling.
+- Water meshing: air-only faces, no opaque faces, layer 9, and the water cell's own light.
 - Mesh revisions, stale-result rejection, queue priority, background dropping, and the two-upload cap.
 - The deterministic 8x8 stress fixture and the stress-mode world path.
 - Player AABB, gravity, jumping, ground detection, axis order, collision response, and tunnelling limits.

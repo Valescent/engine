@@ -83,6 +83,7 @@ struct GpuChunk {
     bind_group: wgpu::BindGroup,
     lod0: Option<(u64, GpuMesh)>,
     lod1: Option<(u64, GpuMesh)>,
+    water: Option<(u64, GpuMesh)>,
     active: Option<Lod>,
 }
 
@@ -102,20 +103,12 @@ impl GpuChunk {
         }
     }
 
-    fn is_current(&self, lod: Lod, revision: u64) -> bool {
-        let slot = match lod {
-            Lod::Lod0 => &self.lod0,
-            Lod::Lod1 => &self.lod1,
-        };
-        matches!(slot, Some((current, _)) if *current == revision)
-    }
-
     fn active_mesh(&self) -> Option<&GpuMesh> {
         self.active.and_then(|lod| self.mesh(lod))
     }
 
     fn is_empty(&self) -> bool {
-        self.lod0.is_none() && self.lod1.is_none()
+        self.lod0.is_none() && self.lod1.is_none() && self.water.is_none()
     }
 }
 
@@ -136,6 +129,7 @@ pub(crate) struct Renderer {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
+    water_pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
     frame: FrameUniform,
     clear_colour: wgpu::Color,
@@ -251,6 +245,23 @@ impl Renderer {
             &camera_bind_group_layout,
             &chunk_bind_group_layout,
             &texture_bind_group_layout,
+            "voxel pipeline",
+            "fs_main",
+            None,
+            true,
+            wgpu::CompareFunction::Less,
+        )?;
+        let water_pipeline = create_pipeline(
+            &device,
+            &config,
+            &camera_bind_group_layout,
+            &chunk_bind_group_layout,
+            &texture_bind_group_layout,
+            "water pipeline",
+            "fs_water",
+            Some(wgpu::BlendState::ALPHA_BLENDING),
+            false,
+            wgpu::CompareFunction::LessEqual,
         )?;
         let highlight_pipeline =
             create_highlight_pipeline(&device, &config, &camera_bind_group_layout)?;
@@ -267,6 +278,7 @@ impl Renderer {
             queue,
             config,
             pipeline,
+            water_pipeline,
             uniform_buffer,
             frame,
             clear_colour: CLEAR_COLOR,
@@ -398,6 +410,7 @@ impl Renderer {
                 _origin_buffer: origin_buffer,
                 lod0: None,
                 lod1: None,
+                water: None,
                 active: None,
             }
         })
@@ -412,11 +425,27 @@ impl Renderer {
         }
     }
 
-    /// Returns whether a mesh for this LOD is resident at the given revision.
-    pub(crate) fn has_current_mesh(&self, chunk: ChunkCoord, lod: Lod, revision: u64) -> bool {
-        self.chunks
-            .get(&chunk)
-            .is_some_and(|gpu_chunk| gpu_chunk.is_current(lod, revision))
+    /// Uploads or clears a chunk's transparent water mesh.
+    pub(crate) fn upload_water_chunk(&mut self, chunk: ChunkCoord, revision: u64, mesh: &[Vertex]) {
+        if mesh.is_empty() {
+            if let Some(gpu_chunk) = self.chunks.get_mut(&chunk) {
+                gpu_chunk.water = None;
+                if gpu_chunk.is_empty() {
+                    self.chunks.remove(&chunk);
+                }
+            }
+            return;
+        }
+
+        let (vertex_buffer, vertex_count) = create_vertex_buffer(&self.device, mesh);
+        let gpu_chunk = self.chunk_entry(chunk);
+        gpu_chunk.water = Some((
+            revision,
+            GpuMesh {
+                vertex_buffer,
+                vertex_count,
+            },
+        ));
     }
 
     pub(crate) fn remove_chunk(&mut self, chunk: ChunkCoord) {
@@ -628,6 +657,28 @@ impl Renderer {
                 stats.draw_calls += 1;
                 stats.visible_vertices += u64::from(mesh.vertex_count);
             }
+        }
+
+        // Transparent water after all opaque geometry; depth writes stay off.
+        pass.set_pipeline(&self.water_pipeline);
+        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        pass.set_bind_group(2, &self.texture_bind_group, &[]);
+        for (chunk, gpu_chunk) in &self.chunks {
+            let Some((_, mesh)) = &gpu_chunk.water else {
+                continue;
+            };
+            let min = chunk.origin();
+            if !frustum.intersects_aabb(min, min + Vec3::splat(CHUNK_SIZE as f32)) {
+                continue;
+            }
+            if gpu_chunk.active_mesh().is_none() {
+                stats.visible_chunks += 1;
+            }
+            pass.set_bind_group(1, &gpu_chunk.bind_group, &[]);
+            pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+            pass.draw(0..mesh.vertex_count, 0..1);
+            stats.draw_calls += 1;
+            stats.visible_vertices += u64::from(mesh.vertex_count);
         }
 
         if self.highlight_count > 0 {
@@ -906,12 +957,18 @@ fn tile_noise(layer: u32, x: u32, y: u32) -> u32 {
     value
 }
 
+#[allow(clippy::too_many_arguments)]
 fn create_pipeline(
     device: &wgpu::Device,
     config: &wgpu::SurfaceConfiguration,
     camera_bind_group_layout: &wgpu::BindGroupLayout,
     chunk_bind_group_layout: &wgpu::BindGroupLayout,
     texture_bind_group_layout: &wgpu::BindGroupLayout,
+    label: &str,
+    fragment_entry: &str,
+    blend: Option<wgpu::BlendState>,
+    depth_write: bool,
+    depth_compare: wgpu::CompareFunction,
 ) -> Result<wgpu::RenderPipeline, RendererError> {
     let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
@@ -956,7 +1013,7 @@ fn create_pipeline(
         ],
     };
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("voxel pipeline"),
+        label: Some(label),
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
@@ -966,15 +1023,19 @@ fn create_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some("fs_main"),
+            entry_point: Some(fragment_entry),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
-            targets: &[Some(config.format.into())],
+            targets: &[Some(wgpu::ColorTargetState {
+                format: config.format,
+                blend,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
         }),
         primitive: wgpu::PrimitiveState::default(),
         depth_stencil: Some(wgpu::DepthStencilState {
             format: DEPTH_FORMAT,
-            depth_write_enabled: Some(true),
-            depth_compare: Some(wgpu::CompareFunction::Less),
+            depth_write_enabled: Some(depth_write),
+            depth_compare: Some(depth_compare),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),

@@ -52,13 +52,16 @@ awk -v version="$version" -v date="$date" '
 ' CHANGELOG.md >CHANGELOG.md.tmp
 mv CHANGELOG.md.tmp CHANGELOG.md
 
+# Refresh the dashboard so the new release shows up on the site.
+sh scripts/progress.sh
+
 sed -i.bak "0,/^version = \"[^\"]*\"/s//version = \"$version\"/" Cargo.toml
 rm -f Cargo.toml.bak
 
 # Refresh the lockfile's package version without touching dependencies.
 cargo metadata --format-version 1 --offline >/dev/null
 
-git add Cargo.toml Cargo.lock CHANGELOG.md
+git add Cargo.toml Cargo.lock CHANGELOG.md docs/progress.md
 git commit -m "chore(release): $tag"
 
 if [ "$dry_run" = true ]; then

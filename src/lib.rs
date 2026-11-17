@@ -39,7 +39,7 @@ use block::Block;
 use camera::Camera;
 use frustum::Frustum;
 use mesh::Lod;
-use mesher::{MeshPool, MeshQueue, Priority, collect_finished, create_pool};
+use mesher::{MeshKind, MeshPool, MeshQueue, Priority, collect_finished, create_pool};
 use player::{Player, PlayerInput};
 use raycast::{RaycastHit, raycast};
 pub use renderer::RendererError;
@@ -180,6 +180,11 @@ fn demo_world() -> World {
         IVec3::new(29, 2, 30),
     ] {
         world.set_block(coordinate, Block::Stone);
+    }
+    for x in 28..=30 {
+        for z in 28..=30 {
+            world.set_block(IVec3::new(x, 1, z), Block::Water);
+        }
     }
     world.set_block(IVec3::new(34, 2, 34), Block::Wood);
     world.set_block(IVec3::new(34, 3, 34), Block::Wood);
@@ -327,13 +332,28 @@ impl App {
         if let Some(pool) = self.mesher.clone() {
             for chunk in dirty {
                 if self.world.chunk(*chunk).is_some() {
-                    self.queue
-                        .request(&*pool, &self.world, *chunk, Lod::Lod0, Priority::Urgent);
+                    self.queue.request(
+                        &*pool,
+                        &self.world,
+                        *chunk,
+                        Lod::Lod0,
+                        MeshKind::Opaque,
+                        Priority::Urgent,
+                    );
                     self.queue.request(
                         &*pool,
                         &self.world,
                         *chunk,
                         Lod::Lod1,
+                        MeshKind::Opaque,
+                        Priority::Background,
+                    );
+                    self.queue.request(
+                        &*pool,
+                        &self.world,
+                        *chunk,
+                        Lod::Lod0,
+                        MeshKind::Water,
                         Priority::Background,
                     );
                 } else {
@@ -362,8 +382,22 @@ impl App {
             return;
         };
         for (chunk, _) in self.world.iter_chunks() {
-            self.queue
-                .request(&*pool, &self.world, chunk, Lod::Lod0, Priority::Urgent);
+            self.queue.request(
+                &*pool,
+                &self.world,
+                chunk,
+                Lod::Lod0,
+                MeshKind::Opaque,
+                Priority::Urgent,
+            );
+            self.queue.request(
+                &*pool,
+                &self.world,
+                chunk,
+                Lod::Lod0,
+                MeshKind::Water,
+                Priority::Background,
+            );
         }
     }
 
@@ -375,14 +409,26 @@ impl App {
 
         for (chunk, _) in self.world.iter_chunks() {
             let lod = self.queue.desired_lod(chunk, player_chunk);
-            let revision = self.queue.revision(chunk);
-            let resident = self
-                .renderer
-                .as_ref()
-                .is_some_and(|renderer| renderer.has_current_mesh(chunk, lod, revision));
-            if !resident {
-                self.queue
-                    .request(pool, &self.world, chunk, lod, Priority::Background);
+            if !self.queue.is_built(chunk, lod, MeshKind::Opaque) {
+                self.queue.request(
+                    pool,
+                    &self.world,
+                    chunk,
+                    lod,
+                    MeshKind::Opaque,
+                    Priority::Background,
+                );
+            }
+
+            if !self.queue.is_built(chunk, Lod::Lod0, MeshKind::Water) {
+                self.queue.request(
+                    pool,
+                    &self.world,
+                    chunk,
+                    Lod::Lod0,
+                    MeshKind::Water,
+                    Priority::Background,
+                );
             }
         }
         self.stats.pending_jobs = self.queue.pending_len();
@@ -401,7 +447,14 @@ impl App {
         let mut upload_ms = 0.0;
         for result in &results {
             let started = Instant::now();
-            renderer.upload_chunk(result.chunk, result.lod, result.revision, &result.mesh);
+            match result.kind {
+                MeshKind::Opaque => {
+                    renderer.upload_chunk(result.chunk, result.lod, result.revision, &result.mesh);
+                }
+                MeshKind::Water => {
+                    renderer.upload_water_chunk(result.chunk, result.revision, &result.mesh);
+                }
+            }
             upload_ms += started.elapsed().as_secs_f64() * 1000.0;
         }
         self.stats.upload_ms += upload_ms;

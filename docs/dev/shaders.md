@@ -258,7 +258,7 @@ the Rust layout and document them in the change.
 | v0.0.3 | Chunk-local vertices and chunk origins | Implemented as a 16-byte origin uniform in group `1`. The vertex stage adds the chunk origin to the position. Normals are unchanged. |
 | v0.0.4 | 36-byte vertex with UV and layer, texture array | Implemented. The vertex stage forwards UV and layer; the fragment stage samples `texture_2d_array<f32>` with nearest filtering and no mipmaps. The highlight is a separate line-list pipeline. |
 | v0.0.5 | Greedy quads and LOD1 | Implemented. UVs are in block units and the sampler repeats in U and V. LOD1 uses the same shader; the CPU scales positions and UVs, so the shader does not branch on LOD. |
-| v0.0.6 | 40-byte light/AO vertex, day/night, fog, water | Implemented except water: the 40-byte vertex carries packed light/AO, the uniform carries sky/ambient/sun colours, sun direction, far plane, and camera position, and the fragment stage applies the lighting and fog formulas. |
+| v0.0.6 | 40-byte light/AO vertex, day/night, fog, water | Implemented: the 40-byte vertex carries packed light/AO, the uniform carries sky/ambient/sun colours, sun direction, far plane, and camera position, the fragment stage applies the lighting and fog formulas, and `fs_water` adds animated normals with alpha `0.65` in a blended, non-writing pass. |
 | v0.0.7 | Eleven texture layers and Sand | The texture array grows; the layer index is data. The lighting and water shader logic do not change. |
 
 ### Textures (v0.0.4)

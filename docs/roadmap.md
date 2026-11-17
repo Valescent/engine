@@ -208,8 +208,8 @@ See [v0.0.6 scope](dev/v0.0.6-scope.md) for the concrete deliverables, technical
 - [x] Distance fog to hide render-distance edge
 
 #### 3. Water and transparency
-- [ ] Separate mesh layer for transparent blocks
-- [ ] Water shader (animated normals; reflections/refractions optional)
+- [x] Separate mesh layer for transparent blocks
+- [x] Water shader (animated normals; reflections/refractions optional)
 
 ### Definition of Done
 - Day/night cycle

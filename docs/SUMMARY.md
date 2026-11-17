@@ -11,6 +11,7 @@
 # Roadmap
 
 - [Roadmap](roadmap.md)
+- [Progress](progress.md)
   - [v0.0.1 — The Foundation](dev/v0.0.1-scope.md)
   - [v0.0.2 — Camera](dev/v0.0.2-scope.md)
   - [v0.0.3 — Chunks and Meshes](dev/v0.0.3-scope.md)

@@ -143,22 +143,21 @@ pub(crate) fn build_mesh(
     light: Option<&LightField>,
     lod: Lod,
 ) -> Vec<Vertex> {
-    let full_block = |local: IVec3| {
-        if in_chunk(local) {
-            snapshot.block(local)
-        } else {
-            border.block(local)
-        }
-    };
+    let full_block = |local: IVec3| full_block(snapshot, border, local);
+
+    let matches = Block::is_solid;
+    let exposed = |cell: IVec3, normal: IVec3| !full_block(cell + normal).is_solid();
+    let corners = |anchor: IVec3, face: usize| corner_values(&full_block, light, anchor, face);
 
     match lod {
         Lod::Lod0 => greedy(
             lod.cell_count(),
             lod.scale(),
             &full_block,
+            &matches,
+            &exposed,
             &|cell| cell,
-            &full_block,
-            light,
+            &corners,
         ),
         Lod::Lod1 => {
             let (cells, representatives) = downsample(snapshot);
@@ -180,11 +179,43 @@ pub(crate) fn build_mesh(
                 lod.cell_count(),
                 lod.scale(),
                 &cell_block,
+                &matches,
+                &exposed,
                 &anchor,
-                &full_block,
-                light,
+                &corners,
             )
         }
+    }
+}
+
+/// Builds the transparent water mesh: full resolution, water cells only, and
+/// faces emitted only against air.
+pub(crate) fn build_water_mesh(
+    snapshot: &ChunkSnapshot,
+    border: &BorderBlocks,
+    light: Option<&LightField>,
+) -> Vec<Vertex> {
+    let full_block = |local: IVec3| full_block(snapshot, border, local);
+    let matches = |block: Block| block == Block::Water;
+    let exposed = |cell: IVec3, normal: IVec3| full_block(cell + normal) == Block::Air;
+    let corners = |anchor: IVec3, face: usize| water_corners(&full_block, light, anchor, face);
+
+    greedy(
+        CHUNK_SIZE,
+        1.0,
+        &full_block,
+        &matches,
+        &exposed,
+        &|cell| cell,
+        &corners,
+    )
+}
+
+fn full_block(snapshot: &ChunkSnapshot, border: &BorderBlocks, local: IVec3) -> Block {
+    if in_chunk(local) {
+        snapshot.block(local)
+    } else {
+        border.block(local)
     }
 }
 
@@ -241,9 +272,10 @@ fn greedy(
     n: i32,
     scale: f32,
     block_at: &impl Fn(IVec3) -> Block,
+    matches: &impl Fn(Block) -> bool,
+    exposed: &impl Fn(IVec3, IVec3) -> bool,
     anchor: &impl Fn(IVec3) -> IVec3,
-    full_block_at: &impl Fn(IVec3) -> Block,
-    light: Option<&LightField>,
+    corners: &impl Fn(IVec3, usize) -> [u32; 4],
 ) -> Vec<Vertex> {
     let cells = usize::try_from(n * n).expect("mask fits");
     let mut vertices = Vec::new();
@@ -255,13 +287,13 @@ fn greedy(
                 for u in 0..n {
                     let cell = cell_coord(face, slice, u, v);
                     let block = block_at(cell);
-                    if !block.is_solid() || block_at(cell + normal).is_solid() {
+                    if !matches(block) || !exposed(cell, normal) {
                         continue;
                     }
                     mask[mask_index(u, v, n)] = Some(MaskKey {
                         block,
                         layer: face_layer(block, normal),
-                        corners: corner_values(full_block_at, light, anchor(cell), face),
+                        corners: corners(anchor(cell), face),
                     });
                 }
             }
@@ -363,6 +395,34 @@ fn corner_values(
 /// Packs sky light, block light, and AO into the vertex field.
 pub(crate) fn pack_light_ao(sky: u8, block: u8, ao: u8) -> u32 {
     u32::from(sky & 0xF) | (u32::from(block & 0xF) << 4) | (u32::from(ao & 0x3) << 8)
+}
+
+/// Water corners take the water cell's own light, uniform across the face,
+/// with the same AO rule as solid faces.
+fn water_corners(
+    block_at: &impl Fn(IVec3) -> Block,
+    light: Option<&LightField>,
+    anchor: IVec3,
+    face: usize,
+) -> [u32; 4] {
+    let outside = anchor + FACE_NORMALS[face];
+    let (u_axis, v_axis) = face_axes(face);
+    let (sky, block) = light.map_or((0, 0), |light| (light.sky(anchor), light.block(anchor)));
+
+    [(-1, -1), (-1, 1), (1, 1), (1, -1)].map(|(su, sv)| {
+        let side_a = outside + u_axis * su;
+        let side_b = outside + v_axis * sv;
+        let diagonal = side_a + v_axis * sv;
+        let solid_a = block_at(side_a).is_solid();
+        let solid_b = block_at(side_b).is_solid();
+        let solid_diagonal = block_at(diagonal).is_solid();
+        let ao = if solid_a && solid_b {
+            0
+        } else {
+            3 - (u8::from(solid_a) + u8::from(solid_b) + u8::from(solid_diagonal))
+        };
+        pack_light_ao(sky, block, ao)
+    })
 }
 
 fn face_axes(face: usize) -> (IVec3, IVec3) {
@@ -539,6 +599,18 @@ mod tests {
             &BorderBlocks::new(world, chunk),
             world.light_field(chunk).map(std::convert::AsRef::as_ref),
             lod,
+        )
+    }
+
+    fn water_mesh(world: &World, chunk: ChunkCoord, lit: bool) -> Vec<Vertex> {
+        build_water_mesh(
+            &ChunkSnapshot::new(world, chunk),
+            &BorderBlocks::new(world, chunk),
+            if lit {
+                world.light_field(chunk).map(std::convert::AsRef::as_ref)
+            } else {
+                None
+            },
         )
     }
 
@@ -937,6 +1009,45 @@ mod tests {
 
         assert_eq!(top.light_ao & 0xF, 15);
         assert_eq!((top.light_ao >> 8) & 0x3, 3);
+    }
+
+    #[test]
+    fn water_faces_are_emitted_only_against_air() {
+        let world = world_with(&[
+            (IVec3::ZERO, Block::Water),
+            (IVec3::X, Block::Water),
+            (IVec3::new(0, 1, 0), Block::Stone),
+        ]);
+        let vertices = water_mesh(&world, chunk_at(IVec3::ZERO), false);
+
+        assert_eq!(vertices.len(), 6 * 6);
+        assert!(vertices.iter().all(|vertex| vertex.layer == 9));
+    }
+
+    #[test]
+    fn water_meshes_have_no_opaque_faces() {
+        let world = world_with(&[(IVec3::ZERO, Block::Water)]);
+        let opaque = mesh(&world, chunk_at(IVec3::ZERO), Lod::Lod0);
+
+        assert_eq!(opaque, Vec::new());
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn water_uses_its_own_light_across_the_face() {
+        let mut world = World::default();
+        world.set_block(IVec3::ZERO, Block::Water);
+        world.set_block(IVec3::X, Block::Lamp);
+        world.relight();
+
+        let vertices = water_mesh(&world, chunk_at(IVec3::ZERO), true);
+
+        assert_ne!(vertices.len(), 0);
+        for vertex in &vertices {
+            assert_eq!(vertex.layer, 9);
+            assert_eq!(vertex.light_ao & 0xF, 15, "sky");
+            assert_eq!((vertex.light_ao >> 4) & 0xF, 14, "block light");
+        }
     }
 
     #[test]

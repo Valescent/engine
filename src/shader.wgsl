@@ -42,6 +42,7 @@ struct VertexOut {
     // x: sky, y: block, z: AO level.
     @location(3) light: vec3<f32>,
     @location(4) fog_distance: f32,
+    @location(5) world_position: vec3<f32>,
 };
 
 @vertex
@@ -58,6 +59,7 @@ fn vs_main(input: VertexIn) -> VertexOut {
         f32((input.light_ao >> 8u) & 0x3u),
     );
     output.fog_distance = length(world_position - camera.camera_position.xyz);
+    output.world_position = world_position;
     return output;
 }
 
@@ -99,4 +101,44 @@ fn fs_main(input: VertexOut) -> @location(0) vec4<f32> {
     let fog = clamp((input.fog_distance - 0.7 * far_plane) / (0.3 * far_plane), 0.0, 1.0);
     let fogged = mix(lit, camera.sky_colour.rgb, fog);
     return vec4<f32>(clamp(fogged, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+}
+
+@fragment
+fn fs_water(input: VertexOut) -> @location(0) vec4<f32> {
+    let albedo = textureSample(
+        block_texture,
+        block_sampler,
+        input.uv,
+        i32(input.layer),
+    );
+
+    let phase = 40.0 * 3.141592653589793 * camera.settings.z;
+    let world = input.world_position;
+    let wave = vec3<f32>(
+        sin(phase + world.x * 0.7 + world.z * 0.5),
+        0.0,
+        cos(phase + world.x * 0.6 - world.z * 0.4),
+    );
+    let normal = normalize(input.normal + 0.15 * wave);
+
+    let sky = input.light.x;
+    let block = input.light.y;
+    let ao = 0.55 + 0.15 * input.light.z;
+    let sun_direction = camera.sun_direction.xyz;
+    let ambient = camera.ambient_colour.rgb * sky;
+    let sun = camera.sun_colour.rgb
+        * max(dot(normal, sun_direction), 0.0)
+        * max(sun_direction.y, 0.0)
+        * sky;
+    let moon = vec3<f32>(0.50, 0.60, 0.80)
+        * max(dot(normal, -sun_direction), 0.0)
+        * max(-sun_direction.y, 0.0)
+        * sky;
+    let lamp = vec3<f32>(1.00, 0.75, 0.45) * block;
+    let lit = albedo.rgb * ao * (ambient + sun + moon + lamp);
+
+    let far_plane = camera.settings.y;
+    let fog = clamp((input.fog_distance - 0.7 * far_plane) / (0.3 * far_plane), 0.0, 1.0);
+    let fogged = mix(lit, camera.sky_colour.rgb, fog);
+    return vec4<f32>(clamp(fogged, vec3<f32>(0.0), vec3<f32>(1.0)), 0.65);
 }

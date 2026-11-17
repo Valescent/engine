@@ -22,7 +22,7 @@ The engine is a small `winit` and `wgpu` application. This page describes the cu
 | `src/sky.rs` | Day/night cycle, sun direction, sky/ambient/sun colours, and the CPU fog formula. |
 | `src/voxel.rs` | Texture vertices, the highlight mesh, and the v0.0.4 face-culled mesher kept as a test reference. |
 | `src/renderer.rs` | `wgpu` device/surface setup, pipelines, block texture array, buffers, depth texture, resizing, and draw submission. |
-| `src/shader.wgsl` | Chunk vertex transform and textured fragment shading. See [Shader authoring](shaders.md). |
+| `src/shader.wgsl` | Chunk vertex transform, lit/fogged opaque shading, and the animated water fragment. See [Shader authoring](shaders.md). |
 | `src/highlight.wgsl` | Line-list block outline. |
 | `src/overlay.wgsl` | Screen-space overlay quads. |
 
@@ -110,14 +110,15 @@ See [Coordinates](coordinates.md) for the full conventions, including chunk and 
 - Surface format comes from `Surface::get_default_config`; the default is typically `Bgra8UnormSrgb`.
 - The chunk pipeline uses `Depth32Float`, depth write enabled, and `Less` depth comparison.
 - Bind group 0 holds a 160-byte frame uniform: view-projection, sky, ambient, and sun colours, sun direction, an unlit flag, the far plane, time of day, and the camera position.
-- Each non-empty chunk owns an origin uniform in bind group 1 and up to two vertex buffers, one per LOD. The vertex shader adds the origin to the chunk-local vertex position.
+- Each non-empty chunk owns an origin uniform in bind group 1 and up to three vertex buffers: LOD0, LOD1, and an optional transparent water mesh. The vertex shader adds the origin to the chunk-local vertex position.
 - Bind group 2 holds one ten-layer `texture_2d_array` and a nearest-filtering sampler that repeats in U and V and clamps in W. The table is in [Texture and asset pipeline](textures.md).
 - The clear colour follows the interpolated sky colour, so fog blends into the distance instead of ending against a fixed backdrop.
 - A chunk's previous buffer stays visible until a newer mesh for its LOD is uploaded. Edits invalidate both LODs; a chunk with an empty mesh releases that buffer.
 - Draw calls are frustum-culled per chunk AABB and counted with visible chunks, visible vertices, draw calls, worker rebuild time, and upload time in the once-per-second debug log.
 - With the local `tracy` feature, the renderer requests timestamp queries when the adapter supports them, wraps the pass in a `wgpu-profiler` GPU zone, and ends the profiler frame after present. See [Profiling](profiling.md).
 - The surface starts in FIFO (vsync) presentation. `V` reconfigures it to immediate or mailbox presentation when supported, and back.
-- The highlight is a 24-vertex line list drawn after chunk meshes with `LessEqual` depth testing and no depth writes.
+- Water is a separate full-resolution mesh, drawn after all opaque chunks in ascending chunk order with blending `SrcAlpha`/`OneMinusSrcAlpha`, alpha `0.65`, `LessEqual` depth testing, and no depth writes. Faces are not sorted, so overlapping water can blend out of order.
+- The highlight is a 24-vertex line list drawn after chunk and water draws with `LessEqual` depth testing and no depth writes.
 - The debug overlay is a screen-space triangle list with per-vertex colour, alpha blending, and an `Always` depth compare. It refreshes from the one-second frame sample.
 - The depth texture is recreated on resize.
 - `Outdated` and `Suboptimal` surfaces reconfigure; `Lost` surfaces are recreated; zero-sized resize dimensions are clamped to `1×1`.
@@ -127,7 +128,7 @@ See [Coordinates](coordinates.md) for the full conventions, including chunk and 
 - No occlusion culling and no third LOD level.
 - No terrain generation or streaming. World management and backups are described in
   [World management](world-management.md).
-- No water or transparent rendering, and no shadow maps or occlusion culling.
+- No shadow maps, occlusion culling, or sorted transparency; water faces blend in mesh order.
 - One block palette; no inventory UI.
 
 These are deliberate milestone boundaries. See `docs/roadmap.md` and the scope pages under `docs/dev/` for what replaces them.
