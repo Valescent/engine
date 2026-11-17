@@ -3,7 +3,7 @@
 
 # A world, one voxel at a time.
 
-Valescent Engine is a voxel engine written in Rust. Two milestones are shipped — a voxel scene and a fly camera — and every step after that is written down before it is built.
+Valescent Engine is a voxel engine written in Rust. Three milestones are shipped — a voxel scene, a fly camera, and chunked meshes — and every step after that is written down before it is built.
 
 This is **pre-alpha**. The current world is split into fixed 32×32×32 chunks, each with its own face-culled mesh, and a camera you can fly. Interaction and light are planned in public.
 
@@ -15,7 +15,7 @@ This is **pre-alpha**. The current world is split into fixed 32×32×32 chunks, 
 
 <div class="hero-data">
 
-`PRE-ALPHA` <span>/</span> `v0.0.2 SHIPPED` <span>/</span> `RUST + WGPU`
+`PRE-ALPHA` <span>/</span> `v0.0.3 SHIPPED` <span>/</span> `RUST + WGPU`
 
 </div>
 

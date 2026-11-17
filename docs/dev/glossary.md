@@ -1,9 +1,9 @@
 # Glossary
 
 Preferred terms, short definitions, and links to the page that owns each topic. **Status** is
-current for implemented behaviour (shipped, or awaiting release), planned with a milestone for
-scoped work, optional for stretch work, or deferred when no decision exists. **Avoid** lists terms
-that are ambiguous or mean something else; it does not ban the word everywhere.
+current for implemented behaviour, planned with a milestone for scoped work, optional for stretch
+work, or deferred when no decision exists. **Avoid** lists terms that are ambiguous or mean
+something else; it does not ban the word everywhere.
 
 ## World and coordinates
 

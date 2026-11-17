@@ -2,7 +2,7 @@
 
 A voxel engine written in Rust.
 
-**Status: pre-alpha.** `0.0.1` and `0.0.2` are released. `0.0.3` (chunks and meshes) is implemented and awaiting release. Nothing past that is built yet.
+**Status: pre-alpha.** `0.0.1` through `0.0.3` are released: a voxel scene, a fly camera, and chunked, face-culled meshes. Nothing past chunked meshes is built yet.
 
 This is **source-available, not open source**. The code is under the [PolyForm Shield License 1.0.0](LICENSE): you may read, run, modify, and redistribute it, but not use it to provide a product that competes with it. PolyForm Shield is not OSI-approved.
 
