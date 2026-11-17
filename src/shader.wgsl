@@ -1,5 +1,12 @@
 struct Camera {
     view_projection: mat4x4<f32>,
+    sky_colour: vec4<f32>,
+    ambient_colour: vec4<f32>,
+    sun_colour: vec4<f32>,
+    sun_direction: vec4<f32>,
+    // x: unlit flag, y: far plane, z: time of day, w: unused.
+    settings: vec4<f32>,
+    camera_position: vec4<f32>,
 };
 
 struct Chunk {
@@ -32,7 +39,9 @@ struct VertexOut {
     @location(0) normal: vec3<f32>,
     @location(1) uv: vec2<f32>,
     @location(2) @interpolate(flat) layer: u32,
+    // x: sky, y: block, z: AO level.
     @location(3) light: vec3<f32>,
+    @location(4) fog_distance: f32,
 };
 
 @vertex
@@ -48,19 +57,46 @@ fn vs_main(input: VertexIn) -> VertexOut {
         f32((input.light_ao >> 4u) & 0xFu) / 15.0,
         f32((input.light_ao >> 8u) & 0x3u),
     );
+    output.fog_distance = length(world_position - camera.camera_position.xyz);
     return output;
 }
 
 @fragment
 fn fs_main(input: VertexOut) -> @location(0) vec4<f32> {
-    let light_direction = normalize(vec3<f32>(0.35, 0.85, 0.45));
-    let shade = 0.45 + 0.55 * max(dot(normalize(input.normal), light_direction), 0.0);
-    let ao = 0.55 + 0.15 * input.light.z;
     let albedo = textureSample(
         block_texture,
         block_sampler,
         input.uv,
         i32(input.layer),
     );
-    return vec4<f32>(albedo.rgb * shade * ao, 1.0);
+    let normal = normalize(input.normal);
+
+    // v0.0.4 unlit debug fallback.
+    if (camera.settings.x > 0.5) {
+        let light_direction = normalize(vec3<f32>(0.35, 0.85, 0.45));
+        let shade = 0.45 + 0.55 * max(dot(normal, light_direction), 0.0);
+        return vec4<f32>(albedo.rgb * shade, 1.0);
+    }
+
+    let sky = input.light.x;
+    let block = input.light.y;
+    let ao = 0.55 + 0.15 * input.light.z;
+    let sun_direction = camera.sun_direction.xyz;
+
+    let ambient = camera.ambient_colour.rgb * sky;
+    let sun = camera.sun_colour.rgb
+        * max(dot(normal, sun_direction), 0.0)
+        * max(sun_direction.y, 0.0)
+        * sky;
+    let moon = vec3<f32>(0.50, 0.60, 0.80)
+        * max(dot(normal, -sun_direction), 0.0)
+        * max(-sun_direction.y, 0.0)
+        * sky;
+    let lamp = vec3<f32>(1.00, 0.75, 0.45) * block;
+    let lit = albedo.rgb * ao * (ambient + sun + moon + lamp);
+
+    let far_plane = camera.settings.y;
+    let fog = clamp((input.fog_distance - 0.7 * far_plane) / (0.3 * far_plane), 0.0, 1.0);
+    let fogged = mix(lit, camera.sky_colour.rgb, fog);
+    return vec4<f32>(clamp(fogged, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
 }

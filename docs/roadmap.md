@@ -204,8 +204,8 @@ See [v0.0.6 scope](dev/v0.0.6-scope.md) for the concrete deliverables, technical
 - [x] Bake light values / ambient occlusion into vertex data
 
 #### 2. Shader lighting and fog
-- [ ] Dynamic directional light (sun/moon)
-- [ ] Distance fog to hide render-distance edge
+- [x] Dynamic directional light (sun/moon)
+- [x] Distance fog to hide render-distance edge
 
 #### 3. Water and transparency
 - [ ] Separate mesh layer for transparent blocks

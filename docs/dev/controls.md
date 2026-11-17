@@ -11,7 +11,8 @@ Keyboard and mouse bindings for the current engine and the scoped milestones. Se
 | Walking, interaction, hotbar, save | Current (v0.0.4) |
 | Vsync toggle | Current (v0.0.4) |
 | FPS/frame-time overlay | Current (v0.0.4) |
-| Day/night debug key | Planned (v0.0.6) |
+| Day/night debug key (`T`) | Current (v0.0.6) |
+| Unlit debug shading (`F4`) | Current (v0.0.6) |
 | Remappable bindings | Planned, no milestone |
 
 ## Bindings by milestone
@@ -52,6 +53,7 @@ not change the walk direction. The v0.0.3 demo toggle is not carried forward on 
 - `V` switches between FIFO presentation (vsync) and immediate or mailbox presentation when the
   surface supports it, falling back to FIFO otherwise. The engine starts with vsync on.
 - `F3` toggles the debug overlay. It shows FPS and frame time from the previous one-second sample.
+- `T` adds one hour to the day/night cycle (`1/24` of a 600-second day). `F4` toggles the v0.0.4 unlit debug shading path.
 - Movement uses a frame delta clamped to `100 ms`. Collision is swept along each axis, so a
   stalled frame cannot tunnel through terrain.
 
@@ -99,4 +101,4 @@ not change the walk direction. The v0.0.3 demo toggle is not carried forward on 
 
 ## Later milestones
 
-- v0.0.6: `T` advances the day/night clock by one hour.
+- v0.0.6: `Lamp` and `Water` are not on the hotbar; water has no mesh pass yet.

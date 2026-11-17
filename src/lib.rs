@@ -15,6 +15,7 @@ mod overlay;
 mod player;
 mod raycast;
 mod renderer;
+mod sky;
 mod voxel;
 mod world;
 
@@ -43,6 +44,7 @@ use player::{Player, PlayerInput};
 use raycast::{RaycastHit, raycast};
 pub use renderer::RendererError;
 use renderer::{FrameStats, Renderer};
+use sky::Sky;
 use voxel::build_highlight_mesh;
 use world::{CHUNK_SIZE, DirtyChunks, World};
 pub use world::{ChunkCoord, SaveError};
@@ -225,6 +227,8 @@ struct App {
     world: World,
     player: Player,
     camera: Camera,
+    sky: Sky,
+    unlit: bool,
     selected_block: Block,
     error: Option<RunError>,
     pressed: HashSet<KeyCode>,
@@ -289,6 +293,8 @@ impl App {
             world,
             player,
             camera,
+            sky: Sky::new(),
+            unlit: false,
             selected_block: Block::Stone,
             error: None,
             pressed: HashSet::new(),
@@ -532,6 +538,7 @@ impl App {
                 profiling::scope!("player update");
                 self.player.update(&self.world, input, delta_seconds);
             }
+            self.sky.advance(delta_seconds);
             self.camera.set_position(self.player.eye_position());
             self.update_highlight();
         }
@@ -555,6 +562,7 @@ impl App {
         };
         if let Some(renderer) = &mut self.renderer {
             renderer.set_camera(&self.camera);
+            renderer.set_sky(&self.sky.sample(), self.unlit);
             renderer.set_overlay(overlay.as_deref());
             self.stats.totals = renderer.render(&frustum);
         }
@@ -620,6 +628,15 @@ impl App {
                     self.toggle_vsync();
                 } else if code == KeyCode::F3 {
                     self.toggle_overlay();
+                } else if code == KeyCode::KeyT {
+                    self.sky.skip_hour();
+                    debug!(time_of_day = self.sky.time_of_day(), "time advanced");
+                } else if code == KeyCode::F4 {
+                    self.unlit = !self.unlit;
+                    debug!(unlit = self.unlit, "unlit shading toggled");
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
                 } else if let Some(block) = hotbar_block(code) {
                     self.selected_block = block;
                     debug!(?block, "selected block");

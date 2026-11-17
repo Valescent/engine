@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 4-bit sky and block light per chunk with BFS propagation across a 3x3x3 chunk neighbourhood, including the one-cell border field meshing will sample. Light is derived state and is recomputed after loading.
 - `Lamp` (solid, emits block light 14) and `Water` (non-solid, passes light without attenuation) blocks, with lamp and water texture layers; the array grows to ten layers.
 - Ambient occlusion shading and per-corner sky/block light in chunk meshes: vertices carry a packed `light_ao` field from a 40-byte layout, quads split at light and AO discontinuities, and corners darken in crevices.
+- A 600-second day/night cycle with dawn, day, dusk, and night keyframes; the sun and moon light the world, ambient light follows the sky, and lamps emit warm block light.
+- Distance fog from 70% to 100% of the camera far plane, blended to the current sky colour; the clear colour follows the sky.
+- `T` skips one hour and `F4` toggles the v0.0.4 unlit debug shading.
 
 ### Fixed
 

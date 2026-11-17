@@ -18,6 +18,8 @@ The engine is a small `winit` and `wgpu` application. This page describes the cu
 | `src/mesher.rs` | Mesh jobs, revisions, the bounded micropool `WorkerPool`, finished-result collection, and tests. |
 | `src/frustum.rs` | Six-plane frustum extraction and conservative AABB tests. |
 | `src/metrics.rs` | Tracy plots for frame, GPU, chunk, draw, rebuild, upload, and queue metrics; no-ops without the `tracy` feature. |
+| `src/light.rs` | Sky/block light storage accessors, BFS propagation, and the padded `LightField`. |
+| `src/sky.rs` | Day/night cycle, sun direction, sky/ambient/sun colours, and the CPU fog formula. |
 | `src/voxel.rs` | Texture vertices, the highlight mesh, and the v0.0.4 face-culled mesher kept as a test reference. |
 | `src/renderer.rs` | `wgpu` device/surface setup, pipelines, block texture array, buffers, depth texture, resizing, and draw submission. |
 | `src/shader.wgsl` | Chunk vertex transform and textured fragment shading. See [Shader authoring](shaders.md). |
@@ -26,11 +28,11 @@ The engine is a small `winit` and `wgpu` application. This page describes the cu
 
 ## Ownership
 
-- `App` owns the window handle, renderer, world, player, camera, selected block, input state, mesh queue, worker pool, and frame timing.
+- `App` owns the window handle, renderer, world, player, camera, sky clock, selected block, input state, mesh queue, worker pool, and frame timing.
 - `Renderer` owns the `wgpu` instance, surface, device, queue, surface configuration, chunk and highlight pipelines, camera uniform, per-chunk LOD buffers and origin uniforms, the block texture array, and depth attachment.
 - `Camera` owns only look state; it does not read the clock or input devices.
 - `Player` owns feet position, velocity, and ground state; it does not read input devices.
-- `World` owns the chunk map; every stored chunk is non-empty.
+- `World` owns the chunk map and the cached light fields; every stored chunk is non-empty.
 - `mesh::build_mesh` is a pure function over a chunk snapshot and its border blocks.
 - `mesher::WorkerPool` owns the worker threads; `MeshQueue` owns revisions, pending jobs, and desired LODs.
 
@@ -57,6 +59,7 @@ RedrawRequested
   -> player.update() with gravity, jump, and swept collision
   -> move the camera to the player eye
   -> raycast and update the block outline
+  -> advance the day/night cycle
   -> recalculate each chunk's desired LOD and request missing meshes
   -> collect up to two finished meshes from the worker pool
   -> upload them and select the active LOD per chunk
@@ -100,15 +103,16 @@ See [Coordinates](coordinates.md) for the full conventions, including chunk and 
 - Greedy quads UVs are in block units, so the sampler repeats the texture tile across merged faces.
 - Chunk data, collision, editing, and saving stay full-resolution; LOD1 is rendering-only.
 - Meshes are built from immutable chunk snapshots and a one-cell border on worker threads; the main thread only uploads finished results.
-- Chunks are saved as `VCHK` v1 files; the format and validation rules are in the [v0.0.4 spec](../specs/v0.0.4.md) and [ADR-0008](../decisions/0008-chunk-save-format.md).
+- Chunks are saved as `VCHK` v2 files; light is derived and never saved. The format and validation rules are in the [v0.0.4 spec](../specs/v0.0.4.md), [v0.0.6 spec](../specs/v0.0.6.md), and [ADR-0008](../decisions/0008-chunk-save-format.md).
 
 ## Rendering resources
 
 - Surface format comes from `Surface::get_default_config`; the default is typically `Bgra8UnormSrgb`.
 - The chunk pipeline uses `Depth32Float`, depth write enabled, and `Less` depth comparison.
-- The camera uniform is a 64-byte `mat4x4<f32>` in bind group 0.
+- Bind group 0 holds a 160-byte frame uniform: view-projection, sky, ambient, and sun colours, sun direction, an unlit flag, the far plane, time of day, and the camera position.
 - Each non-empty chunk owns an origin uniform in bind group 1 and up to two vertex buffers, one per LOD. The vertex shader adds the origin to the chunk-local vertex position.
 - Bind group 2 holds one ten-layer `texture_2d_array` and a nearest-filtering sampler that repeats in U and V and clamps in W. The table is in [Texture and asset pipeline](textures.md).
+- The clear colour follows the interpolated sky colour, so fog blends into the distance instead of ending against a fixed backdrop.
 - A chunk's previous buffer stays visible until a newer mesh for its LOD is uploaded. Edits invalidate both LODs; a chunk with an empty mesh releases that buffer.
 - Draw calls are frustum-culled per chunk AABB and counted with visible chunks, visible vertices, draw calls, worker rebuild time, and upload time in the once-per-second debug log.
 - With the local `tracy` feature, the renderer requests timestamp queries when the adapter supports them, wraps the pass in a `wgpu-profiler` GPU zone, and ends the profiler frame after present. See [Profiling](profiling.md).
@@ -123,7 +127,7 @@ See [Coordinates](coordinates.md) for the full conventions, including chunk and 
 - No occlusion culling and no third LOD level.
 - No terrain generation or streaming. World management and backups are described in
   [World management](world-management.md).
-- No lighting, fog, or transparency.
+- No water or transparent rendering, and no shadow maps or occlusion culling.
 - One block palette; no inventory UI.
 
 These are deliberate milestone boundaries. See `docs/roadmap.md` and the scope pages under `docs/dev/` for what replaces them.

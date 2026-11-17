@@ -41,6 +41,14 @@ impl Camera {
         self.position = position;
     }
 
+    pub(crate) fn position(&self) -> Vec3 {
+        self.position
+    }
+
+    pub(crate) fn far_plane(&self) -> f32 {
+        self.z_far
+    }
+
     pub(crate) fn yaw(&self) -> f32 {
         self.yaw
     }

@@ -2,7 +2,7 @@
 
 A voxel engine written in Rust.
 
-**Status: pre-alpha.** `0.0.1` through `0.0.5` are released. The world renders with greedy meshes, two LODs, frustum culling, and worker-thread remeshing. Nothing past that is built yet.
+**Status: pre-alpha.** `0.0.1` through `0.0.5` are released. `0.0.6` (atmosphere) is in progress: voxel light, ambient occlusion, a day/night cycle, and fog are in; water is next.
 
 This is **source-available, not open source**. The code is under the [PolyForm Shield License 1.0.0](LICENSE): you may read, run, modify, and redistribute it, but not use it to provide a product that competes with it. PolyForm Shield is not OSI-approved.
 
@@ -37,8 +37,7 @@ cargo run
 The world saves to `world/chunks/` on exit and on `Ctrl+S`. Set `ENGINE_STRESS_SCENE=1` to load
 the deterministic 64-chunk stress scene instead; it never touches `world/chunks/`.
 
-See [`docs/dev/controls.md`](docs/dev/controls.md) for the full binding table, including the
-planned day/night controls.
+See [`docs/dev/controls.md`](docs/dev/controls.md) for the full binding table.
 
 ## Development
 

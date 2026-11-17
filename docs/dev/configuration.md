@@ -45,6 +45,7 @@ See the [v0.0.5 spec](../specs/v0.0.5.md).
 | Initial window size | `src/lib.rs` | `1280 × 720` logical pixels. |
 | Frame delta clamp | `src/lib.rs` | `100 ms`. |
 | Frame log interval | `src/lib.rs` | `1 s`. |
+| Day/night cycle | `src/sky.rs` | `600 s`; `T` skips one hour. |
 | Camera tuning | `src/camera.rs` | Field of view, near/far planes, speed, and sensitivity. See [Controls](controls.md) and [Coordinates](coordinates.md). |
 
 Changing one of these requires a code change and rebuild. They are not user settings.

@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::mem::size_of;
 use std::sync::Arc;
 
+use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 use thiserror::Error;
 #[cfg(feature = "tracy")]
@@ -18,16 +19,45 @@ use crate::camera::Camera;
 use crate::frustum::Frustum;
 use crate::mesh::Lod;
 use crate::overlay::{OverlayVertex, build_overlay_mesh};
+use crate::sky::SkySample;
 use crate::voxel::{HighlightVertex, Vertex};
 use crate::world::{CHUNK_SIZE, ChunkCoord};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {
-    r: 0.04,
-    g: 0.045,
-    b: 0.06,
+    r: 0.45,
+    g: 0.65,
+    b: 0.90,
     a: 1.0,
 };
+
+/// Per-frame uniform: camera, sky colours, sun, and fog settings.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct FrameUniform {
+    view_projection: [f32; 16],
+    sky_colour: [f32; 4],
+    ambient_colour: [f32; 4],
+    sun_colour: [f32; 4],
+    sun_direction: [f32; 4],
+    /// Unlit flag, camera far plane, time of day, unused.
+    settings: [f32; 4],
+    camera_position: [f32; 4],
+}
+
+impl Default for FrameUniform {
+    fn default() -> Self {
+        Self {
+            view_projection: [0.0; 16],
+            sky_colour: [0.45, 0.65, 0.90, 1.0],
+            ambient_colour: [0.65, 0.70, 0.75, 0.0],
+            sun_colour: [1.00, 0.95, 0.85, 0.0],
+            sun_direction: [0.0, 1.0, 0.0, 0.0],
+            settings: [0.0, 100.0, 0.25, 0.0],
+            camera_position: [0.0; 4],
+        }
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum RendererError {
@@ -107,6 +137,8 @@ pub(crate) struct Renderer {
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
+    frame: FrameUniform,
+    clear_colour: wgpu::Color,
     camera_bind_group: wgpu::BindGroup,
     chunk_bind_group_layout: wgpu::BindGroupLayout,
     chunks: BTreeMap<ChunkCoord, GpuChunk>,
@@ -193,17 +225,18 @@ impl Renderer {
         config.present_mode = wgpu::PresentMode::Fifo;
         surface.configure(&device, &config);
 
+        let frame = FrameUniform {
+            view_projection: camera.view_projection().to_cols_array(),
+            settings: [0.0, camera.far_plane(), 0.25, 0.0],
+            ..FrameUniform::default()
+        };
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("camera uniform"),
-            size: 64,
+            label: Some("frame uniform"),
+            size: size_of::<FrameUniform>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(
-            &uniform_buffer,
-            0,
-            bytemuck::cast_slice(&camera.view_projection().to_cols_array()),
-        );
+        queue.write_buffer(&uniform_buffer, 0, bytemuck::bytes_of(&frame));
 
         let camera_bind_group_layout = create_camera_bind_group_layout(&device);
         let camera_bind_group =
@@ -235,6 +268,8 @@ impl Renderer {
             config,
             pipeline,
             uniform_buffer,
+            frame,
+            clear_colour: CLEAR_COLOR,
             camera_bind_group,
             chunk_bind_group_layout,
             chunks: BTreeMap::new(),
@@ -281,11 +316,37 @@ impl Renderer {
     }
 
     pub(crate) fn set_camera(&mut self, camera: &Camera) {
-        self.queue.write_buffer(
-            &self.uniform_buffer,
-            0,
-            bytemuck::cast_slice(&camera.view_projection().to_cols_array()),
-        );
+        self.frame.view_projection = camera.view_projection().to_cols_array();
+        self.frame.settings[1] = camera.far_plane();
+        let position = camera.position();
+        self.frame.camera_position = [position.x, position.y, position.z, 0.0];
+        self.write_frame();
+    }
+
+    /// Writes sky colours, sun direction, the unlit flag, and the clear colour.
+    pub(crate) fn set_sky(&mut self, sample: &SkySample, unlit: bool) {
+        self.frame.sky_colour = [sample.sky[0], sample.sky[1], sample.sky[2], 1.0];
+        self.frame.ambient_colour = [sample.ambient[0], sample.ambient[1], sample.ambient[2], 0.0];
+        self.frame.sun_colour = [sample.sun[0], sample.sun[1], sample.sun[2], 0.0];
+        self.frame.sun_direction = [
+            sample.sun_direction[0],
+            sample.sun_direction[1],
+            sample.sun_direction[2],
+            0.0,
+        ];
+        self.frame.settings[0] = if unlit { 1.0 } else { 0.0 };
+        self.clear_colour = wgpu::Color {
+            r: f64::from(sample.sky[0]),
+            g: f64::from(sample.sky[1]),
+            b: f64::from(sample.sky[2]),
+            a: 1.0,
+        };
+        self.write_frame();
+    }
+
+    fn write_frame(&mut self) {
+        self.queue
+            .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&self.frame));
     }
 
     pub(crate) fn upload_chunk(
@@ -457,7 +518,7 @@ impl Renderer {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(CLEAR_COLOR),
+                    load: wgpu::LoadOp::Clear(self.clear_colour),
                     store: wgpu::StoreOp::Store,
                 },
             })];
@@ -627,11 +688,11 @@ fn create_camera_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayo
         label: Some("camera bind group layout"),
         entries: &[wgpu::BindGroupLayoutEntry {
             binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX,
+            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,
-                min_binding_size: wgpu::BufferSize::new(64),
+                min_binding_size: wgpu::BufferSize::new(160),
             },
             count: None,
         }],

@@ -258,7 +258,7 @@ the Rust layout and document them in the change.
 | v0.0.3 | Chunk-local vertices and chunk origins | Implemented as a 16-byte origin uniform in group `1`. The vertex stage adds the chunk origin to the position. Normals are unchanged. |
 | v0.0.4 | 36-byte vertex with UV and layer, texture array | Implemented. The vertex stage forwards UV and layer; the fragment stage samples `texture_2d_array<f32>` with nearest filtering and no mipmaps. The highlight is a separate line-list pipeline. |
 | v0.0.5 | Greedy quads and LOD1 | Implemented. UVs are in block units and the sampler repeats in U and V. LOD1 uses the same shader; the CPU scales positions and UVs, so the shader does not branch on LOD. |
-| v0.0.6 | 40-byte light/AO vertex, day/night, fog, water | Partially implemented: the 40-byte vertex carries packed light/AO, the vertex stage unpacks it into an interpolated `vec3` varying, and the fragment stage applies the AO term. Day/night, fog, and the water pipeline remain. |
+| v0.0.6 | 40-byte light/AO vertex, day/night, fog, water | Implemented except water: the 40-byte vertex carries packed light/AO, the uniform carries sky/ambient/sun colours, sun direction, far plane, and camera position, and the fragment stage applies the lighting and fog formulas. |
 | v0.0.7 | Eleven texture layers and Sand | The texture array grows; the layer index is data. The lighting and water shader logic do not change. |
 
 ### Textures (v0.0.4)
@@ -360,20 +360,45 @@ fn fs_main(input: VertexOut) -> @location(0) vec4<f32> {
 }
 ```
 
-Until the day/night model lands, the fragment stage multiplies the v0.0.4 face shading by the AO
-term and carries sky/block light for the lighting pass.
+Until the water pipeline lands, the fragment stage applies the lighting formula below; the
+v0.0.4 face-shading path is kept behind the unlit flag. The lighting formula, keyframes, and fog
+range are in the [v0.0.6 spec](../specs/v0.0.6.md).
+[ADR-0011](../decisions/0011-voxel-light-and-baked-ao.md) records why lighting is voxel light
+plus baked AO rather than shadow maps.
 
-The lighting formula, keyframes, fog range, and water animation are in the
-[v0.0.6 spec](../specs/v0.0.6.md). [ADR-0011](../decisions/0011-voxel-light-and-baked-ao.md)
-records why lighting is voxel light plus baked AO rather than shadow maps.
+### Frame uniform (v0.0.6)
+
+`Camera` grows to 160 bytes (`min_binding_size = 160`) and is visible to both stages:
+
+| Field | Size | Use |
+|---|---:|---|
+| `view_projection` | 64 | `mat4x4<f32>` |
+| `sky_colour` | 16 | Fog and clear colour |
+| `ambient_colour` | 16 | Ambient term |
+| `sun_colour` | 16 | Sun term |
+| `sun_direction` | 16 | Sun direction; moon is its negation |
+| `settings` | 16 | `x` unlit flag, `y` far plane, `z` time of day |
+| `camera_position` | 16 | Fog distance in the vertex stage |
+
+The shader applies:
+
+```text
+sky = light.x, block = light.y, ao = 0.55 + 0.15 * light.z
+ambient = ambient_colour * sky
+sun = sun_colour * max(dot(n, sun_dir), 0) * max(sun_dir.y, 0) * sky
+moon = moon_colour * max(dot(n, -sun_dir), 0) * max(-sun_dir.y, 0) * sky
+lamp = lamp_colour * block
+lit = albedo * ao * (ambient + sun + moon + lamp)
+fog = clamp((distance - 0.7 * far) / (0.3 * far), 0, 1)
+colour = clamp(mix(lit, sky_colour, fog), 0, 1)
+```
+
+Bind group 0 must include `FRAGMENT` visibility; the fragment stage reads the uniform.
 
 Shader-facing consequences:
 
-- The day/night state needs uniform data for time, sun/moon direction and colours, ambient, and
-  sky colour. The spec fixes the formulas and keyframes, not the uniform packing; define one
-  struct, mirror it in Rust with explicit padding, and keep the sizes in sync.
-- Fog needs the camera-to-fragment distance. Add the camera position or a suitable view-space
-  value to the uniform; do not reconstruct world distance from `@builtin(position)`.
+- Fog needs the camera-to-fragment distance. The vertex stage computes it from the world position
+  and `camera_position`; do not reconstruct world distance from `@builtin(position)`.
 - The unlit face-shading path is a uniform-selected debug fallback, not a separate pipeline.
 - Water uses a separate transparent pipeline: blending `SrcAlpha` / `OneMinusSrcAlpha`, alpha
   `0.65`, depth test `LessEqual`, depth writes off.
