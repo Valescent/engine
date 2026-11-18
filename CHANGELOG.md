@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Modified-chunk persistence: `set_block` marks the owning chunk, unload and `Ctrl+S` write only modified chunks, and saved files are applied over regenerated blocks. An emptied chunk is a valid `VCHK` v3 file with zero records.
 - Unloading saves, then releases chunk blocks, light, GPU meshes, water meshes, and queued jobs; a late result for the unloaded column is discarded.
 
+### Fixed
+
+- The streaming guard no longer treats an air-only chunk as unready. Columns above the terrain store no blocks, so requiring light and a mesh for them made every neighbouring column permanently unready and trapped the player in the spawn column. Absent chunks are now ignored by the readiness check; unloaded columns are still refused.
+
 ### Changed
 
 - `VCHK` writes format version 3 and still loads versions 1 and 2; v3 accepts block IDs `1..=8` and a zero record count for an emptied modified chunk.

@@ -907,12 +907,16 @@ impl App {
     }
 
     /// Whether all four chunks of a column are lit and meshed.
+    /// Whether all four chunks of a column are lit and meshed.
+    ///
+    /// A chunk with no stored blocks is empty air and needs no light or mesh.
     fn column_ready(&self, column: IVec2) -> bool {
         (0..CHUNK_COLUMN).all(|y| {
             let chunk = ChunkCoord::new(column.x, y, column.y);
-            self.queue.light_is_current(chunk)
-                && (self.queue.is_built(chunk, Lod::Lod0, MeshKind::Opaque)
-                    || self.queue.is_built(chunk, Lod::Lod1, MeshKind::Opaque))
+            self.world.chunk(chunk).is_none()
+                || (self.queue.light_is_current(chunk)
+                    && (self.queue.is_built(chunk, Lod::Lod0, MeshKind::Opaque)
+                        || self.queue.is_built(chunk, Lod::Lod1, MeshKind::Opaque)))
         })
     }
 
@@ -1459,6 +1463,25 @@ mod tests {
         assert_eq!(setup.seed, Some(seed));
         assert!(setup.streaming.is_some());
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn an_all_air_column_is_ready() {
+        let app = App::with_world(World::default(), false);
+
+        assert!(app.column_ready(IVec2::new(3, -2)));
+    }
+
+    #[test]
+    fn absent_chunks_are_ignored_but_stored_chunks_must_be_lit() {
+        let mut app = App::with_world(World::default(), false);
+        app.world.set_block(IVec3::new(0, 0, 0), Block::Stone);
+
+        assert!(!app.column_ready(IVec2::ZERO));
+
+        app.queue.mark_light_built(ChunkCoord::new(0, 0, 0));
+
+        assert!(!app.column_ready(IVec2::ZERO));
     }
 
     #[test]

@@ -209,6 +209,31 @@ mod tests {
     }
 
     #[test]
+    fn the_guard_stops_movement_at_an_unready_column() {
+        let mut world = World::default();
+        for x in 0..64 {
+            for z in 0..64 {
+                world.set_block(IVec3::new(x, 0, z), Block::Stone);
+            }
+        }
+        let mut player = Player::new(Vec3::new(30.0, 1.0, 16.5));
+        let input = PlayerInput {
+            forward: 0.0,
+            right: 1.0,
+            jump: false,
+            yaw: 0.0,
+        };
+        let ready = |position: Vec3| position.x < 31.0;
+
+        for _ in 0..240 {
+            player.update_guarded(&world, input, 1.0 / 60.0, &ready);
+        }
+
+        assert!(player.position.x < 31.0, "{:?}", player.position);
+        assert_eq!(player.velocity.x, 0.0);
+    }
+
+    #[test]
     fn aabb_and_eye_match_the_spec() {
         let player = Player::new(Vec3::new(2.0, 3.0, 4.0));
         let aabb = player.aabb();

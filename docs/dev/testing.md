@@ -51,7 +51,7 @@ The headless suite covers:
 - Per-corner AO, packed light/AO, greedy splitting at light/AO changes, and LOD1 representative sampling.
 - Water meshing: air-only faces, no opaque faces, layer 9, and the water cell's own light.
 - Light snapshots, edit invalidation (3x3x3 plus columns below), and light/mesh queue ordering: an edit waits for the accepted light field before remeshing.
-- Generation determinism, biome thresholds, sea fill, cave carving, tree structure, streaming ring order, unload hysteresis, and the readiness guard; `config.toml` defaults, ranges, and unknown keys.
+- Generation determinism, biome thresholds, sea fill, cave carving, tree structure, streaming ring order, unload hysteresis, and the readiness guard, including air-only chunks and rejection of movement into an unready column; `config.toml` defaults, ranges, and unknown keys.
 - Modified-only saves, seed creation and parsing, the missing-seed error, saved chunks applied over generated blocks, empty saved chunks, and unload saving and dropping a column; a late generation result is discarded after its column was cancelled.
 - Mesh revisions, stale-result rejection, queue priority, background dropping, and the two-upload cap.
 - The deterministic 8x8 stress fixture and the stress-mode world path.
