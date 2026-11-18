@@ -52,13 +52,14 @@ The headless suite covers:
 - Water meshing: air-only faces, no opaque faces, layer 9, and the water cell's own light.
 - Light snapshots, edit invalidation (3x3x3 plus columns below), and light/mesh queue ordering: an edit waits for the accepted light field before remeshing.
 - Generation determinism, biome thresholds, sea fill, cave carving, tree structure, streaming ring order, unload hysteresis, and the readiness guard; `config.toml` defaults, ranges, and unknown keys.
+- Modified-only saves, seed creation and parsing, the missing-seed error, saved chunks applied over generated blocks, empty saved chunks, and unload saving and dropping a column; a late generation result is discarded after its column was cancelled.
 - Mesh revisions, stale-result rejection, queue priority, background dropping, and the two-upload cap.
 - The deterministic 8x8 stress fixture and the stress-mode world path.
 - Player AABB, gravity, jumping, ground detection, axis order, collision response, and tunnelling limits.
 - DDA ray hits, misses, range limits, tie-break order, and face normals.
 - Placement rejection for occupied cells and player intersection.
 - Procedural texture data size and determinism.
-- `VCHK` round-trip, negative chunks, local `0`/`31`, stale-file removal, missing versus empty directories, and every malformed-file error path.
+- `VCHK` round-trip, negative chunks, local `0`/`31`, unmodified files left in place, empty modified chunks, missing versus empty directories, and every malformed-file error path.
 
 ## Manual GPU acceptance
 

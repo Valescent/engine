@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Deterministic procedural generation: five seeded noise fields (continentalness, erosion, temperature, humidity, and 3D caves) drive a 128-block-tall world with hills, mountains, sea level 32, three biomes, surface palettes, caves, water fill, and deterministic trees on plains and hills.
+- `Sand` (block ID 8, texture layer 10); the texture array grows to eleven layers.
+- Player-centred chunk streaming: columns inside `render_distance_chunks` are generated on the worker pool and committed two per frame, nearest and forward first, and chunks are meshed once their light is ready. Columns beyond `render_distance + 2` unload.
+- A movement guard stops the player entering a column that is not yet generated, lit, and meshed.
+- `config.toml` with `[world] render_distance_chunks` (`8..=16`, default `12`); the camera far plane follows the render distance.
+- `world/seed`: one decimal `u64` written when a world is created and reused by every launch. `ENGINE_SEED=<u64>` chooses the seed of a new world.
+- Modified-chunk persistence: `set_block` marks the owning chunk, unload and `Ctrl+S` write only modified chunks, and saved files are applied over regenerated blocks. An emptied chunk is a valid `VCHK` v3 file with zero records.
+- Unloading saves, then releases chunk blocks, light, GPU meshes, water meshes, and queued jobs; a late result for the unloaded column is discarded.
+
+### Changed
+
+- `VCHK` writes format version 3 and still loads versions 1 and 2; v3 accepts block IDs `1..=8` and a zero record count for an emptied modified chunk.
+- A world is always generated from `world/seed`. A `world/chunks/` directory without a seed file is a typed `MissingSeed` error instead of an eager load, so a pre-v0.0.7 world needs a seed added deliberately.
+- Saves no longer delete `.vchk` files. Unmodified chunks have no file, and an emptied chunk keeps a zero-record file.
+
 ## [0.0.6] - 2026-11-18
 
 ### Added
@@ -25,14 +42,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Water (`Water`, block ID 7) renders as a separate transparent full-resolution mesh with animated normals, alpha `0.65`, depth writes off, and blending after all opaque chunks.
 - The demo world has a small pond; water is not on the hotbar.
 - Edits recompute sky and block light on the worker pool: the edited chunk, its 3x3x3 neighbourhood, and loaded chunks below are invalidated, and each is remeshed after its new light field is accepted.
-
-### Added
-
-- Deterministic procedural generation: five seeded noise fields (continentalness, erosion, temperature, humidity, and 3D caves) drive a 128-block-tall world with hills, mountains, sea level 32, three biomes, surface palettes, caves, water fill, and deterministic trees on plains and hills. `ENGINE_SEED=<u64>` builds a fixed generated area around the spawn column.
-- `Sand` (block ID 8, texture layer 10); the texture array grows to eleven layers.
-- Player-centred chunk streaming for generated worlds: columns inside `render_distance_chunks` are generated on the worker pool and committed two per frame, nearest and forward first, and chunks are meshed once their light is ready.
-- A movement guard stops the player entering a column that is not yet generated, lit, and meshed.
-- `config.toml` with `[world] render_distance_chunks` (`8..=16`, default `12`); the camera far plane follows the render distance.
 
 ### Fixed
 

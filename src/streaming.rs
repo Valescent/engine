@@ -8,7 +8,6 @@ use crate::player::PLAYER_WIDTH;
 use crate::world::CHUNK_SIZE;
 
 /// Columns kept loaded beyond the render distance before unloading.
-#[cfg(test)]
 pub(crate) const UNLOAD_MARGIN: i32 = 2;
 
 /// Streaming state for one generated world.
@@ -106,7 +105,6 @@ impl Streaming {
     }
 
     /// Loaded columns beyond the render distance plus the unload margin.
-    #[cfg(test)]
     pub(crate) fn unloadable(&self, player: IVec2) -> Vec<IVec2> {
         let limit = self.render_distance + UNLOAD_MARGIN;
         let mut columns: Vec<IVec2> = self
@@ -122,7 +120,6 @@ impl Streaming {
         columns
     }
 
-    #[cfg(test)]
     pub(crate) fn mark_unloaded(&mut self, column: IVec2) {
         self.loaded.remove(&column);
         self.ready.remove(&column);

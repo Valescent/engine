@@ -353,6 +353,11 @@ impl MeshQueue {
         self.gen_pending.remove(&result.column)
     }
 
+    /// Forgets a column's pending generation; a late result is discarded.
+    pub(crate) fn cancel_generation(&mut self, column: IVec2) {
+        self.gen_pending.remove(&column);
+    }
+
     /// Submits a light job unless the same revision is already in flight.
     pub(crate) fn request_light(
         &mut self,

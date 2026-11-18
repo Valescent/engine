@@ -22,8 +22,8 @@ mod streaming;
 mod voxel;
 mod world;
 
-use std::collections::HashSet;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -52,7 +52,7 @@ use renderer::{FrameStats, Renderer};
 use sky::Sky;
 use streaming::Streaming;
 use voxel::build_highlight_mesh;
-use world::{CHUNK_SIZE, DirtyChunks, World};
+use world::{CHUNK_SIZE, DirtyChunks, WORLD_DIRECTORY, World};
 pub use world::{ChunkCoord, SaveError};
 
 const WINDOW_TITLE: &str = concat!("Valescent Engine ", env!("CARGO_PKG_VERSION"));
@@ -99,7 +99,7 @@ pub fn run() -> Result<(), RunError> {
     let stress = stress_requested();
     let setup = world_for(
         stress,
-        Path::new(WORLD_CHUNKS),
+        Path::new(WORLD_DIRECTORY),
         config.render_distance_chunks,
     )?;
     let event_loop = EventLoop::new()?;
@@ -156,7 +156,11 @@ fn generated_seed() -> Option<u64> {
 
 /// Builds the spawn column and streaming state for a generated world.
 #[allow(clippy::cast_precision_loss)]
-fn generated_setup(seed: u64, render_distance: i32) -> WorldSetup {
+fn generated_setup(
+    seed: u64,
+    render_distance: i32,
+    directory: &Path,
+) -> Result<WorldSetup, SaveError> {
     let generator = Generator::new(seed);
     let (spawn_x, spawn_z, spawn_height) = generator.spawn_column();
     let spawn = Vec3::new(
@@ -168,7 +172,7 @@ fn generated_setup(seed: u64, render_distance: i32) -> WorldSetup {
 
     let mut world = World::default();
     for (chunk, blocks) in generator.generate_column(column) {
-        world.insert_chunk(chunk, blocks);
+        insert_generated_chunk(&mut world, directory, chunk, blocks)?;
     }
     world.relight();
 
@@ -177,12 +181,53 @@ fn generated_setup(seed: u64, render_distance: i32) -> WorldSetup {
     streaming.mark_ready(column);
 
     info!(seed, ?spawn, "generated world ready");
-    WorldSetup {
+    Ok(WorldSetup {
         world,
         spawn: Some(spawn),
         streaming: Some(streaming),
         seed: Some(seed),
+    })
+}
+
+/// Inserts generated blocks unless a saved chunk overrides them.
+fn insert_generated_chunk(
+    world: &mut World,
+    directory: &Path,
+    chunk: ChunkCoord,
+    generated: HashMap<IVec3, Block>,
+) -> Result<(), SaveError> {
+    match World::load_saved_chunk(directory, chunk)? {
+        Some(saved) if saved.blocks.is_empty() => {
+            debug!(?chunk, "applied an empty saved chunk");
+            world.mark_modified(chunk);
+        }
+        Some(saved) => {
+            debug!(?chunk, blocks = saved.blocks.len(), "applied a saved chunk");
+            world.insert_chunk(chunk, saved.blocks);
+            world.mark_modified(chunk);
+        }
+        None => world.insert_chunk(chunk, generated),
     }
+    Ok(())
+}
+
+/// Saves a column's modified chunks, then drops the column from the world and queue.
+fn release_column(
+    world: &mut World,
+    queue: &mut MeshQueue,
+    directory: &Path,
+    column: IVec2,
+) -> Result<(), SaveError> {
+    for y in 0..CHUNK_COLUMN {
+        world.save_chunk(directory, ChunkCoord::new(column.x, y, column.y))?;
+    }
+    queue.cancel_generation(column);
+    for y in 0..CHUNK_COLUMN {
+        let chunk = ChunkCoord::new(column.x, y, column.y);
+        queue.remove(chunk);
+        world.remove_chunk(chunk);
+    }
+    Ok(())
 }
 
 /// One startup world choice and its streaming state.
@@ -193,13 +238,13 @@ struct WorldSetup {
     seed: Option<u64>,
 }
 
-/// Loads the stress scene, a generated world, or the saved (or demo) world.
+/// Loads the stress scene or a generated world.
 ///
-/// Stress mode never touches `directory`. The returned spawn overrides the
+/// Stress mode never touches `world_directory`. The returned spawn overrides the
 /// default player position.
 fn world_for(
     stress: bool,
-    directory: &Path,
+    world_directory: &Path,
     render_distance: i32,
 ) -> Result<WorldSetup, SaveError> {
     if stress {
@@ -211,24 +256,13 @@ fn world_for(
             streaming: None,
             seed: None,
         })
-    } else if let Some(seed) = generated_seed() {
-        Ok(generated_setup(seed, render_distance))
-    } else if directory.exists() {
-        Ok(WorldSetup {
-            world: World::load_chunks(directory)?,
-            spawn: None,
-            streaming: None,
-            seed: None,
-        })
     } else {
-        let mut world = demo_world();
-        world.relight();
-        Ok(WorldSetup {
-            world,
-            spawn: None,
-            streaming: None,
-            seed: None,
-        })
+        let seed = world::load_or_create_seed(world_directory, generated_seed())?;
+        Ok(generated_setup(
+            seed,
+            render_distance,
+            &world_directory.join("chunks"),
+        )?)
     }
 }
 
@@ -261,6 +295,8 @@ fn stress_world() -> World {
     world
 }
 
+/// Builds the demo world used by the tests.
+#[cfg(test)]
 fn demo_world() -> World {
     let mut world = World::default();
     for x in 28..=35 {
@@ -326,6 +362,7 @@ struct App {
     config: Config,
     streaming: Option<Streaming>,
     seed: Option<u64>,
+    save_directory: Option<PathBuf>,
     stats: FrameAccumulator,
     stress: bool,
     world: World,
@@ -400,6 +437,7 @@ impl App {
             config: Config::default(),
             streaming: None,
             seed: None,
+            save_directory: save_directory(stress).map(Path::to_path_buf),
             stats: FrameAccumulator::default(),
             stress,
             world,
@@ -541,11 +579,22 @@ impl App {
             self.world.set_light_field(light.chunk, light.light);
         }
 
+        let chunk_directory = save_directory(self.stress);
         for generation in generations {
+            let mut loaded = true;
             for (chunk, blocks) in generation.chunks {
-                self.world.insert_chunk(chunk, blocks);
+                let saved = if let Some(directory) = chunk_directory {
+                    insert_generated_chunk(&mut self.world, directory, chunk, blocks)
+                } else {
+                    self.world.insert_chunk(chunk, blocks);
+                    Ok(())
+                };
+                if let Err(error) = saved {
+                    error!(%error, chunk = ?chunk, "failed to load a saved chunk");
+                    loaded = false;
+                }
             }
-            if let Some(streaming) = &mut self.streaming {
+            if loaded && let Some(streaming) = &mut self.streaming {
                 streaming.mark_loaded(generation.column);
             }
         }
@@ -615,14 +664,10 @@ impl App {
     }
 
     fn save_world(&self) {
-        let Some(directory) = save_directory(self.stress) else {
+        let Some(directory) = &self.save_directory else {
             debug!("stress scene is not saved");
             return;
         };
-        if self.streaming.is_some() {
-            debug!("generated worlds are saved by their seed in a later slice");
-            return;
-        }
         match self.world.save_chunks(directory) {
             Ok(()) => debug!("world saved"),
             Err(error) => error!(%error, "failed to save the world"),
@@ -871,11 +916,22 @@ impl App {
         })
     }
 
-    /// Marks ready columns and requests the nearest missing ones.
+    /// Marks ready columns, unloads distant ones, and requests the nearest missing.
     fn stream_columns(&mut self, pool: &dyn MeshPool) {
         let Some(seed) = self.seed else {
             return;
         };
+        let player_column = Streaming::column_at(self.player.position);
+
+        let unloadable = self
+            .streaming
+            .as_ref()
+            .map(|streaming| streaming.unloadable(player_column))
+            .unwrap_or_default();
+        for column in unloadable {
+            self.unload_column(column);
+        }
+
         let loaded: Vec<IVec2> = self
             .streaming
             .as_ref()
@@ -900,6 +956,26 @@ impl App {
             self.queue
                 .request_generation(pool, seed, column, Priority::Background);
         }
+    }
+
+    /// Saves and drops one column that left the unload margin.
+    fn unload_column(&mut self, column: IVec2) {
+        let Some(directory) = &self.save_directory else {
+            return;
+        };
+        if let Err(error) = release_column(&mut self.world, &mut self.queue, directory, column) {
+            error!(%error, ?column, "failed to save an unloaded chunk");
+            return;
+        }
+        if let Some(renderer) = &mut self.renderer {
+            for y in 0..CHUNK_COLUMN {
+                renderer.remove_chunk(ChunkCoord::new(column.x, y, column.y));
+            }
+        }
+        if let Some(streaming) = &mut self.streaming {
+            streaming.mark_unloaded(column);
+        }
+        debug!(?column, "unloaded column");
     }
 
     fn set_spawn(&mut self, position: Vec3) {
@@ -1072,6 +1148,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
+    use crate::generation::GenResult;
     use mesher::{Job, JobResult};
 
     #[test]
@@ -1272,22 +1349,159 @@ mod tests {
         }
     }
 
-    #[test]
-    fn stress_mode_ignores_the_saved_world_directory() {
+    fn temp_directory(name: &str) -> std::path::PathBuf {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let directory = std::env::temp_dir().join(format!(
-            "valescent-stress-{}-{:?}",
+            "valescent-{name}-{}-{}",
             std::process::id(),
-            std::thread::current().id()
+            COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
+        let _ = fs::remove_dir_all(&directory);
         fs::create_dir_all(&directory).unwrap();
-        fs::write(directory.join("chunk_bad.vchk"), []).unwrap();
+        directory
+    }
 
-        assert!(world_for(true, &directory, 12).is_ok());
-        assert!(world_for(false, &directory, 12).is_err());
+    #[test]
+    fn unloading_saves_edited_chunks_and_drops_the_column() {
+        let directory = temp_directory("unload");
+        let chunk = ChunkCoord::new(0, 0, 0);
+        let coordinate = IVec3::new(5, 0, 5);
+        let mut world = World::default();
+        world.set_block(coordinate, Block::Stone);
+        let mut queue = MeshQueue::default();
+
+        release_column(&mut world, &mut queue, &directory, IVec2::ZERO).unwrap();
+
+        assert!(world.chunk(chunk).is_none());
+        let saved = World::load_saved_chunk(&directory, chunk).unwrap().unwrap();
+        assert_eq!(saved.blocks.get(&coordinate), Some(&Block::Stone));
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_late_generation_result_is_discarded_after_unload() {
+        let pool = InlinePool::default();
+        let column = IVec2::new(2, 0);
+        let result = GenResult {
+            column,
+            chunks: Vec::new(),
+            elapsed: Duration::ZERO,
+        };
+        let mut queue = MeshQueue::default();
+
+        queue.request_generation(&pool, 7, column, Priority::Background);
+        assert!(queue.accept_generation(&result));
+
+        queue.request_generation(&pool, 7, column, Priority::Background);
+        queue.cancel_generation(column);
+        assert!(!queue.accept_generation(&result));
+    }
+
+    #[test]
+    fn saved_chunks_override_generated_blocks() {
+        let directory = temp_directory("apply-saved");
+        let chunk = ChunkCoord::new(0, 0, 0);
+        let coordinate = IVec3::new(5, 0, 5);
+        let mut saved = World::default();
+        saved.set_block(coordinate, Block::Stone);
+        saved.save_chunks(&directory).unwrap();
+        let generated: HashMap<IVec3, Block> = [(coordinate, Block::Grass)].into();
+
+        let mut world = World::default();
+        insert_generated_chunk(&mut world, &directory, chunk, generated).unwrap();
+
+        assert_eq!(world.block(coordinate), Block::Stone);
+        assert!(world.is_modified(chunk));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn an_empty_saved_chunk_clears_generated_blocks() {
+        let directory = temp_directory("apply-empty");
+        let chunk = ChunkCoord::new(0, 0, 0);
+        let coordinate = IVec3::new(5, 0, 5);
+        let mut saved = World::default();
+        saved.set_block(coordinate, Block::Stone);
+        saved.save_chunks(&directory).unwrap();
+        saved.set_block(coordinate, Block::Air);
+        saved.save_chunks(&directory).unwrap();
+        let generated: HashMap<IVec3, Block> = [(coordinate, Block::Grass)].into();
+
+        let mut world = World::default();
+        insert_generated_chunk(&mut world, &directory, chunk, generated).unwrap();
+
+        assert_eq!(world.block(coordinate), Block::Air);
+        assert!(world.chunk(chunk).is_none());
+        assert!(world.is_modified(chunk));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn generated_setup_applies_saved_edits_to_the_spawn_column() {
+        let directory = temp_directory("setup-saved");
+        let seed = 42;
+        let generator = Generator::new(seed);
+        let (spawn_x, spawn_z, _) = generator.spawn_column();
+        let column =
+            Streaming::column_at(Vec3::new(spawn_x as f32 + 0.5, 40.0, spawn_z as f32 + 0.5));
+        let chunk = ChunkCoord::new(column.x, 0, column.y);
+        let coordinate = chunk.world_origin() + IVec3::new(1, 0, 1);
+        let mut saved = World::default();
+        saved.set_block(coordinate, Block::Wood);
+        saved.save_chunks(&directory).unwrap();
+
+        let setup = generated_setup(seed, 8, &directory).unwrap();
+
+        assert_eq!(setup.world.block(coordinate), Block::Wood);
+        assert!(setup.world.is_modified(chunk));
+        assert_eq!(setup.seed, Some(seed));
+        assert!(setup.streaming.is_some());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn streaming_unloads_a_distant_column_after_saving_it() {
+        let directory = temp_directory("unload-stream");
+        let chunk = ChunkCoord::new(0, 0, 0);
+        let coordinate = IVec3::new(5, 0, 5);
+        let mut app = App::with_world(World::default(), false);
+        app.save_directory = Some(directory.clone());
+        app.seed = Some(42);
+        app.world.set_block(coordinate, Block::Stone);
+        let mut streaming = Streaming::new(8);
+        streaming.mark_loaded(IVec2::ZERO);
+        streaming.mark_ready(IVec2::ZERO);
+        app.streaming = Some(streaming);
+        app.player.position = Vec3::new(60.0 * 32.0, 40.0, 0.5);
+
+        app.stream_columns(&InlinePool::default());
+
+        assert!(app.world.chunk(chunk).is_none());
+        let saved = World::load_saved_chunk(&directory, chunk).unwrap().unwrap();
+        assert_eq!(saved.blocks.get(&coordinate), Some(&Block::Stone));
+        assert!(!app.streaming.as_ref().unwrap().is_ready(IVec2::ZERO));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn stress_mode_ignores_the_world_directory() {
+        let world_directory = temp_directory("stress-world");
+        let chunks = world_directory.join("chunks");
+        fs::create_dir_all(&chunks).unwrap();
+        fs::write(chunks.join("chunk_bad.vchk"), []).unwrap();
+
+        assert!(world_for(true, &world_directory, 12).is_ok());
+        assert!(matches!(
+            world_for(false, &world_directory, 12),
+            Err(SaveError::MissingSeed)
+        ));
+        assert!(!world_directory.join("seed").exists());
         assert!(save_directory(true).is_none());
         assert_eq!(save_directory(false), Some(Path::new(WORLD_CHUNKS)));
 
-        fs::remove_dir_all(directory).unwrap();
+        fs::remove_dir_all(world_directory).unwrap();
     }
 
     #[test]

@@ -36,6 +36,10 @@ const RECORD_BYTES: usize = 4;
 const MAX_BLOCK_COUNT: u32 = 32_768;
 const CHUNK_FILE_PREFIX: &str = "chunk_";
 const CHUNK_FILE_SUFFIX: &str = ".vchk";
+const SEED_FILE: &str = "seed";
+
+/// World directory used by the streaming world: `world/`.
+pub(crate) const WORLD_DIRECTORY: &str = "world";
 
 /// Coordinate of one chunk in chunk space.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -142,6 +146,7 @@ pub(crate) fn local_index(local: IVec3) -> usize {
 pub(crate) struct World {
     chunks: HashMap<ChunkCoord, Chunk>,
     light: HashMap<ChunkCoord, Arc<LightField>>,
+    modified: HashSet<ChunkCoord>,
 }
 
 impl World {
@@ -168,6 +173,8 @@ impl World {
         } else {
             touched_chunks(chunk, local)
         };
+
+        self.modified.insert(chunk);
 
         if block == Block::Air {
             let Some(chunk_data) = self.chunks.get_mut(&chunk) else {
@@ -210,6 +217,12 @@ impl World {
                 ..Chunk::default()
             },
         );
+    }
+
+    /// Drops one chunk from memory, keeping its modified marker.
+    pub(crate) fn remove_chunk(&mut self, chunk: ChunkCoord) {
+        self.chunks.remove(&chunk);
+        self.light.remove(&chunk);
     }
 
     /// Iterates over every non-empty chunk in unspecified order.
@@ -321,6 +334,7 @@ impl World {
     ///
     /// A missing directory is an empty world. Any malformed file aborts the
     /// load without returning a partial world.
+    #[cfg(test)]
     pub(crate) fn load_chunks(directory: &Path) -> Result<Self, SaveError> {
         let entries = match fs::read_dir(directory) {
             Ok(entries) => entries,
@@ -365,43 +379,85 @@ impl World {
                     header: header_chunk,
                 });
             }
-            world.chunks.insert(header_chunk, chunk);
+            world.modified.insert(header_chunk);
+            if !chunk.blocks.is_empty() {
+                world.chunks.insert(header_chunk, chunk);
+            }
         }
         world.relight();
         Ok(world)
     }
 
-    /// Writes every non-empty chunk and removes stale chunk files.
+    /// Writes every modified chunk.
+    ///
+    /// Unmodified chunks have no file and are regenerated from the seed. Empty
+    /// modified chunks are written as v3 files with zero records.
     pub(crate) fn save_chunks(&self, directory: &Path) -> Result<(), SaveError> {
         fs::create_dir_all(directory).map_err(|error| SaveError::from_path(&error, directory))?;
 
-        for entry in
-            fs::read_dir(directory).map_err(|error| SaveError::from_path(&error, directory))?
-        {
-            let entry = entry.map_err(|error| SaveError::from_path(&error, directory))?;
-            let path = entry.path();
-            if !path.is_file() || path.extension().is_none_or(|extension| extension != "vchk") {
-                continue;
-            }
-            let Some(file_name) = path.file_name().map(|name| name.to_string_lossy()) else {
-                continue;
+        let mut modified: Vec<_> = self.modified.iter().copied().collect();
+        modified.sort();
+        for coord in modified {
+            let bytes = match self.chunks.get(&coord) {
+                Some(chunk) => serialize_chunk(coord, chunk),
+                None => serialize_empty_chunk(coord),
             };
-            let Some(coord) = parse_chunk_file_name(&file_name) else {
-                continue;
-            };
-            if !self.chunks.contains_key(&coord) {
-                fs::remove_file(&path).map_err(|error| SaveError::from_path(&error, &path))?;
-            }
-        }
-
-        let mut chunks: Vec<_> = self.chunks.iter().collect();
-        chunks.sort_by_key(|(coord, _)| **coord);
-        for (coord, chunk) in chunks {
-            let bytes = serialize_chunk(*coord, chunk);
-            let path = chunk_file_path(directory, *coord);
+            let path = chunk_file_path(directory, coord);
             fs::write(&path, bytes).map_err(|error| SaveError::from_path(&error, &path))?;
         }
         Ok(())
+    }
+
+    /// Writes one modified chunk and clears its marker.
+    pub(crate) fn save_chunk(
+        &mut self,
+        directory: &Path,
+        chunk: ChunkCoord,
+    ) -> Result<(), SaveError> {
+        if !self.modified.contains(&chunk) {
+            return Ok(());
+        }
+        fs::create_dir_all(directory).map_err(|error| SaveError::from_path(&error, directory))?;
+        let bytes = match self.chunks.get(&chunk) {
+            Some(data) => serialize_chunk(chunk, data),
+            None => serialize_empty_chunk(chunk),
+        };
+        let path = chunk_file_path(directory, chunk);
+        fs::write(&path, bytes).map_err(|error| SaveError::from_path(&error, &path))?;
+        self.modified.remove(&chunk);
+        Ok(())
+    }
+
+    /// Reads one saved chunk, if a file exists.
+    pub(crate) fn load_saved_chunk(
+        directory: &Path,
+        chunk: ChunkCoord,
+    ) -> Result<Option<Chunk>, SaveError> {
+        let path = chunk_file_path(directory, chunk);
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(SaveError::from_path(&error, &path)),
+        };
+        let (header, data) = parse_chunk(&bytes)?;
+        if header != chunk {
+            return Err(SaveError::ChunkMismatch {
+                file: chunk,
+                header,
+            });
+        }
+        Ok(Some(data))
+    }
+
+    /// Marks a loaded chunk as modified.
+    pub(crate) fn mark_modified(&mut self, chunk: ChunkCoord) {
+        self.modified.insert(chunk);
+    }
+
+    /// Whether a chunk has unsaved edits.
+    #[cfg(test)]
+    pub(crate) fn is_modified(&self, chunk: ChunkCoord) -> bool {
+        self.modified.contains(&chunk)
     }
 }
 
@@ -453,6 +509,10 @@ pub enum SaveError {
     Truncated,
     #[error("chunk file has trailing bytes")]
     TrailingBytes,
+    #[error("world/seed is missing but chunk files exist")]
+    MissingSeed,
+    #[error("invalid world seed file: {0:?}")]
+    InvalidSeed(String),
 }
 
 impl SaveError {
@@ -471,6 +531,7 @@ fn chunk_file_path(directory: &Path, chunk: ChunkCoord) -> PathBuf {
     ))
 }
 
+#[cfg(test)]
 fn parse_chunk_file_name(name: &str) -> Option<ChunkCoord> {
     let stem = name
         .strip_prefix(CHUNK_FILE_PREFIX)?
@@ -574,6 +635,21 @@ fn serialize_chunk(chunk_coord: ChunkCoord, chunk: &Chunk) -> Vec<u8> {
     records.sort_by_key(|(local, _)| (local.x, local.y, local.z));
 
     let block_count = u32::try_from(records.len()).expect("chunk block count fits in u32");
+    let mut bytes = serialize_header(chunk_coord, block_count);
+    for (local, block) in records {
+        bytes.push(u8::try_from(local.x).expect("local coordinate fits in u8"));
+        bytes.push(u8::try_from(local.y).expect("local coordinate fits in u8"));
+        bytes.push(u8::try_from(local.z).expect("local coordinate fits in u8"));
+        bytes.push(block.id());
+    }
+    bytes
+}
+
+fn serialize_empty_chunk(chunk_coord: ChunkCoord) -> Vec<u8> {
+    serialize_header(chunk_coord, 0)
+}
+
+fn serialize_header(chunk_coord: ChunkCoord, block_count: u32) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(
         HEADER_BYTES
             + usize::try_from(block_count).expect("block count fits in usize") * RECORD_BYTES,
@@ -584,13 +660,70 @@ fn serialize_chunk(chunk_coord: ChunkCoord, chunk: &Chunk) -> Vec<u8> {
     bytes.extend_from_slice(&chunk_coord.0.y.to_le_bytes());
     bytes.extend_from_slice(&chunk_coord.0.z.to_le_bytes());
     bytes.extend_from_slice(&block_count.to_le_bytes());
-    for (local, block) in records {
-        bytes.push(u8::try_from(local.x).expect("local coordinate fits in u8"));
-        bytes.push(u8::try_from(local.y).expect("local coordinate fits in u8"));
-        bytes.push(u8::try_from(local.z).expect("local coordinate fits in u8"));
-        bytes.push(block.id());
-    }
     bytes
+}
+
+/// Reads or creates `world/seed`.
+pub(crate) fn load_or_create_seed(
+    world_directory: &Path,
+    preferred: Option<u64>,
+) -> Result<u64, SaveError> {
+    let seed_path = world_directory.join(SEED_FILE);
+    match fs::read_to_string(&seed_path) {
+        Ok(text) => parse_seed(&text),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            if directory_has_chunks(&world_directory.join("chunks"))? {
+                return Err(SaveError::MissingSeed);
+            }
+            let seed = preferred.unwrap_or_else(fresh_seed);
+            fs::create_dir_all(world_directory)
+                .map_err(|error| SaveError::from_path(&error, world_directory))?;
+            fs::write(&seed_path, format!("{seed}\n"))
+                .map_err(|error| SaveError::from_path(&error, &seed_path))?;
+            Ok(seed)
+        }
+        Err(error) => Err(SaveError::from_path(&error, &seed_path)),
+    }
+}
+
+fn parse_seed(text: &str) -> Result<u64, SaveError> {
+    let trimmed = text.strip_suffix('\n').unwrap_or(text);
+    let trimmed = trimmed.strip_suffix('\r').unwrap_or(trimmed);
+    if trimmed.is_empty() || !trimmed.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(SaveError::InvalidSeed(text.to_owned()));
+    }
+    trimmed
+        .parse()
+        .map_err(|_| SaveError::InvalidSeed(text.to_owned()))
+}
+
+fn directory_has_chunks(directory: &Path) -> Result<bool, SaveError> {
+    match fs::read_dir(directory) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = entry.map_err(|error| SaveError::from_path(&error, directory))?;
+                let path = entry.path();
+                if path.is_file()
+                    && path
+                        .extension()
+                        .is_some_and(|extension| extension == "vchk")
+                {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(SaveError::from_path(&error, directory)),
+    }
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn fresh_seed() -> u64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos() as u64);
+    crate::generation::splitmix64(nanos ^ u64::from(std::process::id()))
 }
 
 fn read_i32(bytes: &[u8], offset: usize) -> Option<i32> {
@@ -952,8 +1085,8 @@ mod tests {
     }
 
     #[test]
-    fn saving_removes_stale_chunk_files() {
-        let directory = temp_dir("stale");
+    fn saving_leaves_unmodified_chunk_files_alone() {
+        let directory = temp_dir("modified-only");
         let mut world = World::default();
         world.set_block(IVec3::new(5, 0, 5), Block::Stone);
         world.save_chunks(&directory).unwrap();
@@ -961,7 +1094,142 @@ mod tests {
 
         World::default().save_chunks(&directory).unwrap();
 
-        assert_eq!(fs::read_dir(&directory).unwrap().count(), 0);
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn saving_writes_only_modified_chunks() {
+        let directory = temp_dir("saves-modified");
+        let mut world = World::default();
+        world.set_block(IVec3::new(5, 0, 5), Block::Stone);
+        world.save_chunks(&directory).unwrap();
+        world.set_block(IVec3::new(37, 0, 5), Block::Stone);
+        world.save_chunks(&directory).unwrap();
+
+        assert!(directory.join("chunk_0_0_0.vchk").exists());
+        assert!(directory.join("chunk_1_0_0.vchk").exists());
+        assert!(directory.join("chunk_1_0_0.vchk").exists());
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 2);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn an_emptied_chunk_round_trips_as_an_empty_v3_file() {
+        let directory = temp_dir("emptied");
+        let mut world = World::default();
+        let coordinate = IVec3::new(5, 0, 5);
+        world.set_block(coordinate, Block::Stone);
+        world.save_chunks(&directory).unwrap();
+
+        world.set_block(coordinate, Block::Air);
+        world.save_chunks(&directory).unwrap();
+
+        let bytes = fs::read(directory.join("chunk_0_0_0.vchk")).unwrap();
+        assert_eq!(u32::from_le_bytes(bytes[18..22].try_into().unwrap()), 0);
+
+        let loaded = World::load_chunks(&directory).unwrap();
+        assert_eq!(loaded.block(coordinate), Block::Air);
+        assert!(loaded.iter_chunks().next().is_none());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn save_chunk_writes_a_modified_chunk_once() {
+        let directory = temp_dir("save-one");
+        let chunk = chunk_at(IVec3::new(5, 0, 5));
+        let mut world = World::default();
+        world.set_block(IVec3::new(5, 0, 5), Block::Stone);
+        assert!(world.is_modified(chunk));
+
+        world.save_chunk(&directory, chunk).unwrap();
+
+        assert!(!world.is_modified(chunk));
+        let saved = World::load_saved_chunk(&directory, chunk).unwrap().unwrap();
+        assert_eq!(saved.blocks.get(&IVec3::new(5, 0, 5)), Some(&Block::Stone));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn removing_a_chunk_drops_blocks_but_keeps_the_marker() {
+        let chunk = chunk_at(IVec3::new(5, 0, 5));
+        let mut world = World::default();
+        world.set_block(IVec3::new(5, 0, 5), Block::Stone);
+
+        world.remove_chunk(chunk);
+
+        assert!(world.chunk(chunk).is_none());
+        assert_eq!(world.block(IVec3::new(5, 0, 5)), Block::Air);
+        assert!(world.is_modified(chunk));
+    }
+
+    #[test]
+    fn seed_file_is_created_once_and_reused() {
+        let directory = temp_dir("seed-create");
+
+        assert_eq!(load_or_create_seed(&directory, Some(42)).unwrap(), 42);
+        assert_eq!(fs::read_to_string(directory.join("seed")).unwrap(), "42\n");
+        assert_eq!(load_or_create_seed(&directory, Some(7)).unwrap(), 42);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_fresh_seed_is_written_as_decimal() {
+        let directory = temp_dir("seed-fresh");
+
+        let seed = load_or_create_seed(&directory, None).unwrap();
+
+        let text = fs::read_to_string(directory.join("seed")).unwrap();
+        assert_eq!(text, format!("{seed}\n"));
+        assert_eq!(parse_seed(&text).unwrap(), seed);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn malformed_seed_files_are_rejected() {
+        let directory = temp_dir("seed-malformed");
+        let path = directory.join("seed");
+
+        for text in [
+            "",
+            "abc",
+            "-1",
+            "1.5",
+            "42\n\n",
+            " 42",
+            "18446744073709551616",
+        ] {
+            fs::write(&path, text).unwrap();
+            assert!(
+                matches!(
+                    load_or_create_seed(&directory, None),
+                    Err(SaveError::InvalidSeed(_))
+                ),
+                "{text:?}"
+            );
+        }
+
+        fs::write(&path, "42\r\n").unwrap();
+        assert_eq!(load_or_create_seed(&directory, None).unwrap(), 42);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_missing_seed_with_chunks_is_rejected() {
+        let directory = temp_dir("seed-missing");
+        let chunks = directory.join("chunks");
+        fs::create_dir_all(&chunks).unwrap();
+        write_raw(
+            &chunks,
+            "chunk_0_0_0.vchk",
+            &header(chunk_at(IVec3::ZERO), 0),
+        );
+
+        assert!(matches!(
+            load_or_create_seed(&directory, None),
+            Err(SaveError::MissingSeed)
+        ));
+        assert!(!directory.join("seed").exists());
         fs::remove_dir_all(directory).unwrap();
     }
 

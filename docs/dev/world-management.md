@@ -1,15 +1,15 @@
 # World management
 
-The engine saves chunk data under `world/chunks/` on clean exit and on `Ctrl+S`. This page is the
-operating procedure for the current `VCHK` v1 save path and the planned v0.0.7 seed and
-modified-only changes.
+The engine saves chunk data under `world/chunks/` on chunk unload, on clean exit, and on `Ctrl+S`.
+This page is the operating procedure for the `VCHK` v3 save path, `world/seed`, and modified-only
+saves.
 
 | Area | Status |
 |---|---|
 | `world/` save directory | Current (v0.0.4) |
 | `VCHK` v1 chunks | Current (v0.0.4) |
 | `VCHK` v2 chunks | Current (v0.0.6) |
-| `VCHK` v3, `world/seed`, modified-only saves | Planned (v0.0.7) |
+| `VCHK` v3, `world/seed`, modified-only saves | Current (v0.0.7) |
 | Built-in backups | None; copy the world directory manually |
 | Atomic writes, checksums, compression | None in v1-v3; see [ADR-0008](../decisions/0008-chunk-save-format.md) |
 | Built-in repair tool | None |
@@ -53,8 +53,9 @@ The loader treats a missing directory and an empty directory differently:
 | `world/seed` missing with `.vchk` files | Not applicable | Typed error; the chunks need a seed |
 | `world/seed` missing without `.vchk` files | Not applicable | Generate and write a random seed from OS entropy |
 
-This difference matters for reset: deleting the whole `world/` is a new demo world in v0.0.4, while
-leaving an empty `world/chunks/` is an empty world.
+A v0.0.7 world is always generated from `world/seed`; there is no demo scene and no eager load of a
+seed-less chunk directory. A v0.0.4-v0.0.6 `world/chunks/` without a seed file therefore fails with
+the missing-seed error. Add a seed deliberately to carry it forward, or keep using the old build.
 
 ## Save behavior
 
@@ -66,9 +67,15 @@ leaving an empty `world/chunks/` is an empty world.
 - There is no periodic autosave. A crash loses edits made since the last save.
 - v0.0.4-v0.0.6 remove `.vchk` files for chunks that are no longer non-empty, so a deleted chunk
   does not reload.
+- v0.0.7 never deletes a `.vchk` file during a save. An emptied chunk is written as a v3 file with
+  zero records, and unmodified chunks simply have no file.
 - v0.0.7 saves a modified chunk before dropping it during streaming. If that save fails, the error
-  is logged and the chunk stays in memory until the next save. If the process is killed before a
+  is logged and the column stays in memory until the next save. If the process is killed before a
   later save, the edits are lost.
+- Unloading releases the chunk blocks, light, GPU meshes, water meshes, and any queued generation,
+  light, or mesh job. A late result for a column that was unloaded in the meantime is discarded.
+- `config.toml` sets `world.render_distance_chunks`; unload happens at `render_distance + 2`
+  columns. See [Configuration](configuration.md).
 - Save errors are typed and logged; they do not panic. A `Ctrl+S` error does not terminate the
   engine. An exit save error is logged before the process exits.
 - v1-v3 have no atomic-write protocol. A crash during a save can leave a truncated file. The

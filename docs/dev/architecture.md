@@ -13,14 +13,14 @@ The engine is a small `winit` and `wgpu` application. This page describes the cu
 | `src/player.rs` | Player physics, gravity, jumping, swept AABB collision, and tests. |
 | `src/overlay.rs` | Screen-space debug text geometry and font. |
 | `src/raycast.rs` | DDA voxel traversal, hit result, tie-breaking, and tests. |
-| `src/world.rs` | Chunk and block storage, coordinate conversion, dirty-chunk tracking, `VCHK` save/load, and tests. |
+| `src/world.rs` | Chunk and block storage, coordinate conversion, dirty-chunk tracking, the modified set, `VCHK` save/load, and seed file handling. |
 | `src/mesh.rs` | Greedy meshing, the 2x2x2 LOD1 downsample, LOD selection, chunk snapshots, border blocks, and tests. |
-| `src/mesher.rs` | Mesh and light jobs, revisions, the bounded micropool `WorkerPool`, finished-result collection, and tests. |
+| `src/mesher.rs` | Mesh, light, and generation jobs, revisions, the bounded micropool `WorkerPool`, finished-result collection, and tests. |
 | `src/frustum.rs` | Six-plane frustum extraction and conservative AABB tests. |
 | `src/metrics.rs` | Tracy plots for frame, GPU, chunk, draw, rebuild, upload, and queue metrics; no-ops without the `tracy` feature. |
 | `src/light.rs` | Sky/block light storage accessors, BFS propagation, and the padded `LightField`. |
 | `src/generation.rs` | Seeded noise fields, height, biomes, caves, water fill, trees, and the spawn column. |
-| `src/streaming.rs` | Player-centred load rings, forward-first ordering, readiness, and the movement guard. |
+| `src/streaming.rs` | Player-centred load rings, forward-first ordering, unload hysteresis, readiness, and the movement guard. |
 | `src/config.rs` | `config.toml` parsing for the render distance. |
 | `src/sky.rs` | Day/night cycle, sun direction, sky/ambient/sun colours, and the CPU fog formula. |
 | `src/voxel.rs` | Texture vertices, the highlight mesh, and the v0.0.4 face-culled mesher kept as a test reference. |
@@ -44,11 +44,11 @@ The renderer holds an `Arc<Window>` and creates a `Surface<'static>` from it. Th
 ## Startup
 
 1. `main` calls `engine::run`.
-2. `run` initialises tracing, then loads `world/chunks/` or seeds the demo world when the directory is missing. `ENGINE_STRESS_SCENE=1` builds the in-memory stress scene instead and skips world I/O.
+2. `run` initialises tracing and reads `config.toml`. It then loads `world/seed` (creating one when the world is new) and generates the spawn column; saved chunk files are applied over the generated blocks. `ENGINE_STRESS_SCENE=1` builds the in-memory stress scene instead and skips world I/O.
 3. `run` creates the `winit` event loop and `App`.
 4. `App::resumed` creates the window and renderer.
 5. The renderer selects an adapter, requests a device and queue, configures the surface, builds the pipelines and the texture array, and starts no chunk mesh work itself.
-6. `App` starts the micropool worker pool and queues an urgent LOD0 job for every chunk. Meshes appear as workers finish.
+6. `App` starts the micropool worker pool and queues an urgent LOD0 job for every loaded chunk. Meshes appear as workers finish.
 7. The application requests the first redraw.
 
 World load errors return through `RunError::Save` before the window opens. Startup errors are stored on `App`, logged, and returned through `RunError` after the event loop exits. The engine does not panic on adapter, device, surface, shader, or malformed save failures.
@@ -63,9 +63,9 @@ RedrawRequested
   -> move the camera to the player eye
   -> raycast and update the block outline
   -> advance the day/night cycle
-  -> stream missing columns and mark ready ones
+  -> unload columns past the margin, then stream missing columns and mark ready ones
   -> recalculate each chunk's desired LOD and request missing meshes
-  -> drain finished light and mesh results (two mesh uploads per frame)
+  -> drain finished light, mesh, and generation results (two mesh uploads per frame)
   -> upload them and select the active LOD per chunk
   -> extract the frustum from the view-projection
   -> write camera uniform
@@ -107,7 +107,7 @@ See [Coordinates](coordinates.md) for the full conventions, including chunk and 
 - Greedy quads UVs are in block units, so the sampler repeats the texture tile across merged faces.
 - Chunk data, collision, editing, and saving stay full-resolution; LOD1 is rendering-only.
 - Meshes are built from immutable chunk snapshots and a one-cell border on worker threads; the main thread only uploads finished results.
-- Chunks are saved as `VCHK` v2 files; light is derived and never saved. The format and validation rules are in the [v0.0.4 spec](../specs/v0.0.4.md), [v0.0.6 spec](../specs/v0.0.6.md), and [ADR-0008](../decisions/0008-chunk-save-format.md).
+- Chunks are saved as `VCHK` v3 files; light is derived and never saved. Only modified chunks are written, and an emptied chunk is a v3 file with zero records. The format and validation rules are in the [v0.0.4 spec](../specs/v0.0.4.md), [v0.0.6 spec](../specs/v0.0.6.md), [v0.0.7 spec](../specs/v0.0.7.md), and [ADR-0008](../decisions/0008-chunk-save-format.md).
 
 ## Rendering resources
 

@@ -26,10 +26,10 @@ environment variables.
 | Variable | Read by | Effect |
 |---|---|---|
 | `RUST_LOG` | Engine (`tracing-subscriber` `EnvFilter`) | Sets the log filter. Unset or invalid falls back to `info`. Examples: `engine=debug`, `engine=debug,wgpu=warn`. |
-| `ENGINE_STRESS_SCENE` | Engine (`run`) | `1` builds the deterministic 8x8 stress scene in memory and disables world load and save. Any other value or unset uses `world/chunks/`. |
+| `ENGINE_STRESS_SCENE` | Engine (`run`) | `1` builds the deterministic 8x8 stress scene in memory and disables world load and save. Any other value or unset uses `world/`. |
 | `ENGINE_NO_VSYNC` | Engine (`App::resumed`) | `1` starts the surface with vsync off, for benchmark runs. `V` still toggles it at runtime. |
 | `ENGINE_MESH_POOL` | Engine (`mesher::create_pool`) | `rayon` uses the rayon mesh pool when built with the `rayon-pool` feature. Unset, or any other value, uses micropool. |
-| `ENGINE_SEED` | Engine (`run`) | A `u64` seed builds a streamed generated world from that seed instead of loading or seeding a saved world. Unset keeps the saved or demo world. |
+| `ENGINE_SEED` | Engine (`run`) | A `u64` chooses the seed when `world/seed` is being created. An existing `world/seed` wins. Unset uses OS entropy for a new world. |
 | `WGPU_BACKEND` | `wgpu` | Forces a backend such as `dx12`, `vulkan`, or `metal`, depending on the platform. Unset lets `wgpu` choose. The engine does not parse it. |
 
 See [Testing](testing.md) for manual-run examples, [Setup](setup.md) for backend selection, and
