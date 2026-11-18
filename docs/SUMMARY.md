@@ -34,6 +34,7 @@
 # Design
 
 - [Terrain pipeline](design/terrain-pipeline.md)
+- [Seed-native LOD hierarchy](design/lod-hierarchy.md)
 
 # Development
 
@@ -47,6 +48,7 @@
 - [Debugging](dev/debugging.md)
 - [Profiling](dev/profiling.md)
 - [Benchmark results](dev/benchmarks.md)
+- [Culling](dev/culling.md)
 - [CI](dev/ci.md)
 - [Testing](dev/testing.md)
 - [Versioning](dev/versioning.md)
@@ -70,6 +72,7 @@
   - [0011 — Voxel lighting with baked AO](decisions/0011-voxel-light-and-baked-ao.md)
   - [0012 — fastnoise-lite with OpenSimplex2](decisions/0012-fastnoise-lite-and-opensimplex2.md)
   - [0013 — Finite player-centred chunk streaming](decisions/0013-player-centred-chunk-streaming.md)
+  - [0014 — Seed-native multi-level LOD sections](decisions/0014-seed-native-lod-hierarchy.md)
   - [Template](decisions/0000-template.md)
 
 # Contributing

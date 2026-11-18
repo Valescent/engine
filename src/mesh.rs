@@ -1141,6 +1141,20 @@ mod tests {
     }
 
     #[test]
+    fn every_face_winds_counter_clockwise_around_its_normal() {
+        use glam::Vec3;
+
+        for (face, normal) in FACE_NORMALS.into_iter().enumerate() {
+            let corners = quad_corners(face, 1, 0, 0, 4, 3).map(Vec3::from_array);
+            let first = (corners[1] - corners[0]).cross(corners[2] - corners[0]);
+            let second = (corners[2] - corners[0]).cross(corners[3] - corners[0]);
+
+            assert!(first.dot(normal.as_vec3()) > 0.0, "face {face}");
+            assert!(second.dot(normal.as_vec3()) > 0.0, "face {face}");
+        }
+    }
+
+    #[test]
     #[allow(clippy::float_cmp)]
     fn lod2_emits_boundary_faces_even_next_to_solid_neighbours() {
         let world = world_with(&[
