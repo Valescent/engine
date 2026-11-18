@@ -19,6 +19,7 @@
   - [v0.0.5 — Scale and Performance](dev/v0.0.5-scope.md)
   - [v0.0.6 — Atmosphere](dev/v0.0.6-scope.md)
   - [v0.0.7 — Advanced Horizons](dev/v0.0.7-scope.md)
+  - [v0.0.8 — Scale](dev/v0.0.8-scope.md)
   - [Milestone template](dev/milestone-template.md)
 
 # Specs
@@ -28,6 +29,7 @@
 - [v0.0.5 — Scale and Performance](specs/v0.0.5.md)
 - [v0.0.6 — Atmosphere](specs/v0.0.6.md)
 - [v0.0.7 — Advanced Horizons](specs/v0.0.7.md)
+- [v0.0.8 — Scale](specs/v0.0.8.md)
 
 # Design
 

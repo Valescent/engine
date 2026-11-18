@@ -10,7 +10,8 @@ Milestones move from **planned** to **in progress** to **shipped**. Each one nam
 | 0.0.4   | Playable              | Shipped  |
 | 0.0.5   | Scale and Performance | Shipped  |
 | 0.0.6   | Atmosphere            | Shipped  |
-| 0.0.7   | Advanced Horizons     | In progress |
+| 0.0.7   | Advanced Horizons     | Shipped  |
+| 0.0.8   | Scale                 | In progress |
 
 ## v0.0.1: The Foundation
 
@@ -221,7 +222,7 @@ See [v0.0.6 scope](dev/v0.0.6-scope.md) for the concrete deliverables, technical
 
 ## v0.0.7: Advanced Horizons
 
-**Status:** In progress - generation, streaming, persistence, and acceptance are complete; release pending.
+**Status:** Shipped
 
 **Goal:** Turn the engine into a game-ready, procedurally generated world.
 
@@ -245,3 +246,36 @@ See [v0.0.7 scope](dev/v0.0.7-scope.md) for the concrete deliverables, technical
 
 ### Non-Goals
 - None; this is the stretch phase
+
+## v0.0.8: Scale
+
+**Status:** In progress - scoped; slice 1 in progress.
+
+**Goal:** Hold the frame budget and resident memory as the render distance grows.
+
+**Summary:** Optimize the engine, not the game.
+
+See [v0.0.8 scope](dev/v0.0.8-scope.md) for the deliverables and the
+[v0.0.8 spec](specs/v0.0.8.md) for the normative limits.
+
+### Milestones
+
+#### 1. Light and memory
+- [~] Direct light snapshots (constant lookups per job)
+- [ ] Four-bit packed light fields
+
+#### 2. Distance and pacing
+- [ ] LOD2 and `render_distance_chunks` up to `32`
+- [ ] Streaming pacing, readiness bookkeeping, and budget metrics
+
+### Definition of Done
+- 60 FPS at `render_distance_chunks = 24` on the reference machine
+- Resident light memory at most half of v0.0.7 for the same chunk count
+- No per-frame scan of the world to build a light job
+- No main-thread frame above 33 ms once the first ring is ready
+- Benchmarks and acceptance recorded
+
+### Non-Goals
+- Gameplay, inventory, and survival systems
+- SVDAG and raymarching; both remain deferred
+- Save-format changes
