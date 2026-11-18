@@ -6,6 +6,7 @@
 
 mod block;
 mod camera;
+mod config;
 mod frustum;
 mod generation;
 mod light;
@@ -17,6 +18,7 @@ mod player;
 mod raycast;
 mod renderer;
 mod sky;
+mod streaming;
 mod voxel;
 mod world;
 
@@ -25,7 +27,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use glam::{IVec3, Vec3};
+use glam::{IVec2, IVec3, Vec2, Vec3};
 use thiserror::Error;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -38,6 +40,7 @@ use winit::window::{CursorGrabMode, Window, WindowId};
 
 use block::Block;
 use camera::Camera;
+use config::{Config, ConfigError};
 use frustum::Frustum;
 use generation::{CHUNK_COLUMN, Generator};
 use mesh::Lod;
@@ -47,6 +50,7 @@ use raycast::{RaycastHit, raycast};
 pub use renderer::RendererError;
 use renderer::{FrameStats, Renderer};
 use sky::Sky;
+use streaming::Streaming;
 use voxel::build_highlight_mesh;
 use world::{CHUNK_SIZE, DirtyChunks, World};
 pub use world::{ChunkCoord, SaveError};
@@ -55,6 +59,8 @@ const WINDOW_TITLE: &str = concat!("Valescent Engine ", env!("CARGO_PKG_VERSION"
 const MAX_FRAME_DELTA: Duration = Duration::from_millis(100);
 const FRAME_LOG_INTERVAL: Duration = Duration::from_secs(1);
 const WORLD_CHUNKS: &str = "world/chunks";
+const CONFIG_FILE: &str = "config.toml";
+const MAX_COLUMNS_PER_FRAME: usize = 2;
 const INTERACTION_DISTANCE: f32 = 6.0;
 const SPAWN_X: i32 = 32;
 const SPAWN_Z: i32 = 32;
@@ -73,6 +79,8 @@ pub enum RunError {
     Renderer(#[from] RendererError),
     #[error(transparent)]
     Save(#[from] SaveError),
+    #[error(transparent)]
+    Config(#[from] ConfigError),
 }
 
 /// Runs the engine until the window is closed.
@@ -87,13 +95,22 @@ pub fn run() -> Result<(), RunError> {
     #[cfg(feature = "tracy")]
     let _tracy_client = tracy_client::Client::start();
 
+    let config = config::load(Path::new(CONFIG_FILE))?;
     let stress = stress_requested();
-    let (world, spawn) = world_for(stress, Path::new(WORLD_CHUNKS))?;
+    let setup = world_for(
+        stress,
+        Path::new(WORLD_CHUNKS),
+        config.render_distance_chunks,
+    )?;
     let event_loop = EventLoop::new()?;
-    let mut app = App::with_world(world, stress);
-    if let Some(spawn) = spawn {
+    let mut app = App::with_world(setup.world, stress);
+    if let Some(spawn) = setup.spawn {
         app.set_spawn(spawn);
     }
+    app.config = config;
+    app.streaming = setup.streaming;
+    app.seed = setup.seed;
+    app.apply_render_distance();
     let result = event_loop.run_app(&mut app);
     if let Some(error) = app.error {
         return Err(error);
@@ -137,57 +154,81 @@ fn generated_seed() -> Option<u64> {
     }
 }
 
-/// Builds a fixed area of generated terrain around the spawn column.
-///
-/// Streaming replaces the fixed area in a later v0.0.7 slice.
+/// Builds the spawn column and streaming state for a generated world.
 #[allow(clippy::cast_precision_loss)]
-fn generated_world(seed: u64) -> (World, Vec3) {
+fn generated_setup(seed: u64, render_distance: i32) -> WorldSetup {
     let generator = Generator::new(seed);
     let (spawn_x, spawn_z, spawn_height) = generator.spawn_column();
-    let center = ChunkCoord::from_world(IVec3::new(spawn_x, 0, spawn_z)).0;
-    let mut world = World::default();
-
-    for dx in -2..=2 {
-        for dz in -2..=2 {
-            for y in 0..CHUNK_COLUMN {
-                let chunk =
-                    ChunkCoord::new(center.coordinates().x + dx, y, center.coordinates().z + dz);
-                let blocks = generator.generate_chunk(chunk);
-                world.insert_chunk(chunk, blocks);
-            }
-        }
-    }
-    world.relight();
-
     let spawn = Vec3::new(
         spawn_x as f32 + 0.5,
         (spawn_height + 1) as f32,
         spawn_z as f32 + 0.5,
     );
+    let column = Streaming::column_at(spawn);
+
+    let mut world = World::default();
+    for (chunk, blocks) in generator.generate_column(column) {
+        world.insert_chunk(chunk, blocks);
+    }
+    world.relight();
+
+    let mut streaming = Streaming::new(render_distance);
+    streaming.mark_loaded(column);
+    streaming.mark_ready(column);
+
     info!(seed, ?spawn, "generated world ready");
-    (world, spawn)
+    WorldSetup {
+        world,
+        spawn: Some(spawn),
+        streaming: Some(streaming),
+        seed: Some(seed),
+    }
+}
+
+/// One startup world choice and its streaming state.
+struct WorldSetup {
+    world: World,
+    spawn: Option<Vec3>,
+    streaming: Option<Streaming>,
+    seed: Option<u64>,
 }
 
 /// Loads the stress scene, a generated world, or the saved (or demo) world.
 ///
 /// Stress mode never touches `directory`. The returned spawn overrides the
 /// default player position.
-fn world_for(stress: bool, directory: &Path) -> Result<(World, Option<Vec3>), SaveError> {
+fn world_for(
+    stress: bool,
+    directory: &Path,
+    render_distance: i32,
+) -> Result<WorldSetup, SaveError> {
     if stress {
         let mut world = stress_world();
         world.relight();
-        Ok((world, None))
-    } else if let Some(seed) = generated_seed() {
-        Ok({
-            let (world, spawn) = generated_world(seed);
-            (world, Some(spawn))
+        Ok(WorldSetup {
+            world,
+            spawn: None,
+            streaming: None,
+            seed: None,
         })
+    } else if let Some(seed) = generated_seed() {
+        Ok(generated_setup(seed, render_distance))
     } else if directory.exists() {
-        Ok((World::load_chunks(directory)?, None))
+        Ok(WorldSetup {
+            world: World::load_chunks(directory)?,
+            spawn: None,
+            streaming: None,
+            seed: None,
+        })
     } else {
         let mut world = demo_world();
         world.relight();
-        Ok((world, None))
+        Ok(WorldSetup {
+            world,
+            spawn: None,
+            streaming: None,
+            seed: None,
+        })
     }
 }
 
@@ -282,6 +323,9 @@ struct App {
     renderer: Option<Renderer>,
     mesher: Option<Arc<dyn MeshPool>>,
     queue: MeshQueue,
+    config: Config,
+    streaming: Option<Streaming>,
+    seed: Option<u64>,
     stats: FrameAccumulator,
     stress: bool,
     world: World,
@@ -353,6 +397,9 @@ impl App {
             renderer: None,
             mesher: None,
             queue,
+            config: Config::default(),
+            streaming: None,
+            seed: None,
             stats: FrameAccumulator::default(),
             stress,
             world,
@@ -484,7 +531,7 @@ impl App {
 
     fn upload_finished_meshes(&mut self, pool: &dyn MeshPool) {
         profiling::scope!("mesh upload");
-        let (results, lights, rebuild) =
+        let (results, lights, generations, rebuild) =
             collect_finished(&mut self.queue, pool, MAX_UPLOADS_PER_FRAME);
         let rebuild_ms = rebuild.as_secs_f64() * 1000.0;
         self.stats.rebuild_ms += rebuild_ms;
@@ -492,6 +539,15 @@ impl App {
 
         for light in lights {
             self.world.set_light_field(light.chunk, light.light);
+        }
+
+        for generation in generations {
+            for (chunk, blocks) in generation.chunks {
+                self.world.insert_chunk(chunk, blocks);
+            }
+            if let Some(streaming) = &mut self.streaming {
+                streaming.mark_loaded(generation.column);
+            }
         }
 
         let Some(renderer) = &mut self.renderer else {
@@ -563,6 +619,10 @@ impl App {
             debug!("stress scene is not saved");
             return;
         };
+        if self.streaming.is_some() {
+            debug!("generated worlds are saved by their seed in a later slice");
+            return;
+        }
         match self.world.save_chunks(directory) {
             Ok(()) => debug!("world saved"),
             Err(error) => error!(%error, "failed to save the world"),
@@ -642,7 +702,12 @@ impl App {
             };
             {
                 profiling::scope!("player update");
-                self.player.update(&self.world, input, delta_seconds);
+                let streaming = self.streaming.as_ref();
+                let ready = |position: Vec3| {
+                    streaming.is_none_or(|streaming| streaming.aabb_ready(position))
+                };
+                self.player
+                    .update_guarded(&self.world, input, delta_seconds, &ready);
             }
             self.sky.advance(delta_seconds);
             self.camera.set_position(self.player.eye_position());
@@ -650,6 +715,7 @@ impl App {
         }
 
         if let Some(pool) = self.mesher.clone() {
+            self.stream_columns(&*pool);
             self.request_levels(&*pool);
             self.upload_finished_meshes(&*pool);
             profiling::scope!("select active");
@@ -787,6 +853,53 @@ impl App {
             window.set_cursor_visible(true);
         }
         self.mouse_captured = false;
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    fn apply_render_distance(&mut self) {
+        let far_plane = (self.config.render_distance_chunks + 2) as f32 * 32.0;
+        self.camera.set_far_plane(far_plane);
+    }
+
+    /// Whether all four chunks of a column are lit and meshed.
+    fn column_ready(&self, column: IVec2) -> bool {
+        (0..CHUNK_COLUMN).all(|y| {
+            let chunk = ChunkCoord::new(column.x, y, column.y);
+            self.queue.light_is_current(chunk)
+                && (self.queue.is_built(chunk, Lod::Lod0, MeshKind::Opaque)
+                    || self.queue.is_built(chunk, Lod::Lod1, MeshKind::Opaque))
+        })
+    }
+
+    /// Marks ready columns and requests the nearest missing ones.
+    fn stream_columns(&mut self, pool: &dyn MeshPool) {
+        let Some(seed) = self.seed else {
+            return;
+        };
+        let loaded: Vec<IVec2> = self
+            .streaming
+            .as_ref()
+            .map(|streaming| streaming.loaded().collect())
+            .unwrap_or_default();
+        for column in loaded {
+            if self.column_ready(column)
+                && let Some(streaming) = &mut self.streaming
+            {
+                streaming.mark_ready(column);
+            }
+        }
+
+        let forward = self.camera.forward();
+        let forward = Vec2::new(forward.x, forward.z).normalize_or_zero();
+        let wanted = self
+            .streaming
+            .as_ref()
+            .map(|streaming| streaming.wanted(self.player.position, forward))
+            .unwrap_or_default();
+        for column in wanted.into_iter().take(MAX_COLUMNS_PER_FRAME) {
+            self.queue
+                .request_generation(pool, seed, column, Priority::Background);
+        }
     }
 
     fn set_spawn(&mut self, position: Vec3) {
@@ -1044,6 +1157,7 @@ mod tests {
                 Job::Mesh(_) => {
                     self.mesh_jobs.fetch_add(1, Ordering::Relaxed);
                 }
+                Job::Generate(_) => {}
             }
             true
         }
@@ -1168,8 +1282,8 @@ mod tests {
         fs::create_dir_all(&directory).unwrap();
         fs::write(directory.join("chunk_bad.vchk"), []).unwrap();
 
-        assert!(world_for(true, &directory).is_ok());
-        assert!(world_for(false, &directory).is_err());
+        assert!(world_for(true, &directory, 12).is_ok());
+        assert!(world_for(false, &directory, 12).is_err());
         assert!(save_directory(true).is_none());
         assert_eq!(save_directory(false), Some(Path::new(WORLD_CHUNKS)));
 

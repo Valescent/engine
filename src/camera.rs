@@ -49,6 +49,10 @@ impl Camera {
         self.z_far
     }
 
+    pub(crate) fn set_far_plane(&mut self, far_plane: f32) {
+        self.z_far = far_plane;
+    }
+
     pub(crate) fn yaw(&self) -> f32 {
         self.yaw
     }

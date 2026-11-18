@@ -1,11 +1,14 @@
 //! Asynchronous chunk meshing: jobs, revisions, and a bounded worker pool.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+use glam::IVec2;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use crate::generation::{GenJob, GenResult, Generator};
 use crate::light::{LightField, LightJob, LightResult, LightSnapshot};
 use crate::mesh::{BorderBlocks, ChunkSnapshot, Lod, build_mesh, build_water_mesh, select_lod};
 use crate::voxel::Vertex;
@@ -52,6 +55,7 @@ pub(crate) struct MeshJob {
 pub(crate) enum Job {
     Mesh(MeshJob),
     Light(LightJob),
+    Generate(GenJob),
 }
 
 /// A finished job of either kind.
@@ -59,6 +63,7 @@ pub(crate) enum Job {
 pub(crate) enum JobResult {
     Mesh(MeshResult),
     Light(LightResult),
+    Generate(GenResult),
 }
 
 /// One finished mesh, tagged so stale results can be discarded.
@@ -216,6 +221,15 @@ fn run_job(job: &Job, sender: &Sender<JobResult>, counter: &AtomicUsize) {
                 elapsed: started.elapsed(),
             })
         }
+        Job::Generate(job) => {
+            profiling::scope!("chunk generate");
+            let generator = Generator::new(job.seed);
+            JobResult::Generate(GenResult {
+                column: job.column,
+                chunks: generator.generate_column(job.column),
+                elapsed: started.elapsed(),
+            })
+        }
         Job::Light(job) => {
             profiling::scope!("chunk light");
             JobResult::Light(LightResult {
@@ -254,6 +268,7 @@ pub(crate) struct MeshQueue {
     built: HashMap<(ChunkCoord, Lod, MeshKind), u64>,
     light_pending: HashMap<ChunkCoord, u64>,
     light_built: HashMap<ChunkCoord, u64>,
+    gen_pending: HashSet<IVec2>,
     desired: HashMap<ChunkCoord, Lod>,
 }
 
@@ -314,6 +329,28 @@ impl MeshQueue {
         if pool.submit(Job::Mesh(job), priority) {
             self.pending.insert((chunk, lod, kind), revision);
         }
+    }
+
+    /// Requests generation for one column unless it is already queued.
+    pub(crate) fn request_generation(
+        &mut self,
+        pool: &dyn MeshPool,
+        seed: u64,
+        column: IVec2,
+        priority: Priority,
+    ) {
+        if !self.gen_pending.insert(column) {
+            return;
+        }
+        let job = GenJob { column, seed };
+        if !pool.submit(Job::Generate(job), priority) {
+            self.gen_pending.remove(&column);
+        }
+    }
+
+    /// Accepts a generated column that is still pending.
+    pub(crate) fn accept_generation(&mut self, result: &GenResult) -> bool {
+        self.gen_pending.remove(&result.column)
     }
 
     /// Submits a light job unless the same revision is already in flight.
@@ -410,9 +447,10 @@ pub(crate) fn collect_finished(
     queue: &mut MeshQueue,
     pool: &dyn MeshPool,
     budget: usize,
-) -> (Vec<MeshResult>, Vec<LightResult>, Duration) {
+) -> (Vec<MeshResult>, Vec<LightResult>, Vec<GenResult>, Duration) {
     let mut meshes = Vec::new();
     let mut lights = Vec::new();
+    let mut generations = Vec::new();
     let mut worker_time = Duration::ZERO;
     while meshes.len() < budget {
         let Some(result) = pool.try_recv() else {
@@ -431,9 +469,15 @@ pub(crate) fn collect_finished(
                     lights.push(result);
                 }
             }
+            JobResult::Generate(result) => {
+                worker_time += result.elapsed;
+                if queue.accept_generation(&result) {
+                    generations.push(result);
+                }
+            }
         }
     }
-    (meshes, lights, worker_time)
+    (meshes, lights, generations, worker_time)
 }
 
 #[cfg(test)]
@@ -679,12 +723,13 @@ mod tests {
             );
         }
 
-        let (first, lights, worker_time) = collect_finished(&mut queue, &pool, 2);
+        let (first, lights, generations, worker_time) = collect_finished(&mut queue, &pool, 2);
         assert_eq!(first.len(), 2);
         assert!(lights.is_empty());
+        assert!(generations.is_empty());
         assert_eq!(worker_time, Duration::from_millis(2));
 
-        let (second, _, _) = collect_finished(&mut queue, &pool, 2);
+        let (second, _, _, _) = collect_finished(&mut queue, &pool, 2);
         assert_eq!(second.len(), 2);
     }
 
@@ -693,10 +738,12 @@ mod tests {
         let pool = FakePool::default();
         let mut queue = MeshQueue::default();
 
-        let (results, lights, worker_time) = collect_finished(&mut queue, &pool, 2);
+        let (results, lights, generations, worker_time) = collect_finished(&mut queue, &pool, 2);
 
         assert!(results.is_empty());
         assert!(lights.is_empty());
+        assert!(generations.is_empty());
+        assert!(generations.is_empty());
         assert!(worker_time.is_zero());
     }
 

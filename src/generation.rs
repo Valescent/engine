@@ -11,11 +11,11 @@ use glam::IVec3;
 use crate::block::Block;
 use crate::world::{CHUNK_SIZE, ChunkCoord};
 
-/// Blocks per world column axis.
-pub(crate) const WORLD_HEIGHT: i32 = CHUNK_SIZE * 4;
-
 /// Chunks per world column.
 pub(crate) const CHUNK_COLUMN: i32 = 4;
+
+/// Blocks per world column axis.
+pub(crate) const WORLD_HEIGHT: i32 = CHUNK_SIZE * CHUNK_COLUMN;
 
 /// Water fills columns up to this height.
 pub(crate) const SEA_LEVEL: i32 = 32;
@@ -60,6 +60,21 @@ pub(crate) enum Biome {
     Plains,
     Hills,
     Desert,
+}
+
+/// One generation job: the seed and a chunk column.
+#[derive(Debug)]
+pub(crate) struct GenJob {
+    pub(crate) column: glam::IVec2,
+    pub(crate) seed: u64,
+}
+
+/// A generated column: four chunk block maps.
+#[derive(Debug)]
+pub(crate) struct GenResult {
+    pub(crate) column: glam::IVec2,
+    pub(crate) chunks: Vec<(ChunkCoord, HashMap<IVec3, Block>)>,
+    pub(crate) elapsed: std::time::Duration,
 }
 
 /// One world's noise fields and derived terrain.
@@ -179,6 +194,19 @@ impl Generator {
         }
 
         blocks
+    }
+
+    /// Generates the four chunks of one vertical column.
+    pub(crate) fn generate_column(
+        &self,
+        column: glam::IVec2,
+    ) -> Vec<(ChunkCoord, HashMap<IVec3, Block>)> {
+        (0..CHUNK_COLUMN)
+            .map(|y| {
+                let chunk = ChunkCoord::new(column.x, y, column.y);
+                (chunk, self.generate_chunk(chunk))
+            })
+            .collect()
     }
 
     /// `SplitMix64` hash for one tree candidate in a chunk.

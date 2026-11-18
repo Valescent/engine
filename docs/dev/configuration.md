@@ -1,13 +1,14 @@
 # Configuration
 
 The project has two configuration layers: runtime inputs for the engine and repository tooling
-files for builds, checks, docs, and releases. Runtime settings are not read from a file yet.
+files for builds, checks, docs, and releases. Runtime settings come from `config.toml` and
+environment variables.
 
 | Area | Status |
 |---|---|
-| Runtime `config.toml` | Planned, no milestone |
+| Runtime `config.toml` | Current (v0.0.7) |
 | Remappable bindings | Planned, no milestone |
-| Render distance | Planned (v0.0.7) |
+| Render distance | Current (v0.0.7) |
 | Environment variables | Current |
 | Compile-time constants | Current |
 | Repository tooling | Current |
@@ -16,9 +17,9 @@ files for builds, checks, docs, and releases. Runtime settings are not read from
 
 ### Current inputs
 
-- No runtime config file is read.
+- `config.toml` is read once at startup; a missing file uses the defaults.
 - No command-line flags are parsed; `src/main.rs` calls `engine::run()` directly.
-- Current settings are environment variables and compile-time constants.
+- Environment variables and compile-time constants cover the rest.
 
 #### Environment variables
 
@@ -28,7 +29,7 @@ files for builds, checks, docs, and releases. Runtime settings are not read from
 | `ENGINE_STRESS_SCENE` | Engine (`run`) | `1` builds the deterministic 8x8 stress scene in memory and disables world load and save. Any other value or unset uses `world/chunks/`. |
 | `ENGINE_NO_VSYNC` | Engine (`App::resumed`) | `1` starts the surface with vsync off, for benchmark runs. `V` still toggles it at runtime. |
 | `ENGINE_MESH_POOL` | Engine (`mesher::create_pool`) | `rayon` uses the rayon mesh pool when built with the `rayon-pool` feature. Unset, or any other value, uses micropool. |
-| `ENGINE_SEED` | Engine (`run`) | A `u64` seed builds a fixed generated world around the spawn column instead of loading or seeding a saved world. Unset keeps the saved or demo world. |
+| `ENGINE_SEED` | Engine (`run`) | A `u64` seed builds a streamed generated world from that seed instead of loading or seeding a saved world. Unset keeps the saved or demo world. |
 | `WGPU_BACKEND` | `wgpu` | Forces a backend such as `dx12`, `vulkan`, or `metal`, depending on the platform. Unset lets `wgpu` choose. The engine does not parse it. |
 
 See [Testing](testing.md) for manual-run examples, [Setup](setup.md) for backend selection, and
@@ -51,34 +52,34 @@ See the [v0.0.5 spec](../specs/v0.0.5.md).
 
 Changing one of these requires a code change and rebuild. They are not user settings.
 
-### Planned config file
+### Config file
 
-No `config.toml` is read today. The decided shape is:
+`config.toml` lives in the process working directory, next to `world/`. It is read once at
+startup; changing it requires a restart.
 
-- **Path:** `config.toml` in the process working directory, next to the planned `world/` data
-  directory. This is the engine's file, not Cargo's `.cargo/config.toml`.
-- **Format:** TOML, read once at startup.
-- **Defaults:** a missing file uses the built-in defaults.
-- **Precedence:** built-in defaults, then `config.toml`. There are no environment or
-  command-line overrides for file settings. `RUST_LOG` and `WGPU_BACKEND` remain separate
-  diagnostic inputs.
-- **Validation:** unknown keys and invalid values are rejected with a typed error naming the
-  setting.
-- **Settings:** the remappable action map (no milestone) and render distance in chunks
-  (v0.0.7).
-- **v0.0.7 key:** `world.render_distance_chunks = 12`, range `8..=16`, default `12` when
-  missing. See the [v0.0.7 spec](../specs/v0.0.7.md).
-- **Schema:** the exact keys and nesting are not fixed. The file will not configure logging,
-  the GPU backend, the window, camera tuning, or frame timing; those stay environment
-  variables or compile-time constants.
+```toml
+[world]
+render_distance_chunks = 12
+```
 
-No separate milestone is assigned to the config file itself.
+| Key | Type | Default | Range |
+|---|---|---:|---:|
+| `world.render_distance_chunks` | integer | `12` | `8..=16` |
+
+- A missing file uses the default.
+- Unknown sections, unknown keys, malformed values, duplicate keys, and out-of-range values are
+  typed startup errors.
+- The file does not configure logging, the GPU backend, the window, camera tuning, or frame
+  timing; those stay environment variables or compile-time constants.
+- The render distance sets the streaming ring, the camera far plane
+  (`(render_distance + 2) * 32` metres), and fog. See the [v0.0.7 spec](../specs/v0.0.7.md).
+- Remappable bindings are still planned with no milestone.
 
 ### Paths
 
 | Path | Status |
 |---|---|
-| `config.toml` | Planned; working directory. |
+| `config.toml` | Current (v0.0.7); working directory. |
 | `world/` | Current (v0.0.4); working directory. |
 | `world/seed` | Planned (v0.0.7); decimal world seed. |
 | `logs/` | Planned; working directory; per-run log files. |

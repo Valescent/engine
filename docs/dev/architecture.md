@@ -19,7 +19,9 @@ The engine is a small `winit` and `wgpu` application. This page describes the cu
 | `src/frustum.rs` | Six-plane frustum extraction and conservative AABB tests. |
 | `src/metrics.rs` | Tracy plots for frame, GPU, chunk, draw, rebuild, upload, and queue metrics; no-ops without the `tracy` feature. |
 | `src/light.rs` | Sky/block light storage accessors, BFS propagation, and the padded `LightField`. |
-| `src/generation.rs` | Seeded noise fields, height, biomes, caves, water fill, and the spawn column. |
+| `src/generation.rs` | Seeded noise fields, height, biomes, caves, water fill, trees, and the spawn column. |
+| `src/streaming.rs` | Player-centred load rings, forward-first ordering, readiness, and the movement guard. |
+| `src/config.rs` | `config.toml` parsing for the render distance. |
 | `src/sky.rs` | Day/night cycle, sun direction, sky/ambient/sun colours, and the CPU fog formula. |
 | `src/voxel.rs` | Texture vertices, the highlight mesh, and the v0.0.4 face-culled mesher kept as a test reference. |
 | `src/renderer.rs` | `wgpu` device/surface setup, pipelines, block texture array, buffers, depth texture, resizing, and draw submission. |
@@ -61,6 +63,7 @@ RedrawRequested
   -> move the camera to the player eye
   -> raycast and update the block outline
   -> advance the day/night cycle
+  -> stream missing columns and mark ready ones
   -> recalculate each chunk's desired LOD and request missing meshes
   -> drain finished light and mesh results (two mesh uploads per frame)
   -> upload them and select the active LOD per chunk

@@ -76,7 +76,19 @@ impl Player {
         Aabb::from_position(self.position)
     }
 
+    #[cfg(test)]
     pub(crate) fn update(&mut self, world: &World, input: PlayerInput, delta: f32) {
+        self.update_guarded(world, input, delta, &|_| true);
+    }
+
+    /// Updates movement, rejecting any axis that enters an unready column.
+    pub(crate) fn update_guarded(
+        &mut self,
+        world: &World,
+        input: PlayerInput,
+        delta: f32,
+        ready: &impl Fn(Vec3) -> bool,
+    ) {
         if delta <= 0.0 {
             return;
         }
@@ -93,9 +105,18 @@ impl Player {
         }
         self.velocity.y -= GRAVITY * delta;
 
-        self.move_axis(world, 1, self.velocity.y * delta);
-        self.move_axis(world, 0, self.velocity.x * delta);
-        self.move_axis(world, 2, self.velocity.z * delta);
+        for (axis, distance) in [
+            (1, self.velocity.y * delta),
+            (0, self.velocity.x * delta),
+            (2, self.velocity.z * delta),
+        ] {
+            let before = self.position;
+            self.move_axis(world, axis, distance);
+            if !ready(self.position) {
+                self.position = before;
+                self.velocity[axis] = 0.0;
+            }
+        }
     }
 
     fn move_axis(&mut self, world: &World, axis: usize, distance: f32) {
