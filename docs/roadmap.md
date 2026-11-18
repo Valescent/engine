@@ -221,7 +221,7 @@ See [v0.0.6 scope](dev/v0.0.6-scope.md) for the concrete deliverables, technical
 
 ## v0.0.7: Advanced Horizons
 
-**Status:** In progress - deterministic terrain, biomes, caves, and sea level are implemented.
+**Status:** In progress - generation, streaming, persistence, and acceptance are complete; release pending.
 
 **Goal:** Turn the engine into a game-ready, procedurally generated world.
 
@@ -234,10 +234,11 @@ See [v0.0.7 scope](dev/v0.0.7-scope.md) for the concrete deliverables, technical
 #### 1. Procedural generation
 - [x] Noise functions (Perlin / Simplex / OpenSimplex)
 - [x] Terrain, caves, biomes, structures
+- [x] Player-centred streaming, modified-chunk saves, and a persistent seed
 
 #### 2. Advanced rendering (optional)
-- [ ] Sparse Voxel DAGs for compression
-- [ ] GPU compute raymarching without traditional meshes
+- [ ] Sparse Voxel DAGs for compression (evaluated; deferred, not in v0.0.7 acceptance)
+- [ ] GPU compute raymarching without traditional meshes (evaluated; deferred, not in v0.0.7 acceptance)
 
 ### Definition of Done
 - Fully procedural world that runs smoothly and looks good

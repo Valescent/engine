@@ -2,7 +2,7 @@
 
 A voxel engine written in Rust.
 
-**Status: pre-alpha.** `0.0.1` through `0.0.6` are released. The world has voxel lighting, ambient occlusion, a day/night cycle, distance fog, and transparent animated water.
+**Status: pre-alpha.** `0.0.1` through `0.0.6` are released; `0.0.7` is implemented and in acceptance. The world is procedurally generated from a saved seed, streams in and out around the player, and keeps player edits. It has voxel lighting, ambient occlusion, a day/night cycle, distance fog, and transparent animated water.
 
 This is **source-available, not open source**. The code is under the [PolyForm Shield License 1.0.0](LICENSE): you may read, run, modify, and redistribute it, but not use it to provide a product that competes with it. PolyForm Shield is not OSI-approved.
 
@@ -34,10 +34,14 @@ cargo run
 - `F3` — toggle the FPS/frame-time overlay
 - `Escape` — release the cursor
 
-Water is drawn after opaque geometry without per-face sorting, so overlapping water can blend out of order. The demo world has a small pond.
+Water is drawn after opaque geometry without per-face sorting, so overlapping water can blend out of order. Generated worlds fill basins below sea level.
 
-The world saves to `world/chunks/` on exit and on `Ctrl+S`. Set `ENGINE_STRESS_SCENE=1` to load
-the deterministic 64-chunk stress scene instead; it never touches `world/chunks/`.
+The world lives in `world/`: `world/seed` holds the generation seed and `world/chunks/` holds only
+modified chunks. Unmodified chunks are regenerated from the seed. Chunks save when they unload,
+on `Ctrl+S`, and on exit; a modified chunk is applied over its generated blocks on the next load.
+`config.toml` sets `world.render_distance_chunks` (default `12`, range `8..=16`). `ENGINE_SEED=<u64>`
+chooses the seed of a new world. Set `ENGINE_STRESS_SCENE=1` to load the deterministic 64-chunk
+stress scene instead; it never touches `world/`.
 
 See [`docs/dev/controls.md`](docs/dev/controls.md) for the full binding table.
 
