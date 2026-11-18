@@ -186,6 +186,7 @@ fn demo_world() -> World {
             world.set_block(IVec3::new(x, 1, z), Block::Water);
         }
     }
+    world.set_block(IVec3::new(30, 2, 30), Block::Lamp);
     world.set_block(IVec3::new(34, 2, 34), Block::Wood);
     world.set_block(IVec3::new(34, 3, 34), Block::Wood);
     world.set_block(IVec3::new(34, 4, 34), Block::Leaves);

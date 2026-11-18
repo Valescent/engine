@@ -47,13 +47,18 @@ an ADR, or the executable source.
 
 ## A. Foundations and identity
 
+### A0 Order
+- [x] A0.1 Does the versioned description ship before the first generated chunk?
+      **Yes.** No world exists without a generator version; no generate-first retrofit.
+
 ### A1 World description
 - [ ] A1.1 Is the description one TOML/JSON file, a binary header, or both?
 - [ ] A1.2 Which fields are mandatory at creation: seed, generator version, parameter set,
       content hash, format version, world name, created time, engine build?
 - [ ] A1.3 Is the parameter set inline, a named preset plus overrides, or a hash only?
-- [ ] A1.4 Is `u64` the final seed width, or is a 128-bit seed needed to make worlds
+- [x] A1.4 Is `u64` the final seed width, or is a 128-bit seed needed to make worlds
       unguessable and collision-free?
+      **u64 stays.** Stream seeds come from hashing `(seed, stream name, coordinate)`.
 - [ ] A1.5 What does a missing or malformed description do: refuse to load, auto-create,
       or enter read-only mode?
 
@@ -140,16 +145,24 @@ an ADR, or the executable source.
 - [ ] C2.4 Is there a coastal shelf, a beach band, and a cliff band, with what widths?
 
 ### C3 Quantisation
-- [ ] C3.1 For `h = 72.4`, is the top solid block at 72 or 73? State the exact rule.
-- [ ] C3.2 Does the rule hold for negative and clamped heights?
+- [x] C3.1 For `h = 72.4`, is the top solid block at 72 or 73? State the exact rule.
+      **One helper: `top_solid_y(h: f32) -> i32 = floor(h)`.** Surface, water, caves, and
+      features all read it. Nothing else quantises a height.
+- [x] C3.2 Does the rule hold for negative and clamped heights?
+      **Yes.** `floor` is defined for the whole range; clamping happens after.
 - [ ] C3.3 Is the macro grid bilinearly interpolated to blocks, or nearest-sampled with
       features? What happens at a cell edge?
+- [x] C3.5 Is the height field kept as `f32` everywhere?
+      **Yes.** Blending, slopes, caves, and features read the float. The v0.0.7 `round()` in
+      the height formula is dropped; quantisation exists only at `top_solid_y`.
 - [ ] C3.4 Does interpolation use the four corners or a bicubic patch, and is that stable?
 
 ### C4 Vertical layout
 - [ ] C4.1 Bedrock: flat at y=0, noisy depth, or none?
 - [ ] C4.2 How many air blocks above the highest terrain before the build limit?
-- [ ] C4.3 Is the world 128 tall for every column, including ocean floors?
+- [x] C4.3 Is the world 128 tall for every column, including ocean floors?
+      **No: the world is 384 tall.** This supersedes the 128-block constant and forces
+      vertical residency, sky-light columns, and a section layout change.
 - [ ] C4.4 What happens at y<0 and y>=128: clamp, void, or error?
 
 ---
@@ -585,4 +598,7 @@ an ADR, or the executable source.
 
 | Round | Domain | Decision | Consequence |
 |---|---|---|---|
-| — | — | — | — |
+| 1 | A0 | World description precedes the first generated chunk | Every world is pinned from birth; no generate-first retrofit |
+| 1 | A1 | `u64` seed; streams derived by hashing `(seed, name, coord)` | No 128-bit migration; seed file stays compatible |
+| 1 | C3 | `top_solid_y(h) = floor(h)`; height stays `f32`; v0.0.7 `round()` dropped | One quantisation point in the pipeline; surface/water/caves/features share it |
+| 1 | C4 | World is 384 blocks tall | Vertical residency, sky-light columns, and section layout all change |
