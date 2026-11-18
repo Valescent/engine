@@ -8,9 +8,13 @@ nearby options, and the order they are worth building.
 | Chunk frustum culling | Current (v0.0.3) |
 | Backface culling | Current (v0.0.8) |
 | Distance LOD (LOD0/1/2) | Current (v0.0.8) |
+| Hierarchical frustum culling | Proposed |
 | Horizon (heightmap) culling | Proposed |
+| Software (raster-based) occlusion | Proposed |
+| Voxel visibility graph (cave flood fill) | Proposed |
 | GPU occlusion queries or a depth pyramid | Proposed |
 | Multi-draw indirect batching | Proposed |
+| GPU-driven Hi-Z | Proposed, distance 64+ |
 
 ## Baseline
 
@@ -97,15 +101,115 @@ here that handles caves and overhangs.
 Three megabuffers (one per LOD) with per-chunk vertex ranges, one bind group holding every chunk
 origin (or an origin index in a storage buffer), and `multi_draw_indirect` with one indirect call
 per batch. That removes the per-chunk bind group and vertex-buffer rebinds that dominate the CPU
-side of 1,900 draws. It needs `Features::MULTI_DRAW_INDIRECT` and a wgpu fallback.
+side of 1,900 draws. wgpu 30 exposes `multi_draw_indexed_indirect` and the
+`MULTI_DRAW_INDIRECT_COUNT` feature; support varies by backend and Metal may emulate the call, so
+verify on the target backend and keep a single-draw fallback.
+
+## Other techniques
+
+The list above is not exhaustive. These are the remaining families worth knowing, in rough order
+of fit for this engine.
+
+### Hierarchical (cluster) frustum culling
+
+Group chunk AABBs into a quadtree or octree over chunk columns and test cluster boxes top-down,
+recursing only into visible clusters. At distance 24 the 5,289 chunk tests cost little; at
+distance 48 they do not. Clusters also give the traversal order that software occlusion and
+occlusion queries want.
+
+- **Data:** a tree rebuilt incrementally as columns load and unload, or a fixed grid of 8x8 chunk
+  blocks with a max-height bound.
+- **Saves:** most of the per-frame AABB tests; no draw reduction on its own.
+- **Risk:** none to image correctness.
+- **Effort:** small.
+
+### Software (raster-based) occlusion culling
+
+Rasterize a coarse set of occluders into a small CPU depth buffer (for example 320x180), then test
+each candidate chunk AABB against it. Conservative coverage, pixel bias, and a short occluder list
+(nearest chunks first, largest solid chunks only) keep it fast enough to run every frame. This is
+the technique used by several voxel engines, including JuanDiegoMontoya's raster-based renderer, and
+is described by Narkowicz and in Intel's masked software occlusion paper.
+
+- **Saves:** chunks hidden by any geometry, including caves and overhangs, not just silhouettes.
+- **Cost:** roughly 0.3-1.5 ms CPU for a small buffer; scales with occluder count, not world size.
+- **Risk:** under-conservative rasterization causes holes; bias and test order must be tuned.
+- **Effort:** medium. It composes with the horizon pass: horizon culls cheaply, software occlusion
+  catches what is left.
+
+### Voxel visibility graph (cave flood fill)
+
+For each chunk, precompute a six-bit mask of which neighbouring chunks are reachable through
+transparent cells. Each frame, flood fill from the camera's chunk through faces that point toward
+the camera (`N · V < 0`), and draw only reached chunks. This is the "advanced cave culling"
+algorithm used by Minecraft-style engines; it follows tunnels exactly and needs no rasterization.
+
+- **Saves:** everything unreachable through empty space, including deep caves and sealed pockets.
+- **Cost:** per-chunk masks recomputed after edits; one BFS over the reachable chunks per frame.
+- **Risk:** correctness and edit maintenance; on open terrain the fill reaches almost everything in
+  the frustum, so the win is underground.
+- **Effort:** medium-high.
+
+### Portal culling and precomputed PVS
+
+Rooms and portals, or a potentially-visible-set per region, need a static, authored topology. A
+procedural, editable world invalidates both as the player digs. Deferred; revisit only if the engine
+grows hand-authored interiors.
+
+### Screen-size (sub-pixel) culling
+
+Project the chunk AABB and skip chunks whose screen extent is below one or two pixels. At distance
+48 the far ring contributes vertices but almost no pixels. Fog hides the pop.
+
+- **Saves:** vertex and draw work at the horizon.
+- **Cost:** one projection per candidate, cheap.
+- **Risk:** popping at the cull threshold; tune with fog distance.
+
+### Temporal visibility
+
+Reuse the previous frame's visible set, expanded by one chunk, and test only the new candidates.
+Cheap and stable for a walking camera; pairs naturally with occlusion queries. Not worth it while
+frames are around 1 ms.
+
+### Sub-chunk sections
+
+Split each 32^3 chunk into 16^3 sections and cull them individually. More granularity, especially
+for caves, but it multiplies draw calls; only sensible after batching or GPU-driven drawing.
+
+### GPU-driven Hi-Z
+
+The endgame: a depth pyramid from the previous frame, a compute pass that tests chunk AABBs and
+writes indirect draw args, and one or two multi-draw calls. The Aokana voxel framework describes
+this shape for open worlds. It removes nearly all per-chunk CPU work and pairs with LOD and
+visibility buffers.
+
+- **Needs:** storage buffers, compute, indirect draws, and a depth-pyramid resolve.
+- **Effort:** high; the right investment for distance 64+.
+
+### Impostors and skyline rendering
+
+Not culling, but the far-distance alternative: stop meshing the outer ring and render a heightfield
+silhouette or billboard impostors. Worth evaluating if distance beyond 48 becomes a goal.
+
+## References
+
+- [Aokana: A GPU-Driven Voxel Rendering Framework for Open World Games](https://arxiv.org/abs/2505.02017) — Hi-Z occlusion and visibility buffers for voxel worlds.
+- [Krzysztof Narkowicz: Software occlusion culling](https://knarkowicz.wordpress.com/2010/09/27/software-occlusion-culling/) — raster-based CPU occlusion.
+- [Intel: Masked Software Occlusion Culling](https://www.intel.com/content/dam/develop/external/us/en/documents/masked-software-occlusion-culling-779241.pdf) — conservative masked rasterization.
+- [JuanDiegoMontoya/Voxel_Engine](https://github.com/JuanDiegoMontoya/Voxel_Engine) — raster-based occlusion culling and one-call chunk drawing.
+- [Voxel.Wiki references: flood-fill and potentially visible sets](https://voxel.wiki/wiki/references/) — cave culling and visibility graph links.
 
 ## Recommended order
 
-1. **Horizon culling** — uses data the world already has, CPU-only, and directly cuts
-   `visible_chunks` on hilly terrain. Measure the reduction before deciding on the next step.
-2. **Water distance cutoff and front-to-back ordering** — small, independent, cheap.
-3. **Multi-draw indirect** — the right fix once draw count, not pixels, is the limit.
-4. **GPU occlusion or a depth pyramid** — only if caves and overhangs show up as a measured cost.
+1. **Cluster frustum culling** — small, safe, and keeps the per-frame test count flat as distance
+   grows.
+2. **Horizon culling** — uses data the world already has, CPU-only, and directly cuts
+   `visible_chunks` on hilly terrain.
+3. **Water distance cutoff and front-to-back ordering** — small, independent, cheap.
+4. **Software occlusion culling** — the cave- and overhang-aware CPU step once horizon is in place;
+   the visibility graph is the alternative if underground play becomes central.
+5. **Multi-draw indirect** — the right fix once draw count, not pixels, is the limit.
+6. **GPU-driven Hi-Z** — for distance 64+, once the CPU path is exhausted.
 
 Each step must be measured against the same seed, camera, and render distance; use the policy in
 [Benchmark results](benchmarks.md).
