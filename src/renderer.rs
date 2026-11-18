@@ -83,6 +83,7 @@ struct GpuChunk {
     bind_group: wgpu::BindGroup,
     lod0: Option<(u64, GpuMesh)>,
     lod1: Option<(u64, GpuMesh)>,
+    lod2: Option<(u64, GpuMesh)>,
     water: Option<(u64, GpuMesh)>,
     active: Option<Lod>,
 }
@@ -92,6 +93,7 @@ impl GpuChunk {
         let slot = match lod {
             Lod::Lod0 => &self.lod0,
             Lod::Lod1 => &self.lod1,
+            Lod::Lod2 => &self.lod2,
         };
         slot.as_ref().map(|(_, mesh)| mesh)
     }
@@ -100,6 +102,7 @@ impl GpuChunk {
         match lod {
             Lod::Lod0 => &mut self.lod0,
             Lod::Lod1 => &mut self.lod1,
+            Lod::Lod2 => &mut self.lod2,
         }
     }
 
@@ -108,7 +111,7 @@ impl GpuChunk {
     }
 
     fn is_empty(&self) -> bool {
-        self.lod0.is_none() && self.lod1.is_none() && self.water.is_none()
+        self.lod0.is_none() && self.lod1.is_none() && self.lod2.is_none() && self.water.is_none()
     }
 }
 
@@ -411,6 +414,7 @@ impl Renderer {
                 _origin_buffer: origin_buffer,
                 lod0: None,
                 lod1: None,
+                lod2: None,
                 water: None,
                 active: None,
             }

@@ -42,7 +42,7 @@ use block::Block;
 use camera::Camera;
 use config::{Config, ConfigError};
 use frustum::Frustum;
-use generation::{CHUNK_COLUMN, Generator};
+use generation::Generator;
 use mesh::Lod;
 use mesher::{MeshKind, MeshPool, MeshQueue, Priority, collect_finished, create_pool};
 use player::{Player, PlayerInput};
@@ -52,7 +52,7 @@ use renderer::{FrameStats, Renderer};
 use sky::Sky;
 use streaming::Streaming;
 use voxel::build_highlight_mesh;
-use world::{CHUNK_SIZE, Chunk, DirtyChunks, WORLD_DIRECTORY, World};
+use world::{CHUNK_COLUMN, CHUNK_SIZE, Chunk, DirtyChunks, WORLD_DIRECTORY, World};
 pub use world::{ChunkCoord, SaveError};
 
 const WINDOW_TITLE: &str = concat!("Valescent Engine ", env!("CARGO_PKG_VERSION"));
@@ -363,6 +363,8 @@ struct App {
     streaming: Option<Streaming>,
     seed: Option<u64>,
     save_directory: Option<PathBuf>,
+    level_work: HashSet<ChunkCoord>,
+    level_player_chunk: ChunkCoord,
     stats: FrameAccumulator,
     stress: bool,
     world: World,
@@ -440,6 +442,8 @@ impl App {
             streaming: None,
             seed: None,
             save_directory: save_directory(stress).map(Path::to_path_buf),
+            level_work: world.iter_chunks().map(|(chunk, _)| chunk).collect(),
+            level_player_chunk: ChunkCoord::from_world(spawn.floor().as_ivec3()).0,
             stats: FrameAccumulator::default(),
             stress,
             world,
@@ -479,6 +483,7 @@ impl App {
         let started = Instant::now();
         let light_dirty = self.world.light_dirty(dirty);
         self.queue.invalidate(&light_dirty);
+        self.level_work.extend(light_dirty.iter().copied());
 
         if let Some(pool) = self.mesher.clone() {
             for chunk in &light_dirty {
@@ -532,38 +537,65 @@ impl App {
     }
 
     /// Recalculates every chunk's LOD and requests any missing mesh.
+    ///
+    /// Only chunks with outstanding level work are visited. Generation commits,
+    /// edits, and a player chunk change feed the set; a chunk stays in it until
+    /// its light, opaque mesh, and water mesh are built.
     fn request_levels(&mut self, pool: &dyn MeshPool) {
         profiling::scope!("mesh request");
         let feet = self.player.position.floor().as_ivec3();
         let player_chunk = ChunkCoord::from_world(feet).0;
+        if player_chunk != self.level_player_chunk {
+            self.level_player_chunk = player_chunk;
+            self.level_work
+                .extend(self.world.iter_chunks().map(|(chunk, _)| chunk));
+        }
 
-        for (chunk, _) in self.world.iter_chunks() {
-            if !self.queue.light_is_current(chunk) {
-                self.queue
-                    .request_light(pool, &self.world, chunk, Priority::Background);
+        let work: Vec<ChunkCoord> = self.level_work.drain().collect();
+        for chunk in work {
+            if self.world.chunk(chunk).is_none() {
                 continue;
             }
-            let lod = self.queue.desired_lod(chunk, player_chunk);
-            if !self.queue.is_built(chunk, lod, MeshKind::Opaque) {
-                self.queue.request(
-                    pool,
-                    &self.world,
-                    chunk,
-                    lod,
-                    MeshKind::Opaque,
-                    Priority::Background,
-                );
+            let mut done = true;
+            if !self.queue.light_is_current(chunk) {
+                done = false;
+                if !self.queue.light_pending(chunk) {
+                    self.queue
+                        .request_light(pool, &self.world, chunk, Priority::Background);
+                }
             }
+            if self.queue.light_is_current(chunk) {
+                let lod = self.queue.desired_lod(chunk, player_chunk);
+                if !self.queue.is_built(chunk, lod, MeshKind::Opaque) {
+                    done = false;
+                    if !self.queue.is_pending(chunk, lod, MeshKind::Opaque) {
+                        self.queue.request(
+                            pool,
+                            &self.world,
+                            chunk,
+                            lod,
+                            MeshKind::Opaque,
+                            Priority::Background,
+                        );
+                    }
+                }
 
-            if !self.queue.is_built(chunk, Lod::Lod0, MeshKind::Water) {
-                self.queue.request(
-                    pool,
-                    &self.world,
-                    chunk,
-                    Lod::Lod0,
-                    MeshKind::Water,
-                    Priority::Background,
-                );
+                if !self.queue.is_built(chunk, Lod::Lod0, MeshKind::Water) {
+                    done = false;
+                    if !self.queue.is_pending(chunk, Lod::Lod0, MeshKind::Water) {
+                        self.queue.request(
+                            pool,
+                            &self.world,
+                            chunk,
+                            Lod::Lod0,
+                            MeshKind::Water,
+                            Priority::Background,
+                        );
+                    }
+                }
+            }
+            if !done {
+                self.level_work.insert(chunk);
             }
         }
         self.stats.pending_jobs = self.queue.pending_len();
@@ -597,6 +629,7 @@ impl App {
                     error!(%error, chunk = ?chunk, "failed to load a saved chunk");
                     loaded = false;
                 }
+                self.level_work.insert(chunk);
             }
             if loaded && let Some(streaming) = &mut self.streaming {
                 streaming.mark_loaded(generation.column);
@@ -763,12 +796,28 @@ impl App {
             self.update_highlight();
         }
 
+        let slow0 = Instant::now();
         if let Some(pool) = self.mesher.clone() {
             self.stream_columns(&*pool);
+            let slow1 = Instant::now();
             self.request_levels(&*pool);
+            let slow2 = Instant::now();
             self.upload_finished_meshes(&*pool);
+            let slow3 = Instant::now();
             profiling::scope!("select active");
             self.select_active_levels();
+            let slow4 = Instant::now();
+            if slow4.saturating_duration_since(slow0).as_millis() > 5 {
+                let ms =
+                    |a: Instant, b: Instant| b.saturating_duration_since(a).as_secs_f64() * 1000.0;
+                debug!(
+                    stream = ms(slow0, slow1),
+                    levels = ms(slow1, slow2),
+                    upload = ms(slow2, slow3),
+                    select = ms(slow3, slow4),
+                    "slow phases"
+                );
+            }
         }
 
         let overlay = self.show_overlay.then(|| {
@@ -781,11 +830,18 @@ impl App {
             profiling::scope!("frustum");
             Frustum::from_view_projection(self.camera.view_projection())
         };
+        let slow_render = Instant::now();
         if let Some(renderer) = &mut self.renderer {
             renderer.set_camera(&self.camera);
             renderer.set_sky(&self.sky.sample(), self.unlit);
             renderer.set_overlay(overlay.as_deref());
             self.stats.totals = renderer.render(&frustum);
+        }
+        if slow_render.elapsed().as_millis() > 5 {
+            debug!(
+                render_ms = slow_render.elapsed().as_secs_f64() * 1000.0,
+                "slow render"
+            );
         }
 
         metrics::frame_ms(elapsed.as_secs_f64() * 1000.0);
@@ -984,6 +1040,10 @@ impl App {
             for y in 0..CHUNK_COLUMN {
                 renderer.remove_chunk(ChunkCoord::new(column.x, y, column.y));
             }
+        }
+        for y in 0..CHUNK_COLUMN {
+            self.level_work
+                .remove(&ChunkCoord::new(column.x, y, column.y));
         }
         if let Some(streaming) = &mut self.streaming {
             streaming.mark_unloaded(column);
@@ -1230,6 +1290,10 @@ mod tests {
     }
 
     impl MeshPool for InlinePool {
+        fn can_submit(&self, _priority: Priority) -> bool {
+            true
+        }
+
         fn submit(&self, job: Job, _priority: Priority) -> bool {
             match job {
                 Job::Light(job) => {

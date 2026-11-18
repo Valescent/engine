@@ -79,6 +79,8 @@ pub(crate) struct MeshResult {
 
 /// Non-blocking access to worker threads.
 pub(crate) trait MeshPool: Send + Sync {
+    /// Whether a job with this priority would be accepted right now.
+    fn can_submit(&self, priority: Priority) -> bool;
     /// Submits a job, returning whether it was accepted.
     fn submit(&self, job: Job, priority: Priority) -> bool;
     fn try_recv(&self) -> Option<JobResult>;
@@ -108,9 +110,16 @@ impl WorkerPool {
 }
 
 impl MeshPool for WorkerPool {
+    fn can_submit(&self, priority: Priority) -> bool {
+        admit(
+            priority,
+            self.in_flight.load(Ordering::Relaxed),
+            self.capacity,
+        )
+    }
+
     fn submit(&self, job: Job, priority: Priority) -> bool {
-        let in_flight = self.in_flight.load(Ordering::Relaxed);
-        if !admit(priority, in_flight, self.capacity) {
+        if !self.can_submit(priority) {
             return false;
         }
         self.in_flight.fetch_add(1, Ordering::Relaxed);
@@ -155,9 +164,16 @@ impl RayonPool {
 
 #[cfg(feature = "rayon-pool")]
 impl MeshPool for RayonPool {
+    fn can_submit(&self, priority: Priority) -> bool {
+        admit(
+            priority,
+            self.in_flight.load(Ordering::Relaxed),
+            self.capacity,
+        )
+    }
+
     fn submit(&self, job: Job, priority: Priority) -> bool {
-        let in_flight = self.in_flight.load(Ordering::Relaxed);
-        if !admit(priority, in_flight, self.capacity) {
+        if !self.can_submit(priority) {
             return false;
         }
         self.in_flight.fetch_add(1, Ordering::Relaxed);
@@ -317,6 +333,9 @@ impl MeshQueue {
         if self.pending.get(&(chunk, lod, kind)) == Some(&revision) {
             return;
         }
+        if !pool.can_submit(priority) {
+            return;
+        }
         let job = MeshJob {
             chunk,
             lod,
@@ -339,7 +358,7 @@ impl MeshQueue {
         column: IVec2,
         priority: Priority,
     ) {
-        if !self.gen_pending.insert(column) {
+        if !pool.can_submit(priority) || !self.gen_pending.insert(column) {
             return;
         }
         let job = GenJob { column, seed };
@@ -372,6 +391,9 @@ impl MeshQueue {
         {
             return;
         }
+        if !pool.can_submit(priority) {
+            return;
+        }
         let job = LightJob {
             chunk,
             revision,
@@ -391,6 +413,16 @@ impl MeshQueue {
     /// Returns whether the chunk has an accepted light field at its revision.
     pub(crate) fn light_is_current(&self, chunk: ChunkCoord) -> bool {
         self.light_built.get(&chunk) == Some(&self.revision(chunk))
+    }
+
+    /// Returns whether a light job is queued or running for the chunk.
+    pub(crate) fn light_pending(&self, chunk: ChunkCoord) -> bool {
+        self.light_pending.contains_key(&chunk)
+    }
+
+    /// Returns whether a mesh job is queued or running for this cell.
+    pub(crate) fn is_pending(&self, chunk: ChunkCoord, lod: Lod, kind: MeshKind) -> bool {
+        self.pending.contains_key(&(chunk, lod, kind))
     }
 
     /// Accepts a light result only when its revision and request are current.
@@ -507,6 +539,10 @@ mod tests {
     }
 
     impl MeshPool for FakePool {
+        fn can_submit(&self, _priority: Priority) -> bool {
+            true
+        }
+
         fn submit(&self, _job: Job, _priority: Priority) -> bool {
             self.submissions.fetch_add(1, Ordering::Relaxed);
             true
@@ -758,6 +794,10 @@ mod tests {
         struct RefusingPool;
 
         impl MeshPool for RefusingPool {
+            fn can_submit(&self, _priority: Priority) -> bool {
+                false
+            }
+
             fn submit(&self, _job: Job, _priority: Priority) -> bool {
                 false
             }
@@ -798,5 +838,13 @@ mod tests {
         assert_eq!(queue.desired_lod(target, chunk(6)), Lod::Lod0);
         assert_eq!(queue.desired_lod(target, chunk(12)), Lod::Lod1);
         assert_eq!(queue.desired(target), Some(Lod::Lod1));
+
+        let far = chunk(0);
+        assert_eq!(queue.desired_lod(far, chunk(20)), Lod::Lod2);
+        assert_eq!(queue.desired_lod(far, chunk(12)), Lod::Lod2);
+        assert_eq!(queue.desired_lod(far, chunk(8)), Lod::Lod1);
+        assert_eq!(queue.desired_lod(far, chunk(6)), Lod::Lod1);
+        assert_eq!(queue.desired_lod(far, chunk(4)), Lod::Lod0);
+        assert_eq!(queue.desired(far), Some(Lod::Lod0));
     }
 }

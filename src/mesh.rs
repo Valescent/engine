@@ -19,17 +19,15 @@ pub(crate) const LOD0_DISTANCE: f32 = 4.0;
 /// Distance in chunk units at or above which a chunk renders at LOD1.
 pub(crate) const LOD1_DISTANCE: f32 = 8.0;
 
-/// Blocks per LOD1 cell on each axis.
-const LOD1_SCALE: i32 = 2;
+/// Distance in chunk units at or above which a chunk renders at LOD2.
+pub(crate) const LOD2_DISTANCE: f32 = 16.0;
 
-/// LOD1 cells per chunk axis.
-const LOD1_SIZE: i32 = CHUNK_SIZE / LOD1_SCALE;
-
-/// Two rendering levels of detail.
+/// Three rendering levels of detail.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) enum Lod {
     Lod0,
     Lod1,
+    Lod2,
 }
 
 impl Lod {
@@ -38,37 +36,62 @@ impl Lod {
         match self {
             Self::Lod0 => 1.0,
             Self::Lod1 => 2.0,
+            Self::Lod2 => 4.0,
+        }
+    }
+
+    /// Blocks per cell on each axis.
+    fn cell_scale(self) -> i32 {
+        match self {
+            Self::Lod0 => 1,
+            Self::Lod1 => 2,
+            Self::Lod2 => 4,
         }
     }
 
     /// Cells per chunk axis.
     fn cell_count(self) -> i32 {
-        match self {
-            Self::Lod0 => CHUNK_SIZE,
-            Self::Lod1 => LOD1_SIZE,
-        }
+        CHUNK_SIZE / self.cell_scale()
     }
 }
 
 /// Picks a LOD from the current one and the chunk distance, with hysteresis.
 ///
-/// `current` is `None` on the first selection. Distances between the two
-/// thresholds retain the current LOD so boundaries do not flicker.
+/// `current` is `None` on the first selection. Distances between thresholds
+/// retain the current LOD so boundaries do not flicker.
 pub(crate) fn select_lod(current: Option<Lod>, distance: f32) -> Lod {
     let Some(current) = current else {
-        return if distance >= LOD1_DISTANCE {
-            Lod::Lod1
-        } else {
-            Lod::Lod0
-        };
+        return select_lod(Some(Lod::Lod0), distance);
     };
 
-    if distance <= LOD0_DISTANCE {
-        Lod::Lod0
-    } else if distance >= LOD1_DISTANCE {
-        Lod::Lod1
-    } else {
-        current
+    match current {
+        Lod::Lod0 => {
+            if distance >= LOD2_DISTANCE {
+                Lod::Lod2
+            } else if distance >= LOD1_DISTANCE {
+                Lod::Lod1
+            } else {
+                Lod::Lod0
+            }
+        }
+        Lod::Lod1 => {
+            if distance >= LOD2_DISTANCE {
+                Lod::Lod2
+            } else if distance <= LOD0_DISTANCE {
+                Lod::Lod0
+            } else {
+                Lod::Lod1
+            }
+        }
+        Lod::Lod2 => {
+            if distance <= LOD0_DISTANCE {
+                Lod::Lod0
+            } else if distance <= LOD1_DISTANCE {
+                Lod::Lod1
+            } else {
+                Lod::Lod2
+            }
+        }
     }
 }
 
@@ -161,18 +184,19 @@ pub(crate) fn build_mesh(
                 &corners,
             )
         }
-        Lod::Lod1 => {
-            let (cells, representatives) = downsample(snapshot);
+        Lod::Lod1 | Lod::Lod2 => {
+            let size = lod.cell_count();
+            let (cells, representatives) = downsample(snapshot, size, lod.cell_scale());
             let cell_block = |cell: IVec3| {
-                if in_grid(cell, LOD1_SIZE) {
-                    cells[index_in(cell, LOD1_SIZE)]
+                if in_grid(cell, size) {
+                    cells[index_in(cell, size)]
                 } else {
                     Block::Air
                 }
             };
             let anchor = |cell: IVec3| {
-                if in_grid(cell, LOD1_SIZE) {
-                    representatives[index_in(cell, LOD1_SIZE)]
+                if in_grid(cell, size) {
+                    representatives[index_in(cell, size)]
                 } else {
                     IVec3::ZERO
                 }
@@ -222,29 +246,29 @@ fn full_block(snapshot: &ChunkSnapshot, border: &BorderBlocks, local: IVec3) -> 
     }
 }
 
-/// Downsamples a chunk to one block per LOD1 cell: solid when any source block
+/// Downsamples a chunk to one block per LOD cell: solid when any source block
 /// is solid, typed by the topmost solid source, then lowest X, then lowest Z.
 ///
 /// Also returns the full-resolution local coordinate of each cell's
 /// representative block, which light and AO sampling use.
-fn downsample(snapshot: &ChunkSnapshot) -> (Box<[Block]>, Box<[IVec3]>) {
-    let cells = usize::try_from(LOD1_SIZE * LOD1_SIZE * LOD1_SIZE).expect("grid fits");
+fn downsample(snapshot: &ChunkSnapshot, size: i32, scale: i32) -> (Box<[Block]>, Box<[IVec3]>) {
+    let cells = usize::try_from(size * size * size).expect("grid fits");
     let mut grid = vec![Block::Air; cells].into_boxed_slice();
     let mut representatives = vec![IVec3::ZERO; cells].into_boxed_slice();
-    for cell in grid_coords(LOD1_SIZE) {
-        let (block, representative) = downsample_cell(snapshot, cell);
-        let index = index_in(cell, LOD1_SIZE);
+    for cell in grid_coords(size) {
+        let (block, representative) = downsample_cell(snapshot, cell, scale);
+        let index = index_in(cell, size);
         grid[index] = block;
         representatives[index] = representative;
     }
     (grid, representatives)
 }
 
-fn downsample_cell(snapshot: &ChunkSnapshot, cell: IVec3) -> (Block, IVec3) {
-    let base = cell * LOD1_SCALE;
-    for y in (0..LOD1_SCALE).rev() {
-        for x in 0..LOD1_SCALE {
-            for z in 0..LOD1_SCALE {
+fn downsample_cell(snapshot: &ChunkSnapshot, cell: IVec3, scale: i32) -> (Block, IVec3) {
+    let base = cell * scale;
+    for y in (0..scale).rev() {
+        for x in 0..scale {
+            for z in 0..scale {
                 let local = base + IVec3::new(x, y, z);
                 let block = snapshot.block(local);
                 if block.is_solid() {
@@ -770,10 +794,16 @@ mod tests {
     fn lod1_downsample_is_solid_when_any_source_is_solid() {
         let world = world_with(&[(IVec3::new(1, 1, 1), Block::Stone)]);
         let snapshot = ChunkSnapshot::new(&world, chunk_at(IVec3::ZERO));
-        let (cells, _) = downsample(&snapshot);
+        let (cells, _) = downsample(&snapshot, Lod::Lod1.cell_count(), Lod::Lod1.cell_scale());
 
-        assert_eq!(cells[index_in(IVec3::ZERO, LOD1_SIZE)], Block::Stone);
-        assert_eq!(cells[index_in(IVec3::X, LOD1_SIZE)], Block::Air);
+        assert_eq!(
+            cells[index_in(IVec3::ZERO, Lod::Lod1.cell_count())],
+            Block::Stone
+        );
+        assert_eq!(
+            cells[index_in(IVec3::X, Lod::Lod1.cell_count())],
+            Block::Air
+        );
     }
 
     #[test]
@@ -787,15 +817,24 @@ mod tests {
         let snapshot = ChunkSnapshot::new(&world, chunk_at(IVec3::ZERO));
 
         assert_eq!(
-            downsample(&snapshot).0[index_in(IVec3::ZERO, LOD1_SIZE)],
+            downsample(&snapshot, Lod::Lod1.cell_count(), Lod::Lod1.cell_scale()).0
+                [index_in(IVec3::ZERO, Lod::Lod1.cell_count())],
             Block::Dirt
         );
 
         let mut tie = World::default();
         tie.set_block(IVec3::new(1, 1, 1), Block::Leaves);
         tie.set_block(IVec3::new(0, 1, 1), Block::Wood);
-        let tie = downsample(&ChunkSnapshot::new(&tie, chunk_at(IVec3::ZERO))).0;
-        assert_eq!(tie[index_in(IVec3::ZERO, LOD1_SIZE)], Block::Wood);
+        let tie = downsample(
+            &ChunkSnapshot::new(&tie, chunk_at(IVec3::ZERO)),
+            Lod::Lod1.cell_count(),
+            Lod::Lod1.cell_scale(),
+        )
+        .0;
+        assert_eq!(
+            tie[index_in(IVec3::ZERO, Lod::Lod1.cell_count())],
+            Block::Wood
+        );
     }
 
     #[test]
@@ -1063,6 +1102,60 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
+    fn lod2_scales_positions_and_uvs_by_four() {
+        let world = world_with(&[(IVec3::new(4, 4, 4), Block::Stone)]);
+        let vertices = mesh(&world, chunk_at(IVec3::new(4, 4, 4)), Lod::Lod2);
+
+        assert_eq!(
+            vertices,
+            expected(&[
+                (0, 1, 1, 1, 1, 1, 4.0, 0),
+                (1, 1, 1, 1, 1, 1, 4.0, 0),
+                (2, 1, 1, 1, 1, 1, 4.0, 0),
+                (3, 1, 1, 1, 1, 1, 4.0, 0),
+                (4, 1, 1, 1, 1, 1, 4.0, 0),
+                (5, 1, 1, 1, 1, 1, 4.0, 0),
+            ])
+        );
+        assert_eq!(vertices[1].uv, [0.0, 4.0]);
+    }
+
+    #[test]
+    fn lod2_downsample_takes_one_cell_per_sixteen_blocks() {
+        let world = world_with(&[
+            (IVec3::new(0, 0, 0), Block::Stone),
+            (IVec3::new(1, 1, 1), Block::Dirt),
+        ]);
+        let snapshot = ChunkSnapshot::new(&world, chunk_at(IVec3::ZERO));
+        let (cells, representatives) =
+            downsample(&snapshot, Lod::Lod2.cell_count(), Lod::Lod2.cell_scale());
+        let index = index_in(IVec3::ZERO, Lod::Lod2.cell_count());
+
+        assert_eq!(cells[index], Block::Dirt);
+        assert_eq!(representatives[index], IVec3::new(1, 1, 1));
+        assert_eq!(
+            cells[index_in(IVec3::X, Lod::Lod2.cell_count())],
+            Block::Air
+        );
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn lod2_emits_boundary_faces_even_next_to_solid_neighbours() {
+        let world = world_with(&[
+            (IVec3::new(31, 0, 0), Block::Stone),
+            (IVec3::new(32, 0, 0), Block::Stone),
+        ]);
+        let chunk = chunk_at(IVec3::new(31, 0, 0));
+
+        let lod2 = mesh(&world, chunk, Lod::Lod2);
+
+        assert_ne!(lod2.len(), 0);
+        assert!(lod2.iter().any(|vertex| vertex.normal == [1.0, 0.0, 0.0]));
+    }
+
+    #[test]
     fn lod_selection_uses_thresholds_and_hysteresis() {
         assert_eq!(select_lod(None, 0.0), Lod::Lod0);
         assert_eq!(select_lod(None, 4.0), Lod::Lod0);
@@ -1077,6 +1170,13 @@ mod tests {
         assert_eq!(select_lod(Some(Lod::Lod1), 8.0), Lod::Lod1);
         assert_eq!(select_lod(Some(Lod::Lod1), 6.0), Lod::Lod1);
         assert_eq!(select_lod(Some(Lod::Lod1), 4.0), Lod::Lod0);
+
+        assert_eq!(select_lod(None, 15.9), Lod::Lod1);
+        assert_eq!(select_lod(None, 16.0), Lod::Lod2);
+        assert_eq!(select_lod(Some(Lod::Lod0), 20.0), Lod::Lod2);
+        assert_eq!(select_lod(Some(Lod::Lod2), 12.0), Lod::Lod2);
+        assert_eq!(select_lod(Some(Lod::Lod2), 8.0), Lod::Lod1);
+        assert_eq!(select_lod(Some(Lod::Lod2), 4.0), Lod::Lod0);
     }
 
     #[test]

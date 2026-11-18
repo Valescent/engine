@@ -212,6 +212,7 @@ CPU/GPU split from a Tracy capture of the same scene (development profile, 349 f
 | `encode` | 13 us | 65 us |
 | GPU `terrain` | ~5.5 us | — |
 
+
 ### Reading the result
 
 - The frame is **CPU-bound and collision-bound**: `Player::update` is 1.15 ms of the 1.28 ms
@@ -267,6 +268,35 @@ driver and present-path bookkeeping that scales with frame count, not with world
 So the uncapped ceiling is the swapchain/present path on this driver (~0.25 ms per frame), not
 mesh work, collision, or the GPU. Vsync hides it completely at 60 FPS.
 
+## Engine run (v0.0.8, release)
+
+Generated-world streaming at distance 24, with the v0.0.7 distance-12 result as the baseline. Same
+machine and release profile as above.
+
+### How to run
+
+Put a `config.toml` in the working directory:
+
+```toml
+[world]
+render_distance_chunks = 24
+```
+
+Then run with `ENGINE_NO_VSYNC=1` and `RUST_LOG=engine=debug`, and keep the window foregrounded.
+Windows throttles redraws for covered windows, which looks like a frame-rate regression; the CPU
+frame time in the log is the comparable number.
+
+### Measurement
+
+| Scene | Chunks loaded | Working set | Frame time | FPS |
+|---|---:|---:|---:|---:|
+| v0.0.7, distance 12 | 1434 | 338 MB | 16.7 ms (vsync) | 60 |
+| v0.0.8, distance 12 | 1434 | 295 MB | 0.8 ms | 1247 |
+| v0.0.8, distance 24, still streaming | 3031 | 467 MB | 2.9-3.2 ms | 316-345 |
+
+The distance-24 run is sampled while the ring is still filling: generation commits 125-150
+columns per second and the level work set keeps the steady-state scan off the frame. At distance
+12 the resident light cost falls from about 79 KiB to 39 KiB per chunk.
 ## 2026-11-17 runs
 
 - **Machine:** AMD Ryzen 5 7600, 6 cores / 12 logical processors, Windows 11 Home.

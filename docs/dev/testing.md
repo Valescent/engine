@@ -45,7 +45,7 @@ The headless suite covers:
 - Block IDs, solidity, face-layer mapping, and hotbar selection.
 - Chunk coordinate conversion including negative worlds, block storage idempotence, and dirty-chunk sets for interior, border, corner, and last-block edits.
 - Missing and empty chunk meshes, cross-chunk face culling, exact greedy quads, block-unit UVs, texture layers, LOD1 boundary faces, and deterministic chunk meshing.
-- LOD1 downsampling, LOD thresholds and hysteresis, and greedy reduction against the v0.0.4 mesher.
+- LOD1 and LOD2 downsampling, boundary faces, thresholds and hysteresis across three levels, and greedy reduction against the v0.0.4 mesher.
 - Frustum plane extraction and conservative AABB rejection for inside, outside, and straddling boxes.
 - Light storage and BFS: open columns, overhang falloff, dark caves, lamp falloff, water transmission, and cross-chunk borders.
 - Per-corner AO, packed light/AO, greedy splitting at light/AO changes, and LOD1 representative sampling.
@@ -53,7 +53,7 @@ The headless suite covers:
 - Light snapshots, edit invalidation (3x3x3 plus columns below), and light/mesh queue ordering: an edit waits for the accepted light field before remeshing.
 - Generation determinism, biome thresholds, sea fill, cave carving, tree structure, streaming ring order, unload hysteresis, and the readiness guard, including air-only chunks and rejection of movement into an unready column; `config.toml` defaults, ranges, and unknown keys.
 - Modified-only saves, seed creation and parsing, the missing-seed error, saved chunks applied over generated blocks, empty saved chunks, and unload saving and dropping a column; a late generation result is discarded after its column was cancelled.
-- Mesh revisions, stale-result rejection, queue priority, background dropping, and the two-upload cap.
+- Mesh revisions, stale-result rejection, queue priority, background dropping, the two-upload cap, and admission checks before snapshot work.
 - The deterministic 8x8 stress fixture and the stress-mode world path.
 - Player AABB, gravity, jumping, ground detection, axis order, collision response, and tunnelling limits.
 - DDA ray hits, misses, range limits, tie-break order, and face normals.

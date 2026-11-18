@@ -12,7 +12,7 @@ use glam::IVec3;
 
 use crate::block::Block;
 use crate::mesh::ChunkSnapshot;
-use crate::world::{CHUNK_SIZE, ChunkCoord, World};
+use crate::world::{CHUNK_COLUMN, CHUNK_SIZE, ChunkCoord, World};
 
 /// Maximum light level.
 pub(crate) const MAX_LIGHT: u8 = 15;
@@ -47,13 +47,19 @@ pub(crate) struct LightSnapshot {
 
 impl LightSnapshot {
     /// Copies the blocks a light job for `chunk` needs out of the world.
+    ///
+    /// The footprint is the 3x3 chunk ring at and above `chunk.y - 1`, bounded by
+    /// the world column height. Missing chunks are air and are not copied.
     pub(crate) fn new(world: &World, chunk: ChunkCoord) -> Self {
-        let origin = chunk.coordinates();
         let mut cells = HashMap::new();
-        for (coordinate, _) in world.iter_chunks() {
-            let delta = coordinate.coordinates() - origin;
-            if delta.x.abs() <= 1 && delta.z.abs() <= 1 && delta.y >= -1 {
-                cells.insert(coordinate, ChunkSnapshot::new(world, coordinate));
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                for dy in -1..CHUNK_COLUMN {
+                    let coordinate = chunk.offset(IVec3::new(dx, dy, dz));
+                    if world.chunk(coordinate).is_some() {
+                        cells.insert(coordinate, ChunkSnapshot::new(world, coordinate));
+                    }
+                }
             }
         }
         Self { cells }
@@ -78,23 +84,57 @@ pub(crate) struct LightResult {
 
 /// Sky and block light for a chunk plus one border cell.
 ///
-/// Cells are indexed by chunk-local coordinates in `-1..=32`; the border is what
-/// meshing samples across chunk edges.
+/// Cells are indexed by chunk-local coordinates in `-1..=32` and stored as one
+/// nibble per cell; the border is what meshing samples across chunk edges.
 #[derive(Clone, Debug)]
 pub(crate) struct LightField {
-    sky: Box<[u8]>,
-    block: Box<[u8]>,
+    sky: PackedLight,
+    block: PackedLight,
 }
 
 impl LightField {
     /// Sky light at a local coordinate in `-1..=32`.
     pub(crate) fn sky(&self, local: IVec3) -> u8 {
-        self.sky[field_index(local)]
+        self.sky.get(field_index(local))
     }
 
     /// Block light at a local coordinate in `-1..=32`.
     pub(crate) fn block(&self, local: IVec3) -> u8 {
-        self.block[field_index(local)]
+        self.block.get(field_index(local))
+    }
+}
+
+/// A plane of four-bit light values, two cells per byte.
+#[derive(Clone, Debug, Default)]
+struct PackedLight {
+    cells: Box<[u8]>,
+}
+
+impl PackedLight {
+    fn new() -> Self {
+        let cells = usize::try_from(PADDED * PADDED * PADDED).expect("light field fits in usize");
+        Self {
+            cells: vec![0; cells.div_ceil(2)].into_boxed_slice(),
+        }
+    }
+
+    fn get(&self, index: usize) -> u8 {
+        let byte = self.cells[index / 2];
+        if index.is_multiple_of(2) {
+            byte & 0x0F
+        } else {
+            byte >> 4
+        }
+    }
+
+    fn set(&mut self, index: usize, value: u8) {
+        debug_assert!(value <= MAX_LIGHT);
+        let slot = &mut self.cells[index / 2];
+        if index.is_multiple_of(2) {
+            *slot = (*slot & 0xF0) | value;
+        } else {
+            *slot = (*slot & 0x0F) | (value << 4);
+        }
     }
 }
 
@@ -214,12 +254,11 @@ fn spread(blocks: &[Block], values: &mut [u8], queue: &mut VecDeque<(IVec3, u8)>
     }
 }
 
-fn extract(values: &[u8]) -> Box<[u8]> {
-    let cells = usize::try_from(PADDED * PADDED * PADDED).expect("light field fits in usize");
-    let mut field = vec![0_u8; cells].into_boxed_slice();
+fn extract(values: &[u8]) -> PackedLight {
+    let mut field = PackedLight::new();
     for local in grid_coords() {
         let cell = local + IVec3::splat(SIZE);
-        field[field_index(local)] = values[grid_index(cell)];
+        field.set(field_index(local), values[grid_index(cell)]);
     }
     field
 }
@@ -287,6 +326,68 @@ mod tests {
         assert_eq!(light.sky(IVec3::new(1, 1, 1)), MAX_LIGHT);
         assert_eq!(light.sky(IVec3::new(1, 31, 1)), MAX_LIGHT);
         assert_eq!(light.sky(IVec3::new(1, 0, 1)), 0);
+    }
+
+    #[test]
+    fn packed_light_round_trips_every_value() {
+        let mut plane = PackedLight::new();
+        let cells = usize::try_from(PADDED * PADDED * PADDED).unwrap();
+
+        assert_eq!(plane.cells.len(), cells.div_ceil(2));
+        for index in 0..cells.div_ceil(2) {
+            for value in 0..=MAX_LIGHT {
+                plane.set(index, value);
+                assert_eq!(plane.get(index), value, "{index}");
+            }
+        }
+    }
+
+    #[test]
+    fn packed_fields_cover_the_halo() {
+        let mut world = World::default();
+        for x in 0..CHUNK_SIZE {
+            for z in 0..CHUNK_SIZE {
+                world.set_block(IVec3::new(x, 0, z), Block::Stone);
+            }
+        }
+        let chunk = ChunkCoord::new(0, 0, 0);
+        let field = compute(&LightSnapshot::new(&world, chunk), chunk);
+
+        assert_eq!(field.sky(IVec3::new(-1, 1, -1)), MAX_LIGHT);
+        assert_eq!(field.sky(IVec3::new(SIZE, 1, SIZE)), MAX_LIGHT);
+        assert_eq!(field.sky(IVec3::new(0, 0, 0)), 0);
+        assert_eq!(field.block(IVec3::new(-1, -1, -1)), 0);
+    }
+
+    #[test]
+    fn a_light_snapshot_uses_the_column_footprint() {
+        let mut world = World::default();
+        for y in 0..CHUNK_COLUMN {
+            world.set_block(IVec3::new(1, y * CHUNK_SIZE, 1), Block::Stone);
+        }
+        world.set_block(IVec3::new(-1, 0, 0), Block::Stone);
+        world.set_block(IVec3::new(100, 0, 0), Block::Stone);
+
+        let snapshot = LightSnapshot::new(&world, ChunkCoord::new(0, 0, 0));
+
+        for y in 0..CHUNK_COLUMN {
+            assert!(
+                snapshot.cells.contains_key(&ChunkCoord::new(0, y, 0)),
+                "y {y}"
+            );
+        }
+        assert!(snapshot.cells.contains_key(&ChunkCoord::new(-1, 0, 0)));
+        assert_eq!(snapshot.cells.len(), CHUNK_COLUMN as usize + 1);
+
+        let top = LightSnapshot::new(&world, ChunkCoord::new(0, CHUNK_COLUMN - 1, 0));
+        assert!(
+            top.cells
+                .contains_key(&ChunkCoord::new(0, CHUNK_COLUMN - 2, 0))
+        );
+        assert!(
+            top.cells
+                .contains_key(&ChunkCoord::new(0, CHUNK_COLUMN - 1, 0))
+        );
     }
 
     #[test]

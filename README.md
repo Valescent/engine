@@ -39,7 +39,7 @@ Water is drawn after opaque geometry without per-face sorting, so overlapping wa
 The world lives in `world/`: `world/seed` holds the generation seed and `world/chunks/` holds only
 modified chunks. Unmodified chunks are regenerated from the seed. Chunks save when they unload,
 on `Ctrl+S`, and on exit; a modified chunk is applied over its generated blocks on the next load.
-`config.toml` sets `world.render_distance_chunks` (default `12`, range `8..=16`). `ENGINE_SEED=<u64>`
+`config.toml` sets `world.render_distance_chunks` (default `12`, range `8..=32`). `ENGINE_SEED=<u64>`
 chooses the seed of a new world. Set `ENGINE_STRESS_SCENE=1` to load the deterministic 64-chunk
 stress scene instead; it never touches `world/`.
 

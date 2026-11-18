@@ -13,7 +13,7 @@ pub(crate) const DEFAULT_RENDER_DISTANCE: i32 = 12;
 pub(crate) const MIN_RENDER_DISTANCE: i32 = 8;
 
 /// Largest accepted render distance.
-pub(crate) const MAX_RENDER_DISTANCE: i32 = 16;
+pub(crate) const MAX_RENDER_DISTANCE: i32 = 32;
 
 /// Engine settings read once at startup.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -142,6 +142,9 @@ mod tests {
     fn parses_the_world_table() {
         let config = load_text("[world]\nrender_distance_chunks = 8\n").unwrap();
         assert_eq!(config.render_distance_chunks, 8);
+
+        let config = load_text("[world]\nrender_distance_chunks = 32\n").unwrap();
+        assert_eq!(config.render_distance_chunks, 32);
     }
 
     #[test]
@@ -174,8 +177,8 @@ mod tests {
             Err(ConfigError::RenderDistanceOutOfRange(7))
         ));
         assert!(matches!(
-            load_text("[world]\nrender_distance_chunks = 17\n"),
-            Err(ConfigError::RenderDistanceOutOfRange(17))
+            load_text("[world]\nrender_distance_chunks = 33\n"),
+            Err(ConfigError::RenderDistanceOutOfRange(33))
         ));
         assert!(matches!(
             load_text("[world]\nrender_distance_chunks = twelve\n"),

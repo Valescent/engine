@@ -7,10 +7,7 @@ use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
 use glam::IVec3;
 
 use crate::block::Block;
-use crate::world::{CHUNK_SIZE, Chunk, ChunkCoord};
-
-/// Chunks per world column.
-pub(crate) const CHUNK_COLUMN: i32 = 4;
+use crate::world::{CHUNK_COLUMN, CHUNK_SIZE, Chunk, ChunkCoord};
 
 /// Blocks per world column axis.
 pub(crate) const WORLD_HEIGHT: i32 = CHUNK_SIZE * CHUNK_COLUMN;

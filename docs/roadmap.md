@@ -261,12 +261,12 @@ See [v0.0.8 scope](dev/v0.0.8-scope.md) for the deliverables and the
 ### Milestones
 
 #### 1. Light and memory
-- [~] Direct light snapshots (constant lookups per job)
-- [ ] Four-bit packed light fields
+- [x] Direct light snapshots (constant lookups per job)
+- [x] Four-bit packed light fields
 
 #### 2. Distance and pacing
-- [ ] LOD2 and `render_distance_chunks` up to `32`
-- [ ] Streaming pacing, readiness bookkeeping, and budget metrics
+- [x] LOD2 and `render_distance_chunks` up to `32`
+- [x] Streaming pacing, readiness bookkeeping, and budget metrics
 
 ### Definition of Done
 - 60 FPS at `render_distance_chunks = 24` on the reference machine

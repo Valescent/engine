@@ -23,6 +23,9 @@ pub(crate) const CHUNK_SIZE: i32 = 32;
 /// Cells in one chunk.
 pub(crate) const CHUNK_CELLS: usize = (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) as usize;
 
+/// Chunks in one vertical world column.
+pub(crate) const CHUNK_COLUMN: i32 = 4;
+
 /// Chunks touched by an edit, in deterministic order.
 pub(crate) type DirtyChunks = BTreeSet<ChunkCoord>;
 

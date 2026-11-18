@@ -14,11 +14,11 @@ The engine is a small `winit` and `wgpu` application. This page describes the cu
 | `src/overlay.rs` | Screen-space debug text geometry and font. |
 | `src/raycast.rs` | DDA voxel traversal, hit result, tie-breaking, and tests. |
 | `src/world.rs` | Chunk and block storage, coordinate conversion, dirty-chunk tracking, the modified set, `VCHK` save/load, and seed file handling. |
-| `src/mesh.rs` | Greedy meshing, the 2x2x2 LOD1 downsample, LOD selection, chunk snapshots, border blocks, and tests. |
+| `src/mesh.rs` | Greedy meshing, the 2x2x2 LOD1 and 4x4x4 LOD2 downsamples, LOD selection, chunk snapshots, border blocks, and tests. |
 | `src/mesher.rs` | Mesh, light, and generation jobs, revisions, the bounded micropool `WorkerPool`, finished-result collection, and tests. |
 | `src/frustum.rs` | Six-plane frustum extraction and conservative AABB tests. |
 | `src/metrics.rs` | Tracy plots for frame, GPU, chunk, draw, rebuild, upload, and queue metrics; no-ops without the `tracy` feature. |
-| `src/light.rs` | Sky/block light storage accessors, BFS propagation, and the padded `LightField`. |
+| `src/light.rs` | Four-bit packed sky/block light, BFS propagation, padded `LightField` accessors, and direct-light snapshots. |
 | `src/generation.rs` | Seeded noise fields, height, biomes, caves, water fill, trees, and the spawn column. |
 | `src/streaming.rs` | Player-centred load rings, forward-first ordering, unload hysteresis, readiness, and the movement guard. |
 | `src/config.rs` | `config.toml` parsing for the render distance. |
@@ -64,6 +64,7 @@ RedrawRequested
   -> raycast and update the block outline
   -> advance the day/night cycle
   -> unload columns past the margin, then stream missing columns and mark ready ones
+  -> request light and mesh work only for chunks in the level work set
   -> recalculate each chunk's desired LOD and request missing meshes
   -> drain finished light, mesh, and generation results (two mesh uploads per frame)
   -> upload them and select the active LOD per chunk
@@ -102,8 +103,8 @@ See [Coordinates](coordinates.md) for the full conventions, including chunk and 
 - A voxel at `(x, y, z)` occupies `[x, x + 1] × [y, y + 1] × [z, z + 1]`.
 - The world stores 32³ chunks of `Block` values in one dense `[Block; 32768]` array per chunk (32 KiB); a chunk also counts its non-air blocks. Missing chunks are air, and stored chunks never contain `Air`. Light lives beside the chunk map in a padded `LightField`, not inside `Chunk`.
 - Chunk meshes use chunk-local positions, 40-byte vertices (position, normal, UV, layer, and packed light/AO), and merge coplanar faces whose world-space neighbour is air, including across chunk borders.
-- LOD0 is the full-resolution greedy mesh; LOD1 is the same mesher over a 2x2x2 downsample at half the cell count. LOD1 emits every chunk-boundary face so LOD transitions cannot crack.
-- Chunks at or within four chunk units of the player use LOD0, chunks at eight or more use LOD1, and the range between keeps the current LOD.
+- LOD0 is the full-resolution greedy mesh; LOD1 and LOD2 are the same mesher over 2x2x2 and 4x4x4 downsamples. Both emit every chunk-boundary face so LOD transitions cannot crack.
+- Chunks at or within four chunk units of the player use LOD0, chunks at eight or more use LOD1, chunks at sixteen or more use LOD2, and the ranges between keep the current LOD.
 - Greedy quads UVs are in block units, so the sampler repeats the texture tile across merged faces.
 - Chunk data, collision, editing, and saving stay full-resolution; LOD1 is rendering-only.
 - Meshes are built from immutable chunk snapshots and a one-cell border on worker threads; the main thread only uploads finished results.

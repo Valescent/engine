@@ -64,7 +64,7 @@ render_distance_chunks = 12
 
 | Key | Type | Default | Range |
 |---|---|---:|---:|
-| `world.render_distance_chunks` | integer | `12` | `8..=16` |
+| `world.render_distance_chunks` | integer | `12` | `8..=32` |
 
 - A missing file uses the default.
 - Unknown sections, unknown keys, malformed values, duplicate keys, and out-of-range values are
