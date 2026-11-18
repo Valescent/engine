@@ -63,8 +63,14 @@ an ADR, or the executable source.
       or enter read-only mode?
 
 ### A2 Determinism boundary
-- [ ] A2.1 Is the promise same-binary-only, or cross-platform bit equality?
-- [ ] A2.2 If cross-platform: fixed-point fields, quantised `f32`, or a recorded baseline?
+- [x] A2.1 Is the promise same-binary-only, or cross-platform bit equality?
+      **Same machine, same binary.** Two platforms may differ; no fixed-point requirement.
+- [x] A2.2 If cross-platform: fixed-point fields, quantised `f32`, or a recorded baseline?
+      **Not needed.** Revisit only if world sharing across platforms becomes a feature.
+- [ ] A2.5 **Conflict to resolve.** Round 3 asked for "bit-identical across platforms and
+      compiler versions" in the graph answer, which is stricter than A2.1. Either A2.1
+      relaxes to a per-platform reference hash, or the graph must ban the ops that are not
+      bit-stable. Cannot hold both.
 - [ ] A2.3 Which operations are banned because they are not bit-stable: `sin`, `cos`, `pow`,
       `exp`, `sqrt`, FMA contraction, `f32::mul_add`, auto-vectorised reductions?
 - [ ] A2.4 Is the simulation tick tied to generation? Does generation ever read time?
@@ -94,12 +100,27 @@ an ADR, or the executable source.
 ## B. Field graph and sampling
 
 ### B1 Sources
-- [ ] B1.1 Which noise algorithms are allowed: OpenSimplex2, OpenSimplex2S, Perlin, value,
+- [x] B1.1 Which noise algorithms are allowed: OpenSimplex2, OpenSimplex2S, Perlin, value,
       cellular, voronoi? Which are banned and why?
-- [ ] B1.2 Is noise normalised to `[0, 1]` at the source, or `[-1, 1]` with an explicit
+      **OpenSimplex2 only, per ADR-0012.** Variety comes from composition: fBm, ridged,
+      billow, warp, terrace, curve. Noise lives behind a registry keyed by algorithm ID with
+      exactly one entry. A new algorithm needs a version bump, a bit-stability golden test,
+      and a benchmark entry.
+- [x] B1.2 Is noise normalised to `[0, 1]` at the source, or `[-1, 1]` with an explicit
       mapping?
-- [ ] B1.3 Are octave count, lacunarity, gain, and frequency per field or per world?
+      **`[0,1]` everywhere.** One helper at the source: `unit(raw) = clamp(raw*0.5+0.5, 0, 1)`.
+      Neutral is `0.5`. Nothing downstream renormalises. Warp and ridged run on raw signed
+      values *inside* the noise layer, before `unit()`. 3D density and caves are also `[0,1]`;
+      carve is `density > CAVE_T` with `CAVE_T` a `[0,1]` constant. Tests assert the range.
+- [ ] B1.5 What is the exact `raw` bound per fractal type? `fBm` of OpenSimplex2 is not
+      strictly `[-1,1]`, so where is the divisor applied: sum of amplitudes, per-octave
+      clamp, or a measured scale constant?
+- [ ] B1.6 Are frequency, gain, lacunarity per field or per world, and are they stored as
+      decimal text or `f32` bits in the pinned graph?
+- [x] B1.3 Are octave count, lacunarity, gain, and frequency per field or per world?
+      **Per node.** Each graph node carries its own and is hashed into the world identity.
 - [ ] B1.4 Is fractal type (fBm, ridged, billow, ping-pong) a source property or a transform?
+      Implied: separate nodes, so a transform.
 
 ### B2 Transforms
 - [ ] B2.1 Which domain warps are supported, and how many octaves does a warp cost?
@@ -108,17 +129,39 @@ an ADR, or the executable source.
 - [ ] B2.4 Does a transform operate on a scalar, a 2D field, or a sampled tile?
 
 ### B3 Composition
-- [ ] B3.1 Is the graph declarative data, fixed code, or a compiled closure chain?
+- [x] B3.1 Is the graph declarative data, fixed code, or a compiled closure chain?
+      **Data graph, compiled once per world** into a flat topologically ordered evaluator with
+      preallocated slots. No per-sample interpretation.
+- [x] B3.5 What is the node vocabulary?
+      Closed Rust enum: `noise(OpenSimplex2)`, `fbm`, `ridged`, `billow`, `warp`, `terrace`,
+      `curve`, `remap`, `add`, `mul`, `lerp`, `clamp`, `unit`, `const`, `input(pos)`.
+      Adding a node type is a code change and a version bump with a golden test. Editing
+      graph data is not.
+- [x] B3.6 How is the graph pinned to the world?
+      Canonical serialisation is hashed and stored in the world description. Compile rejects
+      cycles, unknown nodes, missing outputs, and any field that can leave `[0,1]` after
+      `unit()`. Evaluation order and float op order are fixed by the compiler.
+- [x] B3.7 Does every node declare its lattice?
+      **Yes.** Macro nodes evaluate on the 4-block lattice, per-block nodes at block
+      resolution. Debug views can show any node output.
 - [ ] B3.2 How is evaluation order pinned? Is it topological, declaration order, or both?
 - [ ] B3.3 Are intermediate values cached per tile, and what is the eviction rule?
 - [ ] B3.4 What is the maximum graph depth and node count for the first world?
 
 ### B4 Tiling and sampling
-- [ ] B4.1 What is the canonical sample grid: per block, per 4-block macro cell, or per LOD
+- [x] B4.1 What is the canonical sample grid: per block, per 4-block macro cell, or per LOD
       sample?
+      **4-block lattice for macro nodes, bilinear to blocks, then per-block detail.**
+      Distance-dependent re-sampling is not used; one grid keeps LOD and collision consistent.
 - [ ] B4.2 Does a tile include a border, and how wide is it per consumer?
-- [ ] B4.3 Is a sample at integer coordinates taken at the block centre, corner, or corner
+- [x] B4.3 Is a sample at integer coordinates taken at the block centre, corner, or corner
       plus half?
+      **Block centre:** block `(x,z)` samples `(x+0.5, z+0.5)`. 3D density uses the same
+      centre convention so caves align with blocks.
+- [ ] B4.5 Where does the 4-block lattice sit relative to block centres? Candidates:
+      samples at `4k+0.5` (lattice anchored to the first block centre) versus `4k+2.0`
+      (lattice centred on the cell). The choice decides interpolation asymmetry at chunk
+      borders and negative coordinates.
 - [ ] B4.4 Is sampling separable (evaluate x, z, y independently) or fully 3D?
 
 ### B5 Cost and parity
@@ -134,7 +177,10 @@ an ADR, or the executable source.
 
 ### C1 Elevation
 - [ ] C1.1 Which fields drive base elevation, and in what order?
-- [ ] C1.2 What is the elevation range in blocks: min, sea level, max?
+- [x] C1.2 What is the elevation range in blocks: min, sea level, max?
+      **Sea level 128** in a 384-tall world. Height clamp still to pin (see C1.5).
+- [ ] C1.5 What is the maximum terrain height, and is it a hard clamp or a soft spline
+      asymptote near the top?
 - [ ] C1.3 Is elevation the sum of contributions, or a spline lookup per continentalness?
 - [ ] C1.4 Is there a flat "spawn plateau" near origin, or is spawn found, not made?
 
@@ -158,7 +204,8 @@ an ADR, or the executable source.
 - [ ] C3.4 Does interpolation use the four corners or a bicubic patch, and is that stable?
 
 ### C4 Vertical layout
-- [ ] C4.1 Bedrock: flat at y=0, noisy depth, or none?
+- [x] C4.1 Bedrock: flat at y=0, noisy depth, or none?
+      **Flat bedrock at y=0.** No cave, erosion, or water may breach it.
 - [ ] C4.2 How many air blocks above the highest terrain before the build limit?
 - [x] C4.3 Is the world 128 tall for every column, including ocean floors?
       **No: the world is 384 tall.** This supersedes the 128-block constant and forces
@@ -338,7 +385,9 @@ an ADR, or the executable source.
 ### I1 Storage
 - [ ] I1.1 Is a block `u16` with a registry, a palette per section, or a bit-packed ID?
 - [ ] I1.2 Is the array `YZX` or `XYZ`, and what is the index formula?
-- [ ] I1.3 Are sections 32³ with 4 per column, and is a section the unit everywhere?
+- [x] I1.3 Are sections 32³ with 4 per column, and is a section the unit everywhere?
+      **32³ sections, 12 per column.** The chunk type, mesher, save records, and LOD units
+      stay unchanged; only column metadata grows.
 - [ ] I1.4 Is there a uniform-section optimisation (all air, all stone)?
 
 ### I2 Baseline
@@ -392,7 +441,11 @@ an ADR, or the executable source.
 
 ### K1 Shape
 - [ ] K1.1 Horizontal radius in chunks, and is it square, circular, or frustum-biased?
-- [ ] K1.2 Vertical policy for a 128-tall world: all four sections always, or lazy?
+- [x] K1.2 Vertical policy for a 384-tall world: all four sections always, or lazy?
+      **Full column always:** all 12 sections generate, light, mesh, and upload together.
+      A column is the readiness unit. Cost per column is 12× the old one.
+- [ ] K1.5 With full-column residency at radius R, what is the memory and load-time cost,
+      and does the radius shrink to compensate?
 - [ ] K1.3 Is the ring finite (2,000-block world) or unbounded for the first world?
 - [ ] K1.4 What is the load-distance vs unload-distance hysteresis?
 
@@ -602,3 +655,11 @@ an ADR, or the executable source.
 | 1 | A1 | `u64` seed; streams derived by hashing `(seed, name, coord)` | No 128-bit migration; seed file stays compatible |
 | 1 | C3 | `top_solid_y(h) = floor(h)`; height stays `f32`; v0.0.7 `round()` dropped | One quantisation point in the pipeline; surface/water/caves/features share it |
 | 1 | C4 | World is 384 blocks tall | Vertical residency, sky-light columns, and section layout all change |
+| 2 | A2 | Same machine, same binary; no cross-platform promise | `f32` stays; no fixed-point rewrite; golden hashes are per platform |
+| 2 | C1 | Sea level 128 | 128 blocks of sea, ~256 of land and air; height clamp still open |
+| 2 | C4 | Flat bedrock at y=0 | No noisy floor field; one invariant to protect |
+| 2 | I1 | 32³ sections, 12 per column | Chunk type, mesher, saves, and LOD units unchanged |
+| 2 | K1 | Full column residency, all 12 sections | Readiness is per column; 12× memory and load cost per column |
+| 3 | B1 | OpenSimplex2 only; `[0,1]` via one `unit()` helper | One algorithm to keep stable; all curves and thresholds live on `0..1` |
+| 3 | B3 | Data graph, compiled per world, closed node enum | Composition changes are data edits; new node types need a version bump |
+| 3 | B4 | 4-block macro lattice, bilinear; block-centre samples; nodes declare lattice | One grid for shape; interpolation and cave alignment share the same convention |
