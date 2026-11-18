@@ -56,6 +56,15 @@
 - [Glossary](dev/glossary.md)
 - [Release checklist](dev/release-checklist.md)
 
+# Research
+
+- [Engine research](dev/research/README.md)
+  - [Memory](dev/research/memory.md)
+  - [Rendering](dev/research/rendering.md)
+  - [Scheduling and streaming](dev/research/scheduling.md)
+  - [World generation](dev/research/worldgen.md)
+  - [Simulation and tooling](dev/research/simulation-and-tooling.md)
+
 # Decisions
 
 - [Decision records](decisions/index.md)
