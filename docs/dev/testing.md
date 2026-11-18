@@ -58,7 +58,7 @@ The headless suite covers:
 - Mouse-look gating on capture and focus.
 - Block IDs, solidity, face-layer mapping, and hotbar selection.
 - Chunk coordinate conversion including negative worlds, block storage idempotence, and dirty-chunk sets for interior, border, corner, and last-block edits.
-- Missing and empty chunk meshes, cross-chunk face culling, exact greedy quads, block-unit UVs, texture layers, LOD boundary faces, face winding for back-face culling, and deterministic chunk meshing.
+- Missing and empty chunk meshes, cross-chunk face culling, exact greedy quads, block-unit UVs, texture layers, LOD boundary faces, face winding for back-face culling, packed 12-byte vertices, indexed quads, and deterministic chunk meshing.
 - LOD1 and LOD2 downsampling, boundary faces, thresholds and hysteresis across three levels, and greedy reduction against the v0.0.4 mesher.
 - Frustum plane extraction and conservative AABB rejection for inside, outside, and straddling boxes.
 - Light storage and BFS: open columns, overhang falloff, dark caves, lamp falloff, water transmission, and cross-chunk borders.

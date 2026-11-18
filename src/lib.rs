@@ -1579,7 +1579,7 @@ mod tests {
             lod: Lod::Lod2,
             kind: MeshKind::Opaque,
             revision,
-            mesh: Vec::new(),
+            mesh: mesh::MeshData::default(),
             elapsed: Duration::ZERO,
         }));
         assert!(app.column_ready(IVec2::ZERO));
@@ -1703,9 +1703,9 @@ mod tests {
             let lod0 = mesh::build_mesh(&snapshot, &border, None, Lod::Lod0);
             let lod1 = mesh::build_mesh(&snapshot, &border, None, Lod::Lod1);
 
-            assert_ne!(lod0.len(), 0);
-            assert_ne!(lod1.len(), 0);
-            greedy += lod0.len();
+            assert_ne!(lod0.vertices.len(), 0);
+            assert_ne!(lod1.vertices.len(), 0);
+            greedy += lod0.vertices.len();
             naive += voxel::build_chunk_mesh(&world, chunk).len();
         }
 
@@ -1739,7 +1739,9 @@ mod tests {
         let lod0_vertices: usize = snapshots
             .iter()
             .map(|(snapshot, border, light)| {
-                mesh::build_mesh(snapshot, border, light.as_deref(), Lod::Lod0).len()
+                mesh::build_mesh(snapshot, border, light.as_deref(), Lod::Lod0)
+                    .vertices
+                    .len()
             })
             .sum();
         let lod0 = started.elapsed();
@@ -1748,7 +1750,9 @@ mod tests {
         let lod1_vertices: usize = snapshots
             .iter()
             .map(|(snapshot, border, light)| {
-                mesh::build_mesh(snapshot, border, light.as_deref(), Lod::Lod1).len()
+                mesh::build_mesh(snapshot, border, light.as_deref(), Lod::Lod1)
+                    .vertices
+                    .len()
             })
             .sum();
         let lod1 = started.elapsed();

@@ -10,8 +10,9 @@ use std::time::{Duration, Instant};
 
 use crate::generation::{GenJob, GenResult, Generator};
 use crate::light::{LightField, LightJob, LightResult, LightSnapshot};
-use crate::mesh::{BorderBlocks, ChunkSnapshot, Lod, build_mesh, build_water_mesh, select_lod};
-use crate::voxel::Vertex;
+use crate::mesh::{
+    BorderBlocks, ChunkSnapshot, Lod, MeshData, build_mesh, build_water_mesh, select_lod,
+};
 use crate::world::{ChunkCoord, DirtyChunks, World};
 
 thread_local! {
@@ -73,7 +74,7 @@ pub(crate) struct MeshResult {
     pub(crate) lod: Lod,
     pub(crate) kind: MeshKind,
     pub(crate) revision: u64,
-    pub(crate) mesh: Vec<Vertex>,
+    pub(crate) mesh: MeshData,
     pub(crate) elapsed: Duration,
 }
 
@@ -579,7 +580,7 @@ mod tests {
             lod,
             kind,
             revision,
-            mesh: Vec::new(),
+            mesh: MeshData::default(),
             elapsed: Duration::from_millis(1),
         }
     }

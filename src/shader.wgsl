@@ -27,12 +27,33 @@ var block_texture: texture_2d_array<f32>;
 var block_sampler: sampler;
 
 struct VertexIn {
-    @location(0) position: vec3<f32>,
-    @location(1) normal: vec3<f32>,
-    @location(2) uv: vec2<f32>,
-    @location(3) layer: u32,
-    @location(4) light_ao: u32,
+    @location(0) cell_face: vec4<u32>,
+    @location(1) texel: vec4<u32>,
+    @location(2) light_ao: u32,
 };
+
+fn face_normal(face: u32) -> vec3<f32> {
+    switch face {
+        case 0u: {
+            return vec3<f32>(1.0, 0.0, 0.0);
+        }
+        case 1u: {
+            return vec3<f32>(-1.0, 0.0, 0.0);
+        }
+        case 2u: {
+            return vec3<f32>(0.0, 1.0, 0.0);
+        }
+        case 3u: {
+            return vec3<f32>(0.0, -1.0, 0.0);
+        }
+        case 4u: {
+            return vec3<f32>(0.0, 0.0, 1.0);
+        }
+        default: {
+            return vec3<f32>(0.0, 0.0, -1.0);
+        }
+    }
+}
 
 struct VertexOut {
     @builtin(position) clip_position: vec4<f32>,
@@ -48,11 +69,12 @@ struct VertexOut {
 @vertex
 fn vs_main(input: VertexIn) -> VertexOut {
     var output: VertexOut;
-    let world_position = chunk.origin + input.position;
+    let cell = vec3<f32>(f32(input.cell_face.x), f32(input.cell_face.y), f32(input.cell_face.z));
+    let world_position = chunk.origin + cell;
     output.clip_position = camera.view_projection * vec4<f32>(world_position, 1.0);
-    output.normal = input.normal;
-    output.uv = input.uv;
-    output.layer = input.layer;
+    output.normal = face_normal(input.cell_face.w);
+    output.uv = vec2<f32>(f32(input.texel.x), f32(input.texel.y));
+    output.layer = input.texel.z;
     output.light = vec3<f32>(
         f32(input.light_ao & 0xFu) / 15.0,
         f32((input.light_ao >> 4u) & 0xFu) / 15.0,

@@ -165,7 +165,7 @@ pub(crate) fn build_mesh(
     border: &BorderBlocks,
     light: Option<&LightField>,
     lod: Lod,
-) -> Vec<Vertex> {
+) -> MeshData {
     let full_block = |local: IVec3| full_block(snapshot, border, local);
 
     let matches = Block::is_solid;
@@ -221,7 +221,7 @@ pub(crate) fn build_water_mesh(
     snapshot: &ChunkSnapshot,
     border: &BorderBlocks,
     light: Option<&LightField>,
-) -> Vec<Vertex> {
+) -> MeshData {
     let full_block = |local: IVec3| full_block(snapshot, border, local);
     let matches = |block: Block| block == Block::Water;
     let exposed = |cell: IVec3, normal: IVec3| full_block(cell + normal) == Block::Air;
@@ -290,6 +290,19 @@ const FACE_NORMALS: [IVec3; 6] = [
     IVec3::NEG_Z,
 ];
 
+/// A chunk mesh: four vertices per quad plus triangle indices.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct MeshData {
+    pub(crate) vertices: Vec<Vertex>,
+    pub(crate) indices: Vec<u32>,
+}
+
+impl MeshData {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.indices.is_empty()
+    }
+}
+
 /// Builds a width-first greedy mesh of the solid cells returned by `block_at`.
 ///
 /// `anchor` maps a cell to the full-resolution coordinate whose light and AO
@@ -303,9 +316,9 @@ fn greedy(
     exposed: &impl Fn(IVec3, IVec3) -> bool,
     anchor: &impl Fn(IVec3) -> IVec3,
     corners: &impl Fn(IVec3, usize) -> [u32; 4],
-) -> Vec<Vertex> {
+) -> MeshData {
     let cells = usize::try_from(n * n).expect("mask fits");
-    let mut vertices = Vec::new();
+    let mut mesh = MeshData::default();
 
     for (face, normal) in FACE_NORMALS.into_iter().enumerate() {
         for slice in 0..n {
@@ -353,7 +366,7 @@ fn greedy(
                     }
 
                     push_quad(
-                        &mut vertices,
+                        &mut mesh,
                         face,
                         normal,
                         (slice, u, v, width, height),
@@ -366,7 +379,7 @@ fn greedy(
         }
     }
 
-    vertices
+    mesh
 }
 
 /// Greedy merge key for one exposed cell.
@@ -485,7 +498,7 @@ fn face_layer(block: Block, normal: IVec3) -> u32 {
 /// Emits one merged quad with UVs in block units.
 #[allow(clippy::cast_precision_loss)]
 fn push_quad(
-    vertices: &mut Vec<Vertex>,
+    mesh: &mut MeshData,
     face: usize,
     normal: IVec3,
     quad: (i32, i32, i32, i32, i32),
@@ -499,16 +512,19 @@ fn push_quad(
     let vs = height as f32 * scale;
     let uvs = [[0.0, 0.0], [0.0, vs], [us, vs], [us, 0.0]];
     let normal = normal.as_vec3().to_array();
+    let base = u32::try_from(mesh.vertices.len()).expect("vertex count fits in u32");
 
-    for index in [0, 1, 2, 0, 2, 3] {
-        vertices.push(Vertex {
-            position: corners[index].map(|coordinate| coordinate * scale),
+    for index in 0..4 {
+        mesh.vertices.push(Vertex::new(
+            corners[index].map(|coordinate| coordinate * scale),
             normal,
-            uv: uvs[index],
+            uvs[index],
             layer,
-            light_ao: corner_light[index],
-        });
+            corner_light[index],
+        ));
     }
+    mesh.indices
+        .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
 }
 
 /// Quad corners in cell units, in the spec's corner order.
@@ -617,6 +633,7 @@ mod tests {
             None,
             lod,
         )
+        .vertices
     }
 
     fn lit_mesh(world: &World, chunk: ChunkCoord, lod: Lod) -> Vec<Vertex> {
@@ -626,6 +643,7 @@ mod tests {
             world.light_field(chunk).map(std::convert::AsRef::as_ref),
             lod,
         )
+        .vertices
     }
 
     fn water_mesh(world: &World, chunk: ChunkCoord, lit: bool) -> Vec<Vertex> {
@@ -638,6 +656,7 @@ mod tests {
                 None
             },
         )
+        .vertices
     }
 
     fn ao(aos: [u8; 4]) -> [u32; 4] {
@@ -655,15 +674,17 @@ mod tests {
         let vs = height as f32 * scale;
         let uvs = [[0.0, 0.0], [0.0, vs], [us, vs], [us, 0.0]];
         let corners = quad_corners(face, slice, u0, v0, width, height);
-        [0, 1, 2, 0, 2, 3]
-            .map(|index| Vertex {
-                position: corners[index].map(|coordinate| coordinate * scale),
-                normal,
-                uv: uvs[index],
-                layer,
-                light_ao: pack_light_ao(0, 0, 3),
+        (0..4)
+            .map(|index| {
+                Vertex::new(
+                    corners[index].map(|coordinate| coordinate * scale),
+                    normal,
+                    uvs[index],
+                    layer,
+                    pack_light_ao(0, 0, 3),
+                )
             })
-            .to_vec()
+            .collect()
     }
 
     fn expected(quads: &[Quad]) -> Vec<Vertex> {
@@ -686,14 +707,14 @@ mod tests {
                 (5, 5, 3, 4, 1, 1, 1.0, 0),
             ])
         );
-        assert_eq!(vertices.len(), 36);
+        assert_eq!(vertices.len(), 24);
     }
 
     #[test]
     fn two_adjacent_voxels_merge_into_six_quads() {
         let world = world_with(&[(IVec3::ZERO, Block::Stone), (IVec3::X, Block::Stone)]);
 
-        assert_eq!(mesh(&world, chunk_at(IVec3::ZERO), Lod::Lod0).len(), 36);
+        assert_eq!(mesh(&world, chunk_at(IVec3::ZERO), Lod::Lod0).len(), 24);
     }
 
     #[test]
@@ -704,7 +725,7 @@ mod tests {
             (IVec3::new(2, 0, 0), Block::Stone),
         ]);
 
-        assert_eq!(mesh(&world, chunk_at(IVec3::ZERO), Lod::Lod0).len(), 36);
+        assert_eq!(mesh(&world, chunk_at(IVec3::ZERO), Lod::Lod0).len(), 24);
     }
 
     #[test]
@@ -720,8 +741,8 @@ mod tests {
             }
         }
 
-        assert_eq!(mesh(&slab, chunk_at(IVec3::ZERO), Lod::Lod0).len(), 36);
-        assert_eq!(mesh(&cube, chunk_at(IVec3::ZERO), Lod::Lod0).len(), 36);
+        assert_eq!(mesh(&slab, chunk_at(IVec3::ZERO), Lod::Lod0).len(), 24);
+        assert_eq!(mesh(&cube, chunk_at(IVec3::ZERO), Lod::Lod0).len(), 24);
     }
 
     #[test]
@@ -737,22 +758,12 @@ mod tests {
 
         let top: Vec<_> = vertices
             .iter()
-            .filter(|vertex| vertex.normal == [0.0, 1.0, 0.0])
+            .filter(|vertex| vertex.normal() == [0.0, 1.0, 0.0])
             .collect();
-        assert_eq!(top.len(), 6);
-        let uvs: Vec<_> = top.iter().map(|vertex| vertex.uv).collect();
-        assert_eq!(
-            uvs,
-            vec![
-                [0.0, 0.0],
-                [0.0, 3.0],
-                [2.0, 3.0],
-                [0.0, 0.0],
-                [2.0, 3.0],
-                [2.0, 0.0]
-            ]
-        );
-        assert!(top.iter().all(|vertex| vertex.layer == 2));
+        assert_eq!(top.len(), 4);
+        let uvs: Vec<_> = top.iter().map(|vertex| vertex.uv()).collect();
+        assert_eq!(uvs, vec![[0.0, 0.0], [0.0, 3.0], [2.0, 3.0], [2.0, 0.0]]);
+        assert!(top.iter().all(|vertex| vertex.layer() == 2));
     }
 
     #[test]
@@ -764,11 +775,11 @@ mod tests {
 
         assert_eq!(
             mesh(&world, chunk_at(IVec3::new(31, 0, 0)), Lod::Lod0).len(),
-            30
+            20
         );
         assert_eq!(
             mesh(&world, chunk_at(IVec3::new(32, 0, 0)), Lod::Lod0).len(),
-            30
+            20
         );
     }
 
@@ -854,7 +865,7 @@ mod tests {
                 (5, 1, 1, 1, 1, 1, 2.0, 0),
             ])
         );
-        let uv = vertices[1].uv;
+        let uv = vertices[1].uv();
         assert_eq!(uv, [0.0, 2.0]);
     }
 
@@ -870,13 +881,13 @@ mod tests {
         let lod0 = mesh(&world, chunk, Lod::Lod0);
         let lod1 = mesh(&world, chunk, Lod::Lod1);
 
-        assert_eq!(lod0.len(), 30);
+        assert_eq!(lod0.len(), 20);
         assert_ne!(lod1.len(), 0);
         assert_eq!(
             lod1.iter()
-                .filter(|vertex| vertex.normal == [-1.0, 0.0, 0.0])
+                .filter(|vertex| vertex.normal() == [-1.0, 0.0, 0.0])
                 .count(),
-            6
+            4
         );
     }
 
@@ -984,12 +995,12 @@ mod tests {
         let top_vertices = |world: &World| {
             mesh(world, chunk_at(IVec3::ZERO), Lod::Lod0)
                 .iter()
-                .filter(|vertex| vertex.normal == [0.0, 1.0, 0.0] && vertex.position[1] == 1.0)
+                .filter(|vertex| vertex.normal() == [0.0, 1.0, 0.0] && vertex.position()[1] == 1.0)
                 .count()
         };
 
-        assert_eq!(top_vertices(&flat), 6);
-        assert_eq!(top_vertices(&occluded), 18);
+        assert_eq!(top_vertices(&flat), 4);
+        assert_eq!(top_vertices(&occluded), 12);
     }
 
     #[test]
@@ -1006,7 +1017,7 @@ mod tests {
         let vertices = lit_mesh(&world, chunk_at(IVec3::ZERO), Lod::Lod0);
         let top = vertices
             .iter()
-            .find(|vertex| vertex.normal == [0.0, 1.0, 0.0])
+            .find(|vertex| vertex.normal() == [0.0, 1.0, 0.0])
             .expect("top face");
 
         assert_eq!(top.light_ao & 0xF, 15);
@@ -1025,7 +1036,7 @@ mod tests {
         let vertices = lit_mesh(&world, chunk_at(IVec3::ZERO), Lod::Lod0);
         let side = vertices
             .iter()
-            .find(|vertex| vertex.normal == [1.0, 0.0, 0.0])
+            .find(|vertex| vertex.normal() == [1.0, 0.0, 0.0])
             .expect("+X face");
 
         assert_eq!((side.light_ao >> 4) & 0xF, 13);
@@ -1045,7 +1056,7 @@ mod tests {
         let vertices = lit_mesh(&world, chunk_at(IVec3::ZERO), Lod::Lod1);
         let top = vertices
             .iter()
-            .find(|vertex| vertex.normal == [0.0, 1.0, 0.0] && vertex.position[1] == 2.0)
+            .find(|vertex| vertex.normal() == [0.0, 1.0, 0.0] && vertex.position()[1] == 2.0)
             .expect("LOD1 top face");
 
         assert_eq!(top.light_ao & 0xF, 15);
@@ -1061,8 +1072,8 @@ mod tests {
         ]);
         let vertices = water_mesh(&world, chunk_at(IVec3::ZERO), false);
 
-        assert_eq!(vertices.len(), 6 * 6);
-        assert!(vertices.iter().all(|vertex| vertex.layer == 9));
+        assert_eq!(vertices.len(), 24);
+        assert!(vertices.iter().all(|vertex| vertex.layer() == 9));
     }
 
     #[test]
@@ -1085,7 +1096,7 @@ mod tests {
 
         assert_ne!(vertices.len(), 0);
         for vertex in &vertices {
-            assert_eq!(vertex.layer, 9);
+            assert_eq!(vertex.layer(), 9);
             assert_eq!(vertex.light_ao & 0xF, 15, "sky");
             assert_eq!((vertex.light_ao >> 4) & 0xF, 14, "block light");
         }
@@ -1118,7 +1129,7 @@ mod tests {
                 (5, 1, 1, 1, 1, 1, 4.0, 0),
             ])
         );
-        assert_eq!(vertices[1].uv, [0.0, 4.0]);
+        assert_eq!(vertices[1].uv(), [0.0, 4.0]);
     }
 
     #[test]
@@ -1166,7 +1177,7 @@ mod tests {
         let lod2 = mesh(&world, chunk, Lod::Lod2);
 
         assert_ne!(lod2.len(), 0);
-        assert!(lod2.iter().any(|vertex| vertex.normal == [1.0, 0.0, 0.0]));
+        assert!(lod2.iter().any(|vertex| vertex.normal() == [1.0, 0.0, 0.0]));
     }
 
     #[test]

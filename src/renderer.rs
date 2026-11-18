@@ -17,7 +17,7 @@ use winit::window::Window;
 use crate::block::{TEXTURE_LAYERS, TEXTURE_SIZE};
 use crate::camera::Camera;
 use crate::frustum::Frustum;
-use crate::mesh::Lod;
+use crate::mesh::{Lod, MeshData};
 use crate::overlay::{OverlayVertex, build_overlay_mesh};
 use crate::sky::SkySample;
 use crate::voxel::{HighlightVertex, Vertex};
@@ -75,7 +75,9 @@ pub enum RendererError {
 
 struct GpuMesh {
     vertex_buffer: wgpu::Buffer,
-    vertex_count: u32,
+    index_buffer: wgpu::Buffer,
+    index_format: wgpu::IndexFormat,
+    index_count: u32,
 }
 
 struct GpuChunk {
@@ -370,7 +372,7 @@ impl Renderer {
         chunk: ChunkCoord,
         lod: Lod,
         revision: u64,
-        mesh: &[Vertex],
+        mesh: &MeshData,
     ) {
         if mesh.is_empty() {
             if let Some(gpu_chunk) = self.chunks.get_mut(&chunk) {
@@ -385,13 +387,16 @@ impl Renderer {
             return;
         }
 
-        let (vertex_buffer, vertex_count) = create_vertex_buffer(&self.device, mesh);
+        let (vertex_buffer, _) = create_vertex_buffer(&self.device, &mesh.vertices);
+        let (index_buffer, index_format, index_count) = create_index_buffer(&self.device, mesh);
         let gpu_chunk = self.chunk_entry(chunk);
         *gpu_chunk.slot(lod) = Some((
             revision,
             GpuMesh {
                 vertex_buffer,
-                vertex_count,
+                index_buffer,
+                index_format,
+                index_count,
             },
         ));
         if gpu_chunk.active.is_none() {
@@ -431,7 +436,7 @@ impl Renderer {
     }
 
     /// Uploads or clears a chunk's transparent water mesh.
-    pub(crate) fn upload_water_chunk(&mut self, chunk: ChunkCoord, revision: u64, mesh: &[Vertex]) {
+    pub(crate) fn upload_water_chunk(&mut self, chunk: ChunkCoord, revision: u64, mesh: &MeshData) {
         if mesh.is_empty() {
             if let Some(gpu_chunk) = self.chunks.get_mut(&chunk) {
                 gpu_chunk.water = None;
@@ -442,13 +447,16 @@ impl Renderer {
             return;
         }
 
-        let (vertex_buffer, vertex_count) = create_vertex_buffer(&self.device, mesh);
+        let (vertex_buffer, _) = create_vertex_buffer(&self.device, &mesh.vertices);
+        let (index_buffer, index_format, index_count) = create_index_buffer(&self.device, mesh);
         let gpu_chunk = self.chunk_entry(chunk);
         gpu_chunk.water = Some((
             revision,
             GpuMesh {
                 vertex_buffer,
-                vertex_count,
+                index_buffer,
+                index_format,
+                index_count,
             },
         ));
     }
@@ -461,7 +469,7 @@ impl Renderer {
         self.chunks
             .values()
             .filter_map(GpuChunk::active_mesh)
-            .map(|mesh| u64::from(mesh.vertex_count))
+            .map(|mesh| u64::from(mesh.index_count))
             .sum()
     }
 
@@ -657,10 +665,11 @@ impl Renderer {
                 }
                 pass.set_bind_group(1, &gpu_chunk.bind_group, &[]);
                 pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-                pass.draw(0..mesh.vertex_count, 0..1);
+                pass.set_index_buffer(mesh.index_buffer.slice(..), mesh.index_format);
+                pass.draw_indexed(0..mesh.index_count, 0, 0..1);
                 stats.visible_chunks += 1;
                 stats.draw_calls += 1;
-                stats.visible_vertices += u64::from(mesh.vertex_count);
+                stats.visible_vertices += u64::from(mesh.index_count);
             }
         }
 
@@ -681,9 +690,10 @@ impl Renderer {
             }
             pass.set_bind_group(1, &gpu_chunk.bind_group, &[]);
             pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-            pass.draw(0..mesh.vertex_count, 0..1);
+            pass.set_index_buffer(mesh.index_buffer.slice(..), mesh.index_format);
+            pass.draw_indexed(0..mesh.index_count, 0, 0..1);
             stats.draw_calls += 1;
-            stats.visible_vertices += u64::from(mesh.vertex_count);
+            stats.visible_vertices += u64::from(mesh.index_count);
         }
 
         if self.highlight_count > 0 {
@@ -992,29 +1002,19 @@ fn create_pipeline(
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &[
             wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x3,
+                format: wgpu::VertexFormat::Uint8x4,
                 offset: 0,
                 shader_location: 0,
             },
             wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x3,
-                offset: 12,
+                format: wgpu::VertexFormat::Uint8x4,
+                offset: 4,
                 shader_location: 1,
             },
             wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x2,
-                offset: 24,
+                format: wgpu::VertexFormat::Uint32,
+                offset: 8,
                 shader_location: 2,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Uint32,
-                offset: 32,
-                shader_location: 3,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Uint32,
-                offset: 36,
-                shader_location: 4,
             },
         ],
     };
@@ -1138,6 +1138,32 @@ fn create_depth_texture(
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     (texture, view)
+}
+
+fn create_index_buffer(
+    device: &wgpu::Device,
+    mesh: &MeshData,
+) -> (wgpu::Buffer, wgpu::IndexFormat, u32) {
+    let count = u32::try_from(mesh.indices.len()).expect("index count fits in u32");
+    if u16::try_from(mesh.vertices.len()).is_ok() {
+        let indices: Vec<u16> = mesh
+            .indices
+            .iter()
+            .map(|index| u16::try_from(*index).expect("index fits in u16"))
+            .collect();
+        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("chunk indices"),
+            contents: bytemuck::cast_slice(&indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        return (buffer, wgpu::IndexFormat::Uint16, count);
+    }
+    let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("chunk indices"),
+        contents: bytemuck::cast_slice(&mesh.indices),
+        usage: wgpu::BufferUsages::INDEX,
+    });
+    (buffer, wgpu::IndexFormat::Uint32, count)
 }
 
 fn create_vertex_buffer(device: &wgpu::Device, mesh: &[Vertex]) -> (wgpu::Buffer, u32) {

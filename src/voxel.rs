@@ -7,16 +7,85 @@
 use bytemuck::{Pod, Zeroable};
 use glam::{IVec3, Vec3};
 
-/// One mesh vertex: chunk-local position, normal, texture UV, array layer, and
+/// One mesh vertex: packed chunk-local cell, face, texture UV, array layer, and
 /// packed light/AO.
+///
+/// Packing keeps the vertex at 12 bytes: three cell bytes plus the face index,
+/// then two UV bytes, the texture layer, and a reserved byte, then the light/AO
+/// word. `position`, `normal`, `uv`, and `layer` unpack for tests and tooling.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Pod, Zeroable)]
 pub(crate) struct Vertex {
-    pub(crate) position: [f32; 3],
-    pub(crate) normal: [f32; 3],
-    pub(crate) uv: [f32; 2],
-    pub(crate) layer: u32,
+    pub(crate) cell: [u8; 3],
+    pub(crate) face: u8,
+    pub(crate) texel: [u8; 2],
+    pub(crate) texture_layer: u8,
+    pub(crate) reserved: u8,
     pub(crate) light_ao: u32,
+}
+
+/// Face normals in the mesher's face order: +X, -X, +Y, -Y, +Z, -Z.
+const FACE_DIRECTIONS: [[f32; 3]; 6] = [
+    [1.0, 0.0, 0.0],
+    [-1.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0],
+    [0.0, -1.0, 0.0],
+    [0.0, 0.0, 1.0],
+    [0.0, 0.0, -1.0],
+];
+
+impl Vertex {
+    /// Packs one face vertex. Positions and UVs must be whole blocks in `0..=255`.
+    pub(crate) fn new(
+        position: [f32; 3],
+        normal: [f32; 3],
+        uv: [f32; 2],
+        layer: u32,
+        light_ao: u32,
+    ) -> Self {
+        Self {
+            cell: position.map(pack_byte),
+            face: face_index(normal),
+            texel: uv.map(pack_byte),
+            texture_layer: u8::try_from(layer).unwrap_or(u8::MAX),
+            reserved: 0,
+            light_ao,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn position(&self) -> [f32; 3] {
+        self.cell.map(f32::from)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn normal(&self) -> [f32; 3] {
+        FACE_DIRECTIONS[usize::from(self.face)]
+    }
+
+    #[cfg(test)]
+    pub(crate) fn uv(&self) -> [f32; 2] {
+        self.texel.map(f32::from)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn layer(&self) -> u32 {
+        u32::from(self.texture_layer)
+    }
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn pack_byte(value: f32) -> u8 {
+    value.round().clamp(0.0, 255.0) as u8
+}
+
+#[allow(clippy::float_cmp)]
+fn face_index(normal: [f32; 3]) -> u8 {
+    FACE_DIRECTIONS
+        .iter()
+        .position(|face| face[0] == normal[0] && face[1] == normal[1] && face[2] == normal[2])
+        .and_then(|index| u8::try_from(index).ok())
+        .unwrap_or(0)
 }
 
 /// One wireframe vertex in world space.
@@ -142,13 +211,13 @@ fn push_voxel(
         };
         let points = corners.map(|corner| origin + Vec3::from_array(corner));
         for index in [0, 1, 2, 0, 2, 3] {
-            vertices.push(Vertex {
-                position: points[index].to_array(),
-                normal: normal.as_vec3().to_array(),
-                uv: UVS[index],
+            vertices.push(Vertex::new(
+                points[index].to_array(),
+                normal.as_vec3().to_array(),
+                UVS[index],
                 layer,
-                light_ao: 0,
-            });
+                0,
+            ));
         }
     }
 }
@@ -251,14 +320,14 @@ mod tests {
         assert_eq!(vertices.len(), 36);
         assert!(vertices.iter().all(|vertex| {
             vertex
-                .position
+                .position()
                 .iter()
                 .all(|coordinate| (0.0..=1.0).contains(coordinate))
         }));
         assert!(
             vertices
                 .iter()
-                .all(|vertex| vertex.normal.iter().any(|component| *component != 0.0))
+                .all(|vertex| vertex.normal().iter().any(|component| *component != 0.0))
         );
     }
 
@@ -318,10 +387,10 @@ mod tests {
             .zip(expected_positions)
             .zip(expected_uvs)
         {
-            assert_eq!(vertex.position, position);
-            assert_eq!(vertex.normal, [1.0, 0.0, 0.0]);
-            assert_eq!(vertex.uv, uv);
-            assert_eq!(vertex.layer, 0);
+            assert_eq!(vertex.position(), position);
+            assert_eq!(vertex.normal(), [1.0, 0.0, 0.0]);
+            assert_eq!(vertex.uv(), uv);
+            assert_eq!(vertex.layer(), 0);
         }
     }
 
@@ -331,21 +400,21 @@ mod tests {
         let vertices = mesh(&world, chunk_at(IVec3::ZERO));
 
         for vertex in &vertices {
-            let expected = if vertex.normal[1] > 0.5 {
+            let expected = if vertex.normal()[1] > 0.5 {
                 2
-            } else if vertex.normal[1] < -0.5 {
+            } else if vertex.normal()[1] < -0.5 {
                 4
             } else {
                 3
             };
-            assert_eq!(vertex.layer, expected, "{:?}", vertex.normal);
+            assert_eq!(vertex.layer(), expected, "{:?}", vertex.normal());
         }
 
         let wood = world_with(&[(IVec3::ZERO, Block::Wood)]);
         let vertices = mesh(&wood, chunk_at(IVec3::ZERO));
         assert!(vertices.iter().all(|vertex| {
-            let expected = if vertex.normal[1].abs() > 0.5 { 5 } else { 6 };
-            vertex.layer == expected
+            let expected = if vertex.normal()[1].abs() > 0.5 { 5 } else { 6 };
+            vertex.layer() == expected
         }));
     }
 
@@ -355,9 +424,9 @@ mod tests {
         let vertices = mesh(&world, chunk_at(IVec3::new(63, 0, 63)));
 
         assert!(vertices.iter().all(|vertex| {
-            (31.0..=32.0).contains(&vertex.position[0])
-                && (0.0..=1.0).contains(&vertex.position[1])
-                && (31.0..=32.0).contains(&vertex.position[2])
+            (31.0..=32.0).contains(&vertex.position()[0])
+                && (0.0..=1.0).contains(&vertex.position()[1])
+                && (31.0..=32.0).contains(&vertex.position()[2])
         }));
     }
 
@@ -392,7 +461,7 @@ mod tests {
 
     #[test]
     fn vertex_layout_is_packed() {
-        assert_eq!(size_of::<Vertex>(), 40);
+        assert_eq!(size_of::<Vertex>(), 12);
         assert_eq!(size_of::<HighlightVertex>(), 12);
     }
 

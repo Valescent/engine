@@ -293,10 +293,13 @@ frame time in the log is the comparable number.
 | v0.0.7, distance 12 | 1434 | 338 MB | 16.7 ms (vsync) | 60 |
 | v0.0.8, distance 12 | 1434 | 295 MB | 0.8 ms | 1247 |
 | v0.0.8, distance 24, still streaming | 3031 | 467 MB | 2.9-3.2 ms | 316-345 |
+| v0.0.8 after packing, distance 24, settled | 5289 | 626 MB | 2.2-2.6 ms | 380-450 |
 
 The distance-24 run is sampled while the ring is still filling: generation commits 125-150
 columns per second and the level work set keeps the steady-state scan off the frame. At distance
-12 the resident light cost falls from about 79 KiB to 39 KiB per chunk.
+12 the resident light cost falls from about 79 KiB to 39 KiB per chunk. Packed 12-byte vertices
+with 16-bit indices cut the vertex buffers by about 75%; the settled working set is dominated by
+blocks, light, and allocator overhead, so it moves less than the mesh data.
 
 ### Headless run (v0.0.8)
 
