@@ -7,31 +7,31 @@ tree — by <code>scripts/progress.sh</code>. Regenerate it with
 
 <div class="pg-hero">
   <div class="pg-panel">
-    <span class="pg-kicker">Level 7 · Cartographer</span>
-    <div class="pg-xp"><span class="pg-xp-num">3,207</span><span class="pg-xp-unit">XP</span></div>
-    <div class="pg-bar pg-bar-lg"><span style="width: 41%"></span></div>
-    <span class="pg-mono">293 XP to level 8</span>
+    <span class="pg-kicker">Level 8 · Cartographer</span>
+    <div class="pg-xp"><span class="pg-xp-num">3,684</span><span class="pg-xp-unit">XP</span></div>
+    <div class="pg-bar pg-bar-lg"><span style="width: 37%"></span></div>
+    <span class="pg-mono">316 XP to level 9</span>
   </div>
   <div class="pg-tiles">
     <div class="pg-tile">
       <span class="pg-mono">Commits</span>
-      <span class="pg-num">52</span>
+      <span class="pg-num">62</span>
     </div>
     <div class="pg-tile">
       <span class="pg-mono">Tests</span>
-      <span class="pg-num">161</span>
+      <span class="pg-num">212</span>
     </div>
     <div class="pg-tile">
       <span class="pg-mono">Boxes ticked</span>
-      <span class="pg-num">45/49</span>
+      <span class="pg-num">48/50</span>
     </div>
     <div class="pg-tile">
       <span class="pg-mono">Releases</span>
-      <span class="pg-num">6</span>
+      <span class="pg-num">7</span>
     </div>
     <div class="pg-tile">
       <span class="pg-mono">Lines in src</span>
-      <span class="pg-num">7,951</span>
+      <span class="pg-num">10,012</span>
     </div>
     <div class="pg-tile">
       <span class="pg-mono">Decisions</span>
@@ -78,12 +78,12 @@ in-progress version is the only score that can move right now.
   </div>
   <div class="pg-row">
     <span class="pg-row-name">v0.0.7: Advanced Horizons</span>
-    <span class="pg-row-meta">0/4 · Planned</span>
-    <div class="pg-bar "><span style="width: 0%"></span></div>
+    <span class="pg-row-meta">3/5 · In progress</span>
+    <div class="pg-bar "><span style="width: 60%"></span></div>
   </div>
 </div>
 
-**Overall: 45 of 49 boxes, 92%.**
+**Overall: 48 of 50 boxes, 96%.**
 
 ## Momentum
 
@@ -105,7 +105,7 @@ it is regenerated.
   </div>
   <div class="pg-tile">
     <span class="pg-mono">Last 7 days</span>
-    <span class="pg-num">52 commits</span>
+    <span class="pg-num">62 commits</span>
   </div>
 </div>
 
@@ -125,9 +125,9 @@ it is regenerated.
   <span class="pg-day is-on"></span>
   <span class="pg-day is-on"></span>
 </div>
-<span class="pg-mono">14 days ending 2026-11-17 · busiest day 2026-11-14 with 15 commits</span>
+<span class="pg-mono">14 days ending 2026-11-17 · busiest day 2026-11-17 with 25 commits</span>
 
-Since 2026-11-13: 52 commits across 4 active days, 55 documented changelog entries, 59 docs pages.
+Since 2026-11-13: 62 commits across 4 active days, 90 documented changelog entries, 59 docs pages.
 
 ## Achievements
 
@@ -165,7 +165,7 @@ Since 2026-11-13: 52 commits across 4 active days, 55 documented changelog entri
   <div class="pg-badge is-locked">
     <span class="pg-badge-mark">07</span>
     <strong>Century Club</strong>
-    <span class="pg-mono">52 of 100 commits.</span>
+    <span class="pg-mono">62 of 100 commits.</span>
   </div>
   <div class="pg-badge is-unlocked">
     <span class="pg-badge-mark">08</span>
@@ -190,7 +190,7 @@ Since 2026-11-13: 52 commits across 4 active days, 55 documented changelog entri
   <div class="pg-badge is-unlocked">
     <span class="pg-badge-mark">12</span>
     <strong>Five Releases</strong>
-    <span class="pg-mono">6 tags pushed.</span>
+    <span class="pg-mono">7 tags pushed.</span>
   </div>
 </div>
 
@@ -199,10 +199,8 @@ Since 2026-11-13: 52 commits across 4 active days, 55 documented changelog entri
 The open boxes in **v0.0.7: Advanced Horizons** — the only score that can move right now:
 
 <ul class="pg-next">
-  <li>Noise functions (Perlin / Simplex / OpenSimplex)</li>
-  <li>Terrain, caves, biomes, structures</li>
-  <li>Sparse Voxel DAGs for compression</li>
-  <li>GPU compute raymarching without traditional meshes</li>
+  <li>Sparse Voxel DAGs for compression (evaluated; deferred, not in v0.0.7 acceptance)</li>
+  <li>GPU compute raymarching without traditional meshes (evaluated; deferred, not in v0.0.7 acceptance)</li>
 </ul>
 
 See the [roadmap](roadmap.md) for the full milestone text.
