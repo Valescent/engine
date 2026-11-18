@@ -22,7 +22,7 @@ mod streaming;
 mod voxel;
 mod world;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -52,7 +52,7 @@ use renderer::{FrameStats, Renderer};
 use sky::Sky;
 use streaming::Streaming;
 use voxel::build_highlight_mesh;
-use world::{CHUNK_SIZE, DirtyChunks, WORLD_DIRECTORY, World};
+use world::{CHUNK_SIZE, Chunk, DirtyChunks, WORLD_DIRECTORY, World};
 pub use world::{ChunkCoord, SaveError};
 
 const WINDOW_TITLE: &str = concat!("Valescent Engine ", env!("CARGO_PKG_VERSION"));
@@ -194,16 +194,16 @@ fn insert_generated_chunk(
     world: &mut World,
     directory: &Path,
     chunk: ChunkCoord,
-    generated: HashMap<IVec3, Block>,
+    generated: Chunk,
 ) -> Result<(), SaveError> {
     match World::load_saved_chunk(directory, chunk)? {
-        Some(saved) if saved.blocks.is_empty() => {
+        Some(saved) if saved.is_empty() => {
             debug!(?chunk, "applied an empty saved chunk");
             world.mark_modified(chunk);
         }
         Some(saved) => {
-            debug!(?chunk, blocks = saved.blocks.len(), "applied a saved chunk");
-            world.insert_chunk(chunk, saved.blocks);
+            debug!(?chunk, blocks = saved.len(), "applied a saved chunk");
+            world.insert_chunk(chunk, saved);
             world.mark_modified(chunk);
         }
         None => world.insert_chunk(chunk, generated),
@@ -329,7 +329,7 @@ fn spawn_position(world: &World) -> Vec3 {
     let mut highest = None;
     for (chunk, data) in world.iter_chunks() {
         let origin = chunk.world_origin();
-        for &local in data.blocks.keys() {
+        for (local, _) in data.iter() {
             if origin.x + local.x == SPAWN_X && origin.z + local.z == SPAWN_Z {
                 let y = origin.y + local.y;
                 highest = Some(highest.map_or(y, |highest: i32| highest.max(y)));
@@ -1193,12 +1193,12 @@ mod tests {
         assert!(
             world
                 .iter_chunks()
-                .any(|(_, chunk)| { chunk.blocks.values().any(|block| *block == Block::Stone) })
+                .any(|(_, chunk)| chunk.iter().any(|(_, block)| block == Block::Stone))
         );
         assert!(
             world
                 .iter_chunks()
-                .any(|(_, chunk)| { chunk.blocks.values().any(|block| *block == Block::Wood) })
+                .any(|(_, chunk)| chunk.iter().any(|(_, block)| block == Block::Wood))
         );
         assert_eq!(world.block(IVec3::new(SPAWN_X, 0, SPAWN_Z)), Block::Dirt);
         assert_eq!(world.block(IVec3::new(SPAWN_X, 1, SPAWN_Z)), Block::Grass);
@@ -1378,7 +1378,7 @@ mod tests {
 
         assert!(world.chunk(chunk).is_none());
         let saved = World::load_saved_chunk(&directory, chunk).unwrap().unwrap();
-        assert_eq!(saved.blocks.get(&coordinate), Some(&Block::Stone));
+        assert_eq!(saved.block(coordinate), Block::Stone);
         assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
         fs::remove_dir_all(directory).unwrap();
     }
@@ -1410,7 +1410,8 @@ mod tests {
         let mut saved = World::default();
         saved.set_block(coordinate, Block::Stone);
         saved.save_chunks(&directory).unwrap();
-        let generated: HashMap<IVec3, Block> = [(coordinate, Block::Grass)].into();
+        let mut generated = Chunk::default();
+        generated.set_block(coordinate, Block::Grass);
 
         let mut world = World::default();
         insert_generated_chunk(&mut world, &directory, chunk, generated).unwrap();
@@ -1430,7 +1431,8 @@ mod tests {
         saved.save_chunks(&directory).unwrap();
         saved.set_block(coordinate, Block::Air);
         saved.save_chunks(&directory).unwrap();
-        let generated: HashMap<IVec3, Block> = [(coordinate, Block::Grass)].into();
+        let mut generated = Chunk::default();
+        generated.set_block(coordinate, Block::Grass);
 
         let mut world = World::default();
         insert_generated_chunk(&mut world, &directory, chunk, generated).unwrap();
@@ -1503,7 +1505,7 @@ mod tests {
 
         assert!(app.world.chunk(chunk).is_none());
         let saved = World::load_saved_chunk(&directory, chunk).unwrap().unwrap();
-        assert_eq!(saved.blocks.get(&coordinate), Some(&Block::Stone));
+        assert_eq!(saved.block(coordinate), Block::Stone);
         assert!(!app.streaming.as_ref().unwrap().is_ready(IVec2::ZERO));
         fs::remove_dir_all(directory).unwrap();
     }

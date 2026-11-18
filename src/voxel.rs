@@ -104,13 +104,13 @@ pub(crate) fn build_chunk_mesh(
         return Vec::new();
     };
 
-    let mut voxels: Vec<IVec3> = chunk_data.blocks.keys().copied().collect();
+    let mut voxels: Vec<IVec3> = chunk_data.iter().map(|(local, _)| local).collect();
     voxels.sort_unstable_by_key(|voxel| (voxel.x, voxel.y, voxel.z));
 
     let chunk_origin = chunk.world_origin();
     let mut vertices = Vec::with_capacity(voxels.len() * 36);
     for local in voxels {
-        let block = chunk_data.blocks[&local];
+        let block = chunk_data.block(local);
         push_voxel(world, chunk_origin, local, block, &mut vertices);
     }
     vertices

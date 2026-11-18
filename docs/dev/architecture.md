@@ -35,7 +35,7 @@ The engine is a small `winit` and `wgpu` application. This page describes the cu
 - `Renderer` owns the `wgpu` instance, surface, device, queue, surface configuration, chunk and highlight pipelines, camera uniform, per-chunk LOD buffers and origin uniforms, the block texture array, and depth attachment.
 - `Camera` owns only look state; it does not read the clock or input devices.
 - `Player` owns feet position, velocity, and ground state; it does not read input devices.
-- `World` owns the chunk map and the cached light fields; every stored chunk is non-empty. Generated chunks are inserted through `World::insert_chunk`.
+- `World` owns the dense chunk map and the cached light fields; every stored chunk is non-empty. Generated chunks are inserted through `World::insert_chunk`, and chunk snapshots for meshing are a direct copy of the block array.
 - `mesh::build_mesh` is a pure function over a chunk snapshot and its border blocks.
 - `mesher::WorkerPool` owns the worker threads for mesh and light jobs; `MeshQueue` owns revisions, pending jobs, built state, and desired LODs.
 
@@ -100,7 +100,7 @@ See [Coordinates](coordinates.md) for the full conventions, including chunk and 
 
 - Right-handed, Y-up.
 - A voxel at `(x, y, z)` occupies `[x, x + 1] × [y, y + 1] × [z, z + 1]`.
-- The world stores 32³ chunks of `Block` values. Missing chunks are air, and stored chunks never contain `Air`.
+- The world stores 32³ chunks of `Block` values in one dense `[Block; 32768]` array per chunk (32 KiB); a chunk also counts its non-air blocks. Missing chunks are air, and stored chunks never contain `Air`. Light lives beside the chunk map in a padded `LightField`, not inside `Chunk`.
 - Chunk meshes use chunk-local positions, 40-byte vertices (position, normal, UV, layer, and packed light/AO), and merge coplanar faces whose world-space neighbour is air, including across chunk borders.
 - LOD0 is the full-resolution greedy mesh; LOD1 is the same mesher over a 2x2x2 downsample at half the cell count. LOD1 emits every chunk-boundary face so LOD transitions cannot crack.
 - Chunks at or within four chunk units of the player use LOD0, chunks at eight or more use LOD1, and the range between keeps the current LOD.

@@ -82,14 +82,10 @@ impl ChunkSnapshot {
     /// Copies a chunk out of the world. A missing chunk becomes all air.
     pub(crate) fn new(world: &World, chunk: ChunkCoord) -> Self {
         let cells = usize::try_from(CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE).expect("grid fits");
-        let mut blocks = vec![Block::Air; cells].into_boxed_slice();
-        if let Some(data) = world.chunk(chunk) {
-            for (&local, &block) in &data.blocks {
-                if in_chunk(local) {
-                    blocks[index(local)] = block;
-                }
-            }
-        }
+        let blocks = world.chunk(chunk).map_or_else(
+            || vec![Block::Air; cells].into_boxed_slice(),
+            |data| data.blocks().to_vec().into_boxed_slice(),
+        );
         Self { blocks }
     }
 
@@ -118,9 +114,13 @@ impl BorderBlocks {
             let Some(data) = world.chunk(chunk.offset(normal)) else {
                 continue;
             };
-            for (&local, &block) in &data.blocks {
-                if block.is_solid() && on_shared_face(local, normal) {
-                    blocks.insert(local + normal * CHUNK_SIZE, block);
+            for u in 0..CHUNK_SIZE {
+                for v in 0..CHUNK_SIZE {
+                    let local = face_local(normal, u, v);
+                    let block = data.block(local);
+                    if block.is_solid() {
+                        blocks.insert(local + normal * CHUNK_SIZE, block);
+                    }
                 }
             }
         }
@@ -554,20 +554,19 @@ fn grid_coords(size: i32) -> impl Iterator<Item = IVec3> {
         .flat_map(move |x| (0..size).flat_map(move |y| (0..size).map(move |z| IVec3::new(x, y, z))))
 }
 
-fn on_shared_face(local: IVec3, normal: IVec3) -> bool {
-    let shared = |coordinate: i32, direction: i32| {
-        if direction < 0 {
-            coordinate == CHUNK_SIZE - 1
-        } else {
-            coordinate == 0
-        }
+/// The neighbour-chunk cell on the face shared with the owning chunk.
+fn face_local(normal: IVec3, u: i32, v: i32) -> IVec3 {
+    let near = if normal.cmplt(IVec3::ZERO).any() {
+        CHUNK_SIZE - 1
+    } else {
+        0
     };
     if normal.x != 0 {
-        shared(local.x, normal.x)
+        IVec3::new(near, u, v)
     } else if normal.y != 0 {
-        shared(local.y, normal.y)
+        IVec3::new(u, near, v)
     } else {
-        shared(local.z, normal.z)
+        IVec3::new(u, v, near)
     }
 }
 

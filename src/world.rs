@@ -91,52 +91,93 @@ impl PartialOrd for ChunkCoord {
 
 /// Blocks owned by one chunk, stored in local coordinates.
 ///
-/// Light is derived state: it is recomputed from blocks and never saved. Both
-/// arrays hold one `0..=15` value per cell in local coordinates.
-#[derive(Debug)]
+/// A stored chunk always holds at least one non-air block. Light is derived
+/// state and lives in [`World`] as a separate field.
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Chunk {
-    pub(crate) blocks: HashMap<IVec3, Block>,
-    pub(crate) sky_light: Box<[u8]>,
-    pub(crate) block_light: Box<[u8]>,
+    blocks: Box<[Block]>,
+    filled: usize,
 }
 
 impl Default for Chunk {
     fn default() -> Self {
         Self {
-            blocks: HashMap::new(),
-            sky_light: vec![0; CHUNK_CELLS].into_boxed_slice(),
-            block_light: vec![0; CHUNK_CELLS].into_boxed_slice(),
+            blocks: vec![Block::Air; CHUNK_CELLS].into_boxed_slice(),
+            filled: 0,
         }
     }
 }
 
 impl Chunk {
-    fn is_empty(&self) -> bool {
-        self.blocks.is_empty()
+    pub(crate) fn is_empty(&self) -> bool {
+        self.filled == 0
     }
 
-    /// Returns `(sky, block)` light at a local coordinate.
-    #[cfg(test)]
-    pub(crate) fn light(&self, local: IVec3) -> (u8, u8) {
-        let index = local_index(local);
-        (self.sky_light[index], self.block_light[index])
+    /// Number of non-air blocks.
+    pub(crate) fn len(&self) -> usize {
+        self.filled
     }
 
-    /// Stores `(sky, block)` light at a local coordinate.
-    pub(crate) fn set_light(&mut self, local: IVec3, sky: u8, block: u8) {
-        let index = local_index(local);
-        self.sky_light[index] = sky;
-        self.block_light[index] = block;
+    /// Returns the block at a local coordinate, or `Air` outside the chunk.
+    pub(crate) fn block(&self, local: IVec3) -> Block {
+        local_index(local).map_or(Block::Air, |index| self.blocks[index])
+    }
+
+    /// Stores a block at a local coordinate. Coordinates outside the chunk are ignored.
+    pub(crate) fn set_block(&mut self, local: IVec3, block: Block) {
+        let Some(index) = local_index(local) else {
+            return;
+        };
+        let previous = self.blocks[index];
+        if previous == block {
+            return;
+        }
+        match (previous, block) {
+            (Block::Air, _) => self.filled += 1,
+            (_, Block::Air) => self.filled -= 1,
+            _ => {}
+        }
+        self.blocks[index] = block;
+    }
+
+    /// Non-air blocks in local `(x, y, z)` order.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (IVec3, Block)> + '_ {
+        self.blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, block)| **block != Block::Air)
+            .map(|(index, block)| (local_from_index(index), *block))
+    }
+
+    /// Raw blocks in local `(x, y, z)` order.
+    pub(crate) fn blocks(&self) -> &[Block] {
+        &self.blocks
     }
 }
 
-/// Linear index of a chunk-local coordinate.
-pub(crate) fn local_index(local: IVec3) -> usize {
+/// Linear index of a chunk-local coordinate, or `None` outside the chunk.
+fn local_index(local: IVec3) -> Option<usize> {
+    if !(local.cmpge(IVec3::ZERO).all() && local.cmplt(IVec3::splat(CHUNK_SIZE)).all()) {
+        return None;
+    }
     let stride = usize::try_from(CHUNK_SIZE).expect("chunk size fits");
     let x = usize::try_from(local.x).expect("local coordinate fits");
     let y = usize::try_from(local.y).expect("local coordinate fits");
     let z = usize::try_from(local.z).expect("local coordinate fits");
-    (x * stride + y) * stride + z
+    Some((x * stride + y) * stride + z)
+}
+
+/// Chunk-local coordinate of a linear block index.
+fn local_from_index(index: usize) -> IVec3 {
+    let stride = usize::try_from(CHUNK_SIZE).expect("chunk size fits");
+    let x = index / (stride * stride);
+    let y = (index / stride) % stride;
+    let z = index % stride;
+    IVec3::new(
+        i32::try_from(x).expect("local x fits"),
+        i32::try_from(y).expect("local y fits"),
+        i32::try_from(z).expect("local z fits"),
+    )
 }
 
 /// Chunked block world.
@@ -155,9 +196,7 @@ impl World {
         let (chunk, local) = ChunkCoord::from_world(world);
         self.chunks
             .get(&chunk)
-            .and_then(|chunk_data| chunk_data.blocks.get(&local))
-            .copied()
-            .unwrap_or(Block::Air)
+            .map_or(Block::Air, |chunk_data| chunk_data.block(local))
     }
 
     /// Sets a world coordinate and returns the chunks whose meshes changed.
@@ -176,21 +215,16 @@ impl World {
 
         self.modified.insert(chunk);
 
-        if block == Block::Air {
-            let Some(chunk_data) = self.chunks.get_mut(&chunk) else {
-                return DirtyChunks::new();
-            };
-            chunk_data.blocks.remove(&local);
-            if chunk_data.is_empty() {
-                self.chunks.remove(&chunk);
-                self.light.remove(&chunk);
-            }
-        } else {
-            self.chunks
-                .entry(chunk)
-                .or_default()
-                .blocks
-                .insert(local, block);
+        let Some(chunk_data) = self.chunks.get_mut(&chunk) else {
+            let mut chunk_data = Chunk::default();
+            chunk_data.set_block(local, block);
+            self.chunks.insert(chunk, chunk_data);
+            return dirty;
+        };
+        chunk_data.set_block(local, block);
+        if chunk_data.is_empty() {
+            self.chunks.remove(&chunk);
+            self.light.remove(&chunk);
         }
         dirty
     }
@@ -205,18 +239,12 @@ impl World {
         self.chunks.get(&chunk)
     }
 
-    /// Inserts a generated or loaded chunk. Empty block maps are ignored.
-    pub(crate) fn insert_chunk(&mut self, chunk: ChunkCoord, blocks: HashMap<IVec3, Block>) {
-        if blocks.is_empty() {
+    /// Inserts a generated or loaded chunk. Empty chunks are ignored.
+    pub(crate) fn insert_chunk(&mut self, chunk: ChunkCoord, data: Chunk) {
+        if data.is_empty() {
             return;
         }
-        self.chunks.insert(
-            chunk,
-            Chunk {
-                blocks,
-                ..Chunk::default()
-            },
-        );
+        self.chunks.insert(chunk, data);
     }
 
     /// Drops one chunk from memory, keeping its modified marker.
@@ -258,18 +286,8 @@ impl World {
         result
     }
 
-    /// Stores an accepted light field and its centre in the chunk arrays.
+    /// Stores an accepted light field for a chunk.
     pub(crate) fn set_light_field(&mut self, chunk: ChunkCoord, field: LightField) {
-        if let Some(data) = self.chunks.get_mut(&chunk) {
-            for x in 0..CHUNK_SIZE {
-                for y in 0..CHUNK_SIZE {
-                    for z in 0..CHUNK_SIZE {
-                        let local = IVec3::new(x, y, z);
-                        data.set_light(local, field.sky(local), field.block(local));
-                    }
-                }
-            }
-        }
         self.light.insert(chunk, Arc::new(field));
     }
 
@@ -293,18 +311,7 @@ impl World {
             .collect();
         self.light.clear();
         for (chunk, field) in fields {
-            self.light.insert(chunk, Arc::clone(&field));
-            let Some(data) = self.chunks.get_mut(&chunk) else {
-                continue;
-            };
-            for x in 0..CHUNK_SIZE {
-                for y in 0..CHUNK_SIZE {
-                    for z in 0..CHUNK_SIZE {
-                        let local = IVec3::new(x, y, z);
-                        data.set_light(local, field.sky(local), field.block(local));
-                    }
-                }
-            }
+            self.light.insert(chunk, field);
         }
     }
 
@@ -380,7 +387,7 @@ impl World {
                 });
             }
             world.modified.insert(header_chunk);
-            if !chunk.blocks.is_empty() {
+            if !chunk.is_empty() {
                 world.chunks.insert(header_chunk, chunk);
             }
         }
@@ -595,7 +602,7 @@ fn parse_chunk(bytes: &[u8]) -> Result<(ChunkCoord, Chunk), SaveError> {
         return Err(SaveError::TrailingBytes);
     }
 
-    let mut blocks = HashMap::with_capacity(block_count_usize);
+    let mut chunk = Chunk::default();
     for record in 0..block_count_usize {
         let offset = HEADER_BYTES + record * RECORD_BYTES;
         let local = IVec3::new(
@@ -616,27 +623,19 @@ fn parse_chunk(bytes: &[u8]) -> Result<(ChunkCoord, Chunk), SaveError> {
         let block = Block::from_id(block_id)
             .filter(|block| *block != Block::Air && block_id <= max_id)
             .ok_or(SaveError::InvalidBlockId(block_id))?;
-        if blocks.insert(local, block).is_some() {
+        if chunk.block(local) != Block::Air {
             return Err(SaveError::DuplicateRecord(local));
         }
+        chunk.set_block(local, block);
     }
 
-    Ok((
-        header_chunk,
-        Chunk {
-            blocks,
-            ..Chunk::default()
-        },
-    ))
+    Ok((header_chunk, chunk))
 }
 
 fn serialize_chunk(chunk_coord: ChunkCoord, chunk: &Chunk) -> Vec<u8> {
-    let mut records: Vec<_> = chunk.blocks.iter().collect();
-    records.sort_by_key(|(local, _)| (local.x, local.y, local.z));
-
-    let block_count = u32::try_from(records.len()).expect("chunk block count fits in u32");
+    let block_count = u32::try_from(chunk.len()).expect("chunk block count fits in u32");
     let mut bytes = serialize_header(chunk_coord, block_count);
-    for (local, block) in records {
+    for (local, block) in chunk.iter() {
         bytes.push(u8::try_from(local.x).expect("local coordinate fits in u8"));
         bytes.push(u8::try_from(local.y).expect("local coordinate fits in u8"));
         bytes.push(u8::try_from(local.z).expect("local coordinate fits in u8"));
@@ -1029,7 +1028,7 @@ mod tests {
         world.set_block(IVec3::new(6, 5, 5), Block::Air);
 
         for (_, chunk) in world.iter_chunks() {
-            assert!(chunk.blocks.values().all(|block| *block != Block::Air));
+            assert!(chunk.iter().all(|(_, block)| block != Block::Air));
         }
     }
 
@@ -1039,7 +1038,7 @@ mod tests {
         world.set_block(IVec3::new(32, 0, 0), Block::Grass);
 
         let stored = world.chunk(chunk_at(IVec3::new(32, 0, 0))).unwrap();
-        assert_eq!(stored.blocks.get(&IVec3::ZERO), Some(&Block::Grass));
+        assert_eq!(stored.block(IVec3::ZERO), Block::Grass);
         assert!(world.chunk(chunk_at(IVec3::ZERO)).is_none());
     }
 
@@ -1146,7 +1145,7 @@ mod tests {
 
         assert!(!world.is_modified(chunk));
         let saved = World::load_saved_chunk(&directory, chunk).unwrap().unwrap();
-        assert_eq!(saved.blocks.get(&IVec3::new(5, 0, 5)), Some(&Block::Stone));
+        assert_eq!(saved.block(IVec3::new(5, 0, 5)), Block::Stone);
         fs::remove_dir_all(directory).unwrap();
     }
 
@@ -1161,6 +1160,29 @@ mod tests {
         assert!(world.chunk(chunk).is_none());
         assert_eq!(world.block(IVec3::new(5, 0, 5)), Block::Air);
         assert!(world.is_modified(chunk));
+    }
+
+    #[test]
+    fn a_generated_chunk_survives_save_and_load_unchanged() {
+        let directory = temp_dir("generated-round-trip");
+        let chunk = chunk_at(IVec3::new(5, 40, 5));
+        let generated = crate::generation::Generator::new(42).generate_chunk(chunk);
+        let mut world = World::default();
+        world.insert_chunk(chunk, generated.clone());
+        world.mark_modified(chunk);
+        world.save_chunks(&directory).unwrap();
+        let path = directory.join("chunk_0_1_0.vchk");
+        let first = fs::read(&path).unwrap();
+
+        let saved = World::load_saved_chunk(&directory, chunk).unwrap().unwrap();
+        assert_eq!(saved, generated);
+
+        let mut reloaded = World::default();
+        reloaded.insert_chunk(chunk, saved);
+        reloaded.mark_modified(chunk);
+        reloaded.save_chunks(&directory).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), first);
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
@@ -1357,12 +1379,7 @@ mod tests {
 
         let world = World::load_chunks(&directory).unwrap();
 
-        assert_eq!(
-            world
-                .chunk(chunk_at(IVec3::ZERO))
-                .map_or(0, |chunk| chunk.blocks.len()),
-            0
-        );
+        assert_eq!(world.chunk(chunk_at(IVec3::ZERO)).map_or(0, Chunk::len), 0);
         fs::remove_dir_all(directory).unwrap();
     }
 
@@ -1426,11 +1443,10 @@ mod tests {
         world.save_chunks(&directory).unwrap();
 
         let loaded = World::load_chunks(&directory).unwrap();
-        let chunk = loaded.chunk(chunk_at(IVec3::ZERO)).unwrap();
+        let field = loaded.light_field(chunk_at(IVec3::ZERO)).unwrap();
 
-        assert_eq!(chunk.light(IVec3::new(2, 1, 2)), (0, 14));
-        assert_eq!(chunk.light(IVec3::new(2, 3, 2)).0, 15);
-        assert_eq!(chunk.sky_light.iter().copied().max(), Some(15));
+        assert_eq!(field.block(IVec3::new(2, 1, 2)), 14);
+        assert_eq!(field.sky(IVec3::new(2, 3, 2)), 15);
         fs::remove_dir_all(directory).unwrap();
     }
 

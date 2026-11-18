@@ -3,13 +3,11 @@
 //! Every field is a function of the world seed, a field tag, and world block
 //! coordinates. There is no global RNG and no dependency on chunk order.
 
-use std::collections::HashMap;
-
 use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
 use glam::IVec3;
 
 use crate::block::Block;
-use crate::world::{CHUNK_SIZE, ChunkCoord};
+use crate::world::{CHUNK_SIZE, Chunk, ChunkCoord};
 
 /// Chunks per world column.
 pub(crate) const CHUNK_COLUMN: i32 = 4;
@@ -73,7 +71,7 @@ pub(crate) struct GenJob {
 #[derive(Debug)]
 pub(crate) struct GenResult {
     pub(crate) column: glam::IVec2,
-    pub(crate) chunks: Vec<(ChunkCoord, HashMap<IVec3, Block>)>,
+    pub(crate) chunks: Vec<(ChunkCoord, Chunk)>,
     pub(crate) elapsed: std::time::Duration,
 }
 
@@ -136,9 +134,9 @@ impl Generator {
     }
 
     /// Generates one chunk's blocks, including caves and water.
-    pub(crate) fn generate_chunk(&self, chunk: ChunkCoord) -> HashMap<IVec3, Block> {
+    pub(crate) fn generate_chunk(&self, chunk: ChunkCoord) -> Chunk {
         let origin = chunk.world_origin();
-        let mut blocks = HashMap::new();
+        let mut blocks = Chunk::default();
         let first = origin.y.max(0);
         let last = (origin.y + CHUNK_SIZE - 1).min(WORLD_HEIGHT - 1);
         if first > last {
@@ -166,9 +164,7 @@ impl Generator {
                         Block::Air
                     };
 
-                    if block != Block::Air {
-                        blocks.insert(IVec3::new(lx, world_y - origin.y, lz), block);
-                    }
+                    blocks.set_block(IVec3::new(lx, world_y - origin.y, lz), block);
                 }
             }
         }
@@ -197,10 +193,7 @@ impl Generator {
     }
 
     /// Generates the four chunks of one vertical column.
-    pub(crate) fn generate_column(
-        &self,
-        column: glam::IVec2,
-    ) -> Vec<(ChunkCoord, HashMap<IVec3, Block>)> {
+    pub(crate) fn generate_column(&self, column: glam::IVec2) -> Vec<(ChunkCoord, Chunk)> {
         (0..CHUNK_COLUMN)
             .map(|y| {
                 let chunk = ChunkCoord::new(column.x, y, column.y);
@@ -224,13 +217,7 @@ impl Generator {
 
     /// Places one tree when the column and canopy volume allow it.
     #[allow(clippy::cast_possible_truncation)]
-    fn plant_tree(
-        &self,
-        blocks: &mut HashMap<IVec3, Block>,
-        chunk: ChunkCoord,
-        local: IVec3,
-        trunk: i32,
-    ) {
+    fn plant_tree(&self, blocks: &mut Chunk, chunk: ChunkCoord, local: IVec3, trunk: i32) {
         let origin = chunk.world_origin();
         let biome = self.biome(origin.x + local.x, origin.z + local.z);
         if !matches!(biome, Biome::Plains | Biome::Hills) {
@@ -242,7 +229,7 @@ impl Generator {
 
         let height = self.height(origin.x + local.x, origin.z + local.z);
         let local_height = height - origin.y;
-        if blocks.get(&IVec3::new(local.x, local_height, local.z)) != Some(&Block::Grass) {
+        if blocks.block(IVec3::new(local.x, local_height, local.z)) != Block::Grass {
             return;
         }
 
@@ -254,39 +241,41 @@ impl Generator {
         }
 
         for y in (local_height + 1)..=local_top {
-            if blocks.contains_key(&IVec3::new(local.x, y, local.z)) {
+            if blocks.block(IVec3::new(local.x, y, local.z)) != Block::Air {
                 return;
             }
         }
         for y in [top - 1, top] {
             for dx in -1..=1 {
                 for dz in -1..=1 {
-                    if blocks.contains_key(&IVec3::new(local.x + dx, y - origin.y, local.z + dz)) {
+                    if blocks.block(IVec3::new(local.x + dx, y - origin.y, local.z + dz))
+                        != Block::Air
+                    {
                         return;
                     }
                 }
             }
         }
-        if blocks.contains_key(&IVec3::new(local.x, highest - origin.y, local.z)) {
+        if blocks.block(IVec3::new(local.x, highest - origin.y, local.z)) != Block::Air {
             return;
         }
 
         for y in [top - 1, top] {
             for dx in -1..=1 {
                 for dz in -1..=1 {
-                    blocks.insert(
+                    blocks.set_block(
                         IVec3::new(local.x + dx, y - origin.y, local.z + dz),
                         Block::Leaves,
                     );
                 }
             }
         }
-        blocks.insert(
+        blocks.set_block(
             IVec3::new(local.x, highest - origin.y, local.z),
             Block::Leaves,
         );
         for y in (height + 1)..=top {
-            blocks.insert(IVec3::new(local.x, y - origin.y, local.z), Block::Wood);
+            blocks.set_block(IVec3::new(local.x, y - origin.y, local.z), Block::Wood);
         }
     }
 
@@ -437,7 +426,7 @@ mod tests {
         let chunk = ChunkCoord::from_world(IVec3::new(x, y, z)).0;
         let blocks = generator.generate_chunk(chunk);
         let (_, local) = ChunkCoord::from_world(IVec3::new(x, y, z));
-        blocks.get(&local).copied()
+        Some(blocks.block(local)).filter(|block| *block != Block::Air)
     }
 
     #[test]
@@ -461,7 +450,7 @@ mod tests {
         let generator = Generator::new(9);
         let chunk = ChunkCoord::new(-2, 2, 5);
 
-        for local in generator.generate_chunk(chunk).keys() {
+        for (local, _) in generator.generate_chunk(chunk).iter() {
             assert!(local.cmpge(IVec3::ZERO).all() && local.cmplt(IVec3::splat(CHUNK_SIZE)).all());
         }
     }
@@ -586,13 +575,13 @@ mod tests {
         assert!(bottom > 0);
     }
 
-    fn find_tree(generator: &Generator) -> Option<(ChunkCoord, HashMap<IVec3, Block>)> {
+    fn find_tree(generator: &Generator) -> Option<(ChunkCoord, Chunk)> {
         for cx in 0..6 {
             for cz in 0..6 {
                 for cy in 0..4 {
                     let chunk = ChunkCoord::new(cx, cy, cz);
                     let blocks = generator.generate_chunk(chunk);
-                    if blocks.values().any(|block| *block == Block::Wood) {
+                    if blocks.iter().any(|(_, block)| block == Block::Wood) {
                         return Some((chunk, blocks));
                     }
                 }
@@ -608,13 +597,13 @@ mod tests {
         let base = blocks
             .iter()
             .find(|(local, block)| {
-                **block == Block::Wood && blocks.get(&(*local - IVec3::Y)) == Some(&Block::Grass)
+                *block == Block::Wood && blocks.block(*local - IVec3::Y) == Block::Grass
             })
-            .map(|(local, _)| *local)
+            .map(|(local, _)| local)
             .expect("trunk base");
 
         let mut trunk = 0;
-        while blocks.get(&(base + IVec3::Y * trunk)) == Some(&Block::Wood) {
+        while blocks.block(base + IVec3::Y * trunk) == Block::Wood {
             trunk += 1;
         }
         assert!((4..=6).contains(&trunk), "trunk {trunk}");
@@ -629,11 +618,11 @@ mod tests {
                     } else {
                         Block::Leaves
                     };
-                    assert_eq!(blocks.get(&cell), Some(&expected), "{cell}");
+                    assert_eq!(blocks.block(cell), expected, "{cell}");
                 }
             }
         }
-        assert_eq!(blocks.get(&(top + IVec3::Y)), Some(&Block::Leaves));
+        assert_eq!(blocks.block(top + IVec3::Y), Block::Leaves);
     }
 
     #[test]
@@ -647,18 +636,18 @@ mod tests {
                     let chunk = ChunkCoord::new(cx, cy, cz);
                     let origin = chunk.world_origin();
                     let blocks = generator.generate_chunk(chunk);
-                    for (local, block) in &blocks {
-                        if *block != Block::Wood {
+                    for (local, block) in blocks.iter() {
+                        if block != Block::Wood {
                             continue;
                         }
-                        let below = *local - IVec3::Y;
+                        let below = local - IVec3::Y;
                         if below.y < 0 {
                             continue;
                         }
-                        if blocks.get(&below) != Some(&Block::Grass) {
+                        if blocks.block(below) != Block::Grass {
                             continue;
                         }
-                        let world = origin + *local;
+                        let world = origin + local;
                         assert!(matches!(
                             generator.biome(world.x, world.z),
                             Biome::Plains | Biome::Hills
