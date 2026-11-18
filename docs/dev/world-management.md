@@ -8,7 +8,7 @@ modified-only changes.
 |---|---|
 | `world/` save directory | Current (v0.0.4) |
 | `VCHK` v1 chunks | Current (v0.0.4) |
-| `VCHK` v2 chunks | Planned (v0.0.6) |
+| `VCHK` v2 chunks | Current (v0.0.6) |
 | `VCHK` v3, `world/seed`, modified-only saves | Planned (v0.0.7) |
 | Built-in backups | None; copy the world directory manually |
 | Atomic writes, checksums, compression | None in v1-v3; see [ADR-0008](../decisions/0008-chunk-save-format.md) |

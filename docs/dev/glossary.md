@@ -90,13 +90,13 @@ something else; it does not ban the word everywhere.
 | [hysteresis](../decisions/0013-player-centred-chunk-streaming.md) | Extra margin before unloading a chunk, to avoid load/unload thrashing. | Planned (v0.0.7) | delay |
 | [SVDAG](../specs/v0.0.7.md) | Sparse voxel directed acyclic graph; optional compression for far or static chunks. | Optional (v0.0.7) | — |
 | [raymarching](../specs/v0.0.7.md) | Rendering by marching rays per pixel instead of drawing meshes. | Optional (v0.0.7) | raycasting |
-| [sky light](../specs/v0.0.6.md) | Light propagated from the sky through transparent cells. | Planned (v0.0.6) | sunlight, when you mean the light value |
-| [block light](../specs/v0.0.6.md) | Light emitted by blocks and propagated through the world. | Planned (v0.0.6) | torch light |
-| [ambient occlusion](../decisions/0011-voxel-light-and-baked-ao.md) | Contact shading from nearby geometry, baked into vertex data. | Planned (v0.0.6) | shadows |
-| [day/night cycle](../specs/v0.0.6.md) | Ten-minute time-of-day cycle that rotates the sun and changes sky light. | Planned (v0.0.6) | weather |
-| [fog](../specs/v0.0.6.md) | Distance haze that hides the render-distance edge. | Planned (v0.0.6) | — |
-| [Lamp](../specs/v0.0.6.md) | Solid block that emits block light 14. | Planned (v0.0.6) | light source, when you mean a generic emitter |
-| [water](../specs/v0.0.6.md) | Non-solid transparent block with a separate transparent mesh layer. | Planned (v0.0.6) | fluid, when you mean this block |
+| [sky light](../specs/v0.0.6.md) | Light propagated from the sky through transparent cells. | Current (v0.0.6) | sunlight, when you mean the light value |
+| [block light](../specs/v0.0.6.md) | Light emitted by blocks and propagated through the world. | Current (v0.0.6) | torch light |
+| [ambient occlusion](../decisions/0011-voxel-light-and-baked-ao.md) | Contact shading from nearby geometry, baked into vertex data. | Current (v0.0.6) | shadows |
+| [day/night cycle](../specs/v0.0.6.md) | Ten-minute time-of-day cycle that rotates the sun and changes sky light. | Current (v0.0.6) | weather |
+| [fog](../specs/v0.0.6.md) | Distance haze that hides the render-distance edge. | Current (v0.0.6) | — |
+| [Lamp](../specs/v0.0.6.md) | Solid block that emits block light 14. | Current (v0.0.6) | light source, when you mean a generic emitter |
+| [water](../specs/v0.0.6.md) | Non-solid transparent block with a separate transparent mesh layer. | Current (v0.0.6) | fluid, when you mean this block |
 
 ## Input and camera
 

@@ -3,7 +3,7 @@
 
 # A world, one voxel at a time.
 
-Valescent Engine is a voxel engine written in Rust. Five milestones are shipped - a voxel scene, a fly camera, chunked meshes, a playable world, and a scaled renderer - and every step after that is written down before it is built.
+Valescent Engine is a voxel engine written in Rust. Six milestones are shipped - a voxel scene, a fly camera, chunked meshes, a playable world, a scaled renderer, and an atmospheric one - and every step after that is written down before it is built.
 
 This is **pre-alpha**. The current world is a walkable, editable set of 32×32×32 chunks with greedy meshing, two LODs, frustum culling, worker-thread remeshing, procedural block textures, swept collision, and `VCHK` saves. Lighting and terrain generation are planned in public.
 
@@ -15,7 +15,7 @@ This is **pre-alpha**. The current world is a walkable, editable set of 32×32×
 
 <div class="hero-data">
 
-`PRE-ALPHA` <span>/</span> `v0.0.5 SHIPPED` <span>/</span> `RUST + WGPU`
+`PRE-ALPHA` <span>/</span> `v0.0.6 SHIPPED` <span>/</span> `RUST + WGPU`
 
 </div>
 
@@ -73,20 +73,20 @@ This is **pre-alpha**. The current world is a walkable, editable set of 32×32×
 
 ## Next on the bench
 
-<span class="version">v0.0.5</span>
+<span class="version">v0.0.6</span>
 
-### Scale and Performance
+### Atmosphere
 
-The playable world is in place. The next milestone adds greedy meshing, two LOD levels, frustum culling, and async chunk rebuilds, so draw distance grows without losing frame rate.
+The scaled world is in place. This milestone adds 4-bit sky and block light, baked ambient occlusion, a ten-minute day/night cycle, distance fog, and transparent animated water.
 
-[Read the v0.0.5 scope](dev/v0.0.5-scope.md) · [Read the v0.0.5 spec](specs/v0.0.5.md)
+[Read the v0.0.6 scope](dev/v0.0.6-scope.md) · [Read the v0.0.6 spec](specs/v0.0.6.md)
 
 </div>
 <div>
 
-> **Definition of done.** A vast draw distance with a smooth frame rate, and block edits without hitches.
+> **Definition of done.** Open surfaces lit and caves dark, AO visible in corners, a working day/night cycle, fog at the render edge, and water you can see through.
 
-The work after that is already scoped: voxel lighting, day/night, fog, and water in [v0.0.6 — Atmosphere](dev/v0.0.6-scope.md).
+The work after that is already scoped: procedural terrain, biomes, and chunk streaming in [v0.0.7 - Advanced Horizons](dev/v0.0.7-scope.md).
 
 </div>
 </section>

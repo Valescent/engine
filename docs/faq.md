@@ -1,7 +1,7 @@
 # FAQ and troubleshooting
 
 Short answers for the current pre-alpha engine and a symptom-first index into the detailed pages.
-Only v0.0.1 through v0.0.5 are released; v0.0.6-v0.0.7 are planned. A planned feature is not a bug.
+Only v0.0.1 through v0.0.6 are released; v0.0.7 is planned. A planned feature is not a bug.
 
 | I need to... | Start here |
 |---|---|
@@ -14,7 +14,7 @@ Only v0.0.1 through v0.0.5 are released; v0.0.6-v0.0.7 are planned. A planned fe
 
 ## Project and status
 
-The current release is **v0.0.5, pre-alpha**. The build has a
+The current release is **v0.0.6, pre-alpha**. The build has a
 window, a depth-buffered `wgpu` renderer, chunked greedy meshes with two LODs, frustum culling, asynchronous remeshing, walking and collision,
 block breaking and placing, procedural block textures, and `VCHK` chunk saves. It does not have
 lighting, fog, water, or terrain generation.
@@ -22,14 +22,14 @@ lighting, fog, water, or terrain generation.
 | Question | Answer |
 |---|---|
 | What is Valescent Engine? | A voxel engine written in Rust on `wgpu` and `winit`. It is source-available, not open source. See [the landing page](index.md) and [Architecture](dev/architecture.md). |
-| What is the current version? | `0.0.5` is released. v0.0.6-v0.0.7 are planned. See [Roadmap](roadmap.md) and [Changelog](https://github.com/Valescent/engine/blob/main/CHANGELOG.md). |
+| What is the current version? | `0.0.6` is released. v0.0.7 is planned. See [Roadmap](roadmap.md) and [Changelog](https://github.com/Valescent/engine/blob/main/CHANGELOG.md). |
 | Is it stable? | No. It is pre-alpha and there is no public API stability before 1.0. See [Versioning](dev/versioning.md). |
 | Why is the version `0.0.x`? | Each roadmap milestone ships as the next `0.0.x` patch. There is no `0.1.0` or `1.0.0` target yet. See [Versioning](dev/versioning.md#semantic-versioning). |
-| What is next? | v0.0.6 for lighting, fog, and water. See [the roadmap](roadmap.md). |
+| What is next? | v0.0.7 for procedural terrain, biomes, and streaming. See [the roadmap](roadmap.md). |
 | Why is the world one mesh? | It is not. Since v0.0.3 each non-empty chunk owns its mesh and GPU buffer. See [Architecture](dev/architecture.md#rendering-resources). |
 | Can I walk, fall, jump, or collide? | Yes. WASD walks, `Space` jumps, and swept AABB collision stops the player at solid blocks. See [Controls](dev/controls.md#bindings-by-milestone). |
 | Can I break or place blocks? | Yes, after the cursor is captured. Left click breaks and right click places the selected block. See [Interaction](dev/controls.md#interaction-current-v004). |
-| Why are there no light, fog, or water? | Lighting, AO, fog, and water are planned for v0.0.6. Procedural block textures ship in v0.0.4. See the [Roadmap](roadmap.md). |
+| Why are there no light, fog, or water? | They are current: v0.0.6 added voxel light, AO, fog, and water. Procedural block textures shipped in v0.0.4. See the [Roadmap](roadmap.md). |
 | Is there multiplayer, a server, modding, or scripting? | No. They are out of scope through v0.0.7. See the non-goals in the [Roadmap](roadmap.md). |
 | What platforms are supported? | Windows, Linux, and macOS through `winit`/`wgpu`, with Vulkan, Direct3D 12, or Metal. CI tests all three. See [Setup](dev/setup.md#platform-prerequisites) and [CI](dev/ci.md#ci-workflow). |
 | Are there release binaries? | No. The release workflow publishes changelog notes, not binaries. See [CI](dev/ci.md#release-workflow) and [Release checklist](dev/release-checklist.md). |
@@ -84,7 +84,7 @@ lighting, fog, water, or terrain generation.
 | Why do blocks show noise patterns? | The current tiles are deterministic procedural placeholders, not final art. See [Texture pipeline](dev/textures.md). |
 | Where are the game textures or assets? | There are no image assets yet. v0.0.6 generates ten procedural tiles; `docs/assets/` is documentation-site material. See [Current texture state](dev/textures.md#current-state). |
 | Can I use my own textures or a texture pack? | Not yet. The external asset pipeline and texture-pack format are deferred. See [External assets](dev/textures.md#external-assets-and-texture-packs). |
-| Why is there no lighting, fog, or water? | They are planned for v0.0.6. See the [Roadmap](roadmap.md) and [v0.0.6 spec](specs/v0.0.6.md). |
+| Why is there no lighting, fog, or water? | There is: v0.0.6 ships voxel light, AO, day/night, fog, and water. See the [Roadmap](roadmap.md) and [v0.0.6 spec](specs/v0.0.6.md). |
 | How do I add or change a shader? | Follow [Shader authoring](dev/shaders.md). A shader edit needs a rebuild; there is no hot reload. |
 | Can I disable vsync? | Press `V` to toggle between FIFO and immediate or mailbox presentation. See [Controls](dev/controls.md#bindings-by-milestone). |
 | Can I see the frame rate? | Press `F3` to toggle the FPS/frame-time overlay. It refreshes once per second. See [Debugging](dev/debugging.md#profiling). |

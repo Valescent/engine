@@ -2,7 +2,7 @@
 
 A voxel engine written in Rust.
 
-**Status: pre-alpha.** `0.0.1` through `0.0.5` are released. `0.0.6` (atmosphere) is in progress: voxel light, ambient occlusion, a day/night cycle, and fog are in; water is next.
+**Status: pre-alpha.** `0.0.1` through `0.0.6` are released. The world has voxel lighting, ambient occlusion, a day/night cycle, distance fog, and transparent animated water.
 
 This is **source-available, not open source**. The code is under the [PolyForm Shield License 1.0.0](LICENSE): you may read, run, modify, and redistribute it, but not use it to provide a product that competes with it. PolyForm Shield is not OSI-approved.
 

@@ -10,7 +10,7 @@ shader changes planned for later milestones.
 | Camera uniform and vertex/normal interface | Current |
 | Textured block shader | Current (v0.0.4) |
 | Greedy-quad and LOD shader inputs | Current (v0.0.5) |
-| Light, AO, fog, and water | Planned (v0.0.6) |
+| Light, AO, fog, and water | Current (v0.0.6) |
 | Eleven texture layers and Sand | Planned (v0.0.7) |
 | Shader hot reload | Not implemented |
 | Automated WGSL tests | Not implemented; startup validation and manual GPU checks |
