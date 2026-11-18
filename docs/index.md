@@ -3,9 +3,9 @@
 
 # A world, one voxel at a time.
 
-Valescent Engine is a voxel engine written in Rust. Six milestones are shipped - a voxel scene, a fly camera, chunked meshes, a playable world, a scaled renderer, and an atmospheric one - and every step after that is written down before it is built.
+Valescent Engine is a voxel engine written in Rust. Seven milestones are shipped - a voxel scene, a fly camera, chunked meshes, a playable world, a scaled renderer, an atmospheric one, and a procedurally generated one - and every step after that is written down before it is built.
 
-This is **pre-alpha**. The current world is a walkable, editable set of 32×32×32 chunks with greedy meshing, two LODs, frustum culling, worker-thread remeshing, procedural block textures, swept collision, and `VCHK` saves. Lighting and terrain generation are planned in public.
+This is **pre-alpha**. The current world is a walkable, editable, procedurally generated set of 32×32×32 chunks with greedy meshing, three LODs, frustum culling, seed-native streaming, voxel lighting with baked AO, fog and water, worker-thread remeshing, procedural block textures, swept collision, and `VCHK` saves. The v0.0.8 scale pass is implemented and in acceptance.
 
 <div class="hero-actions">
 
@@ -15,7 +15,7 @@ This is **pre-alpha**. The current world is a walkable, editable set of 32×32×
 
 <div class="hero-data">
 
-`PRE-ALPHA` <span>/</span> `v0.0.6 SHIPPED` <span>/</span> `RUST + WGPU`
+`PRE-ALPHA` <span>/</span> `v0.0.7 SHIPPED` <span>/</span> `RUST + WGPU`
 
 </div>
 
@@ -31,7 +31,7 @@ This is **pre-alpha**. The current world is a walkable, editable set of 32×32×
 <span class="plate-label bl">Yaw <span data-yaw>028°</span></span>
 <span class="plate-label br">Drag / arrow keys</span>
 </div>
-<figcaption>Drawn from the current data model: block voxels stored per chunk, meshed as face-culled textured non-indexed cubes, right-handed and Y-up. The highlighted cube stands in for the block outline. Illustration, not a screenshot.</figcaption>
+<figcaption>Drawn from the current data model: block voxels stored per chunk, meshed as face-culled textured indexed quads, right-handed and Y-up. The highlighted cube stands in for the block outline. Illustration, not a screenshot.</figcaption>
 </figure>
 </div>
 
@@ -57,7 +57,7 @@ This is **pre-alpha**. The current world is a walkable, editable set of 32×32×
 - [Decision records](decisions/index.md) — why the engine is built the way it is.
 - [Testing](dev/testing.md) - headless tests and manual GPU acceptance.
 - [Public API](dev/public-api.md) - current unstable surface and the reference gate.
-- [Benchmark results](dev/benchmarks.md) - pool_sim methodology and run log.
+- [Benchmark results](dev/benchmarks.md) - pool_sim, engine, and headless runs.
 - [Changelog](https://github.com/Valescent/engine/blob/main/CHANGELOG.md) — user-visible changes.
 - [Contributing](CONTRIBUTING.md) — commits, changelog entries, pull requests, and the CLA.
 - [Security policy](SECURITY.md) — how to report a vulnerability.
@@ -73,20 +73,20 @@ This is **pre-alpha**. The current world is a walkable, editable set of 32×32×
 
 ## Next on the bench
 
-<span class="version">v0.0.6</span>
+<span class="version">v0.0.8</span>
 
-### Atmosphere
+### Scale
 
-The scaled world is in place. This milestone adds 4-bit sky and block light, baked ambient occlusion, a ten-minute day/night cycle, distance fog, and transparent animated water.
+The generated, lit world streams at distance 24 and 32. This milestone adds LOD2, four-bit packed light, direct light snapshots, a frame budget for level work, 12-byte indexed vertices, back-face culling, and a headless performance gate.
 
-[Read the v0.0.6 scope](dev/v0.0.6-scope.md) · [Read the v0.0.6 spec](specs/v0.0.6.md)
+[Read the v0.0.8 scope](dev/v0.0.8-scope.md) · [Read the v0.0.8 spec](specs/v0.0.8.md)
 
 </div>
 <div>
 
-> **Definition of done.** Open surfaces lit and caves dark, AO visible in corners, a working day/night cycle, fog at the render edge, and water you can see through.
+> **Definition of done.** 60 FPS at `render_distance_chunks = 24` on the reference machine, resident light memory at most half of v0.0.7, no per-frame world scan for light work, and no main-thread frame above 33 ms once the first ring is ready.
 
-The work after that is already scoped: procedural terrain, biomes, and chunk streaming in [v0.0.7 - Advanced Horizons](dev/v0.0.7-scope.md).
+The work after that is already drawn up: lighting in [v0.0.9](design/lighting-pipeline.md) and terrain in v0.0.10, with the long-range [seed-native LOD hierarchy](design/lod-hierarchy.md) behind them.
 
 </div>
 </section>
@@ -95,7 +95,7 @@ The work after that is already scoped: procedural terrain, biomes, and chunk str
 
 ## Decisions, on the record
 
-Six records explain the stack, including the alternatives that lost and the reasons they lost. They are superseded, never rewritten.
+Fourteen records explain the stack, including the alternatives that lost and the reasons they lost. They are superseded, never rewritten.
 
 | ID | Decision | Status |
 |---|---|---|
@@ -105,6 +105,14 @@ Six records explain the stack, including the alternatives that lost and the reas
 | [0004](decisions/0004-glam-for-math.md) | glam for math | Accepted |
 | [0005](decisions/0005-bytemuck-for-gpu-layout.md) | bytemuck for GPU data layout | Accepted |
 | [0006](decisions/0006-tracy-for-profiling.md) | Tracy for profiling | Accepted |
+| [0007](decisions/0007-texture-array-for-block-textures.md) | Texture array for block textures | Accepted |
+| [0008](decisions/0008-chunk-save-format.md) | Chunk save format (VCHK) | Accepted |
+| [0009](decisions/0009-micropool-for-chunk-workers.md) | micropool for chunk workers | Accepted |
+| [0010](decisions/0010-two-level-lod-for-chunks.md) | Two LOD levels with conservative downsampling | Accepted; extended by v0.0.8 LOD2 |
+| [0011](decisions/0011-voxel-light-and-baked-ao.md) | Voxel lighting with baked AO | Accepted |
+| [0012](decisions/0012-fastnoise-lite-and-opensimplex2.md) | fastnoise-lite with OpenSimplex2 | Accepted |
+| [0013](decisions/0013-player-centred-chunk-streaming.md) | Finite player-centred streaming | Accepted |
+| [0014](decisions/0014-seed-native-lod-hierarchy.md) | Seed-native multi-level LOD sections | Accepted |
 
 </section>
 

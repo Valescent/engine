@@ -8,22 +8,22 @@ tree — by <code>scripts/progress.sh</code>. Regenerate it with
 <div class="pg-hero">
   <div class="pg-panel">
     <span class="pg-kicker">Level 8 · Cartographer</span>
-    <div class="pg-xp"><span class="pg-xp-num">3,684</span><span class="pg-xp-unit">XP</span></div>
-    <div class="pg-bar pg-bar-lg"><span style="width: 37%"></span></div>
-    <span class="pg-mono">316 XP to level 9</span>
+    <div class="pg-xp"><span class="pg-xp-num">3,847</span><span class="pg-xp-unit">XP</span></div>
+    <div class="pg-bar pg-bar-lg"><span style="width: 69%"></span></div>
+    <span class="pg-mono">153 XP to level 9</span>
   </div>
   <div class="pg-tiles">
     <div class="pg-tile">
       <span class="pg-mono">Commits</span>
-      <span class="pg-num">62</span>
+      <span class="pg-num">71</span>
     </div>
     <div class="pg-tile">
       <span class="pg-mono">Tests</span>
-      <span class="pg-num">212</span>
+      <span class="pg-num">221</span>
     </div>
     <div class="pg-tile">
       <span class="pg-mono">Boxes ticked</span>
-      <span class="pg-num">48/50</span>
+      <span class="pg-num">52/54</span>
     </div>
     <div class="pg-tile">
       <span class="pg-mono">Releases</span>
@@ -31,7 +31,7 @@ tree — by <code>scripts/progress.sh</code>. Regenerate it with
     </div>
     <div class="pg-tile">
       <span class="pg-mono">Lines in src</span>
-      <span class="pg-num">10,012</span>
+      <span class="pg-num">10,707</span>
     </div>
     <div class="pg-tile">
       <span class="pg-mono">Decisions</span>
@@ -78,12 +78,17 @@ in-progress version is the only score that can move right now.
   </div>
   <div class="pg-row">
     <span class="pg-row-name">v0.0.7: Advanced Horizons</span>
-    <span class="pg-row-meta">3/5 · In progress</span>
+    <span class="pg-row-meta">3/5 · Shipped</span>
     <div class="pg-bar "><span style="width: 60%"></span></div>
+  </div>
+  <div class="pg-row">
+    <span class="pg-row-name">v0.0.8: Scale</span>
+    <span class="pg-row-meta">4/4 · In progress</span>
+    <div class="pg-bar "><span style="width: 100%"></span></div>
   </div>
 </div>
 
-**Overall: 48 of 50 boxes, 96%.**
+**Overall: 52 of 54 boxes, 96%.**
 
 ## Momentum
 
@@ -105,7 +110,7 @@ it is regenerated.
   </div>
   <div class="pg-tile">
     <span class="pg-mono">Last 7 days</span>
-    <span class="pg-num">62 commits</span>
+    <span class="pg-num">71 commits</span>
   </div>
 </div>
 
@@ -125,9 +130,10 @@ it is regenerated.
   <span class="pg-day is-on"></span>
   <span class="pg-day is-on"></span>
 </div>
-<span class="pg-mono">14 days ending 2026-11-17 · busiest day 2026-11-17 with 25 commits</span>
+<span class="pg-mono">14 days ending 2026-11-17 · busiest day 2026-11-17 with 34 commits</span>
 
-Since 2026-11-13: 62 commits across 4 active days, 90 documented changelog entries, 59 docs pages.
+Since 2026-11-13: 71 commits across 4 active days, 77 documented changelog entries, 72 docs pages.
+In flight right now: 7 changes waiting in [Unreleased] (added 6, fixed 1).
 
 ## Achievements
 
@@ -165,7 +171,7 @@ Since 2026-11-13: 62 commits across 4 active days, 90 documented changelog entri
   <div class="pg-badge is-locked">
     <span class="pg-badge-mark">07</span>
     <strong>Century Club</strong>
-    <span class="pg-mono">62 of 100 commits.</span>
+    <span class="pg-mono">71 of 100 commits.</span>
   </div>
   <div class="pg-badge is-unlocked">
     <span class="pg-badge-mark">08</span>
@@ -196,12 +202,7 @@ Since 2026-11-13: 62 commits across 4 active days, 90 documented changelog entri
 
 ## Next up
 
-The open boxes in **v0.0.7: Advanced Horizons** — the only score that can move right now:
-
-<ul class="pg-next">
-  <li>Sparse Voxel DAGs for compression (evaluated; deferred, not in v0.0.7 acceptance)</li>
-  <li>GPU compute raymarching without traditional meshes (evaluated; deferred, not in v0.0.7 acceptance)</li>
-</ul>
+**Every box in v0.0.8: Scale is ticked — ship it.**
 
 See the [roadmap](roadmap.md) for the full milestone text.
 

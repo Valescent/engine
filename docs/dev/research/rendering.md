@@ -1,8 +1,8 @@
 # Rendering research
 
-The renderer is deliberately simple: greedy meshes, one vertex buffer per LOD per chunk, a texture
-array, and one draw per visible chunk. That holds 60 FPS at distance 24. This report covers what
-changes if distance or content grows.
+The renderer is deliberately simple: greedy meshes, one vertex and index buffer per LOD per chunk,
+a texture array, and one draw per visible chunk. That holds 60 FPS at distance 24. This report
+covers what changes if distance or content grows.
 
 ## Baseline (distance 24)
 
@@ -11,35 +11,37 @@ changes if distance or content grows.
 | Visible chunks | 1,436 |
 | Draw calls | 1,934 (opaque + water) |
 | Visible vertices | 2,984,484 |
-| Vertex size | 40 bytes (`position`, `normal`, `uv`, `layer`, `light_ao`) |
-| CPU frame | 1.8-2.1 ms |
-| Per-chunk GPU objects | Origin uniform buffer + bind group + one buffer per built LOD + water |
+| Vertex size | 12 bytes packed, four vertices and six 16/32-bit indices per quad |
+| CPU frame | 1.8-2.1 ms before packing; 2.2-2.6 ms at the settled distance-24 run after packing, while streaming |
+| Per-chunk GPU objects | Origin uniform buffer + bind group + one vertex and index buffer per built LOD + water |
+
+The memory and bandwidth figures below were measured before the v0.0.8 packing change; the
+options that landed are marked so the report still reads as a record.
 
 ## Cost model
 
-- **Vertex bandwidth.** 40 bytes per vertex, six vertices per quad, non-indexed. A 1,000-quad chunk
-  costs 240 KB of vertex data. At distance 24 the resident vertex buffers are the second largest
-  memory consumer after chunks.
+- **Vertex bandwidth.** 12 bytes packed, four vertices and six indices per quad. A 1,000-quad chunk
+  costs 48 KB of vertex data plus 12 KB of 16-bit indices. At distance 24 the resident vertex
+  buffers are the second largest memory consumer after chunks.
 - **State changes.** Each draw rebinds the chunk bind group and a vertex buffer. At 1,934 draws that
   is the dominant CPU encoder cost, and it grows linearly with distance.
 - **Overdraw.** Opaque chunks draw in chunk-map order with depth test and write. Front-to-back order
   would cut shaded fragments; back faces are now culled.
-- **Texture sampling.** One array lookup per fragment with a linear sampler; no mipmaps or
+- **Texture sampling.** One array lookup per fragment with a nearest sampler; no mipmaps or
   anisotropy, so distant surfaces shimmer and sample poorly.
 
 ## Options
 
-### 1. Indexed draws
+### 1. Indexed draws — implemented in v0.0.8
 
 Emit four vertices and six indices per quad. Saves 28% of vertex bytes with 16-bit indices and lets
 the post-transform cache reuse shaded vertices. Water and opaque meshes both benefit. The mesher
-needs per-chunk index buffers and a per-chunk index format choice.
+keeps a per-chunk index buffer and picks 16- or 32-bit indices per chunk.
 
-### 2. Packed vertices
+### 2. Packed vertices — implemented in v0.0.8
 
 Positions are chunk-local, so `u8` triples are plenty; the normal is one of six values, and the
-texture layer fits in the same word as the light/AO. A 12-16 byte vertex is realistic. This is the
-single biggest GPU memory and bandwidth win available without changing the renderer's shape.
+texture layer fits in the same word as the light/AO. The live vertex is 12 bytes, down from 40.
 
 ### 3. One origin buffer, not one per chunk
 
@@ -81,7 +83,7 @@ before committing; it changes the frame shape more than any item above.
 
 ## Recommendation
 
-1. Packed, indexed vertices. Do it together: one mesher change, one shader change, large effect.
+1. Packed, indexed vertices. Done in v0.0.8.
 2. Replace per-chunk origin buffers with an indexed storage buffer.
 3. Front-to-back ordering; a few lines for a GPU win.
 4. Megabuffer plus multi-draw once draw count, not vertices, is the limit.

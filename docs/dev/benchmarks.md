@@ -1,8 +1,9 @@
 # Benchmark results
 
-This page records local `pool_sim` runs. `pool_sim` simulates the v0.0.5 async-meshing frame
-loop to compare rayon with micropool. It is a decision aid, not a regression gate, and it is not
-run in CI. The benchmark source is the methodology; this page is the run log.
+This page records local `pool_sim` runs, engine runs, and the headless harness. `pool_sim` simulates
+the v0.0.5 async-meshing frame loop to compare rayon with micropool. It is a decision aid, not a
+regression gate, and it is not run in CI. The headless harness is the CI gate. The benchmark source
+is the methodology; this page is the run log.
 
 | Area | Status |
 |---|---|
@@ -11,7 +12,9 @@ run in CI. The benchmark source is the methodology; this page is the run log.
 | Run in CI | No |
 | Real renderer or GPU measurement | No; see [Profiling](profiling.md) |
 | Worker-pool decision | [ADR-0009](../decisions/0009-micropool-for-chunk-workers.md) |
-| Engine run (v0.0.5) | Current; see [Engine run](#engine-run-v005-release) |
+| Engine run (v0.0.5) | Historical baseline; see [Engine run](#engine-run-v005-release) |
+| Engine run (v0.0.8) | Current; see [Engine run](#engine-run-v008-release) |
+| Headless run (v0.0.8) | Current; gated by the `Perf` workflow |
 
 ## Run it
 

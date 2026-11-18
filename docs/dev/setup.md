@@ -41,7 +41,7 @@ xcode-select --install
 ```console
 cargo run
 cargo test
-cargo clippy --all-targets --all-features -- -D warnings
+cargo clippy --all-targets --locked -- -D warnings
 cargo fmt --all
 ```
 

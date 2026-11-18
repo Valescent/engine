@@ -97,7 +97,8 @@ RUST_LOG=engine=debug cargo run
 
 Check:
 
-- The window opens and shows the demo world with grass, dirt, stone, wood, and leaves.
+- The window opens and shows the generated world with grass, dirt, stone, wood, leaves, and sand.
+- Lighting matches the time of day: open surfaces are lit, caves are dark, and lamps glow.
 - WASD walks using yaw; `Space` jumps; the player lands on solid blocks and cannot walk through walls.
 - Mouse look works after clicking to capture; `Escape` releases the cursor without closing.
 - The wireframe outline follows the targeted block and disappears when nothing is in range.
@@ -105,7 +106,7 @@ Check:
 - Number keys `1`–`5` change the placed block type.
 - Placement inside the player or an occupied cell is rejected.
 - Block faces show the expected texture layers.
-- `Ctrl+S` and closing the window save `world/chunks/`; reopening restores the edits.
+- `Ctrl+S` and closing the window save modified chunks under `world/chunks/`; reopening restores the edits over the generated terrain.
 - `V` toggles vsync without stopping rendering and logs the resulting state.
 - `F3` toggles the FPS/frame-time overlay; values update once per second.
 - A malformed `.vchk` file produces a typed startup error rather than a panic.

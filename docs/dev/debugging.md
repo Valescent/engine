@@ -14,7 +14,7 @@ input bindings are in [Controls](controls.md). For a symptom-first index, see
 | FPS/frame-time overlay (`F3`) | Current |
 | `pool_sim` benchmark | Current |
 | Tracy CPU/GPU profiling | Current behind the `tracy` feature |
-| Milestone metrics | v0.0.3, v0.0.5, and v0.0.7 current |
+| Milestone metrics | v0.0.3, v0.0.5, v0.0.7, and v0.0.8 current |
 | Debug overlay and crash reporting | FPS/frame-time overlay current; crash reporting not implemented |
 
 ## Logging
@@ -34,7 +34,7 @@ or spans.
 | `info` | `engine::renderer` | Selected GPU adapter, with adapter name and backend. |
 | `info` | `engine::renderer` | Renderer ready, with surface size and vertex count. |
 | `info` | `engine` | Window ready, with physical size. |
-| `debug` | `engine` | Frame timing (`fps`, `frame_ms`, chunk counts, vertices, draw calls, rebuild/upload/generation times, generated columns) about once per second while focused. |
+| `debug` | `engine` | Frame timing (`fps`, `frame_ms`, chunk counts, vertices, draw calls, rebuild/upload/generation times, generated columns) about once per second while the window is visible. |
 | `debug` | `engine` | Toggled voxel, with the new voxel count. |
 | `debug` | `engine` | Cursor captured or released. |
 | `debug` | `engine` | Locked cursor grab unavailable; trying a confined grab. |
@@ -70,7 +70,7 @@ in both stderr and the file.
 - Pipeline creation uses a validation error scope. A shader or pipeline validation error becomes
   `RendererError::Validation`, which fails startup instead of being swallowed. See
   [Shader authoring](shaders.md#validate).
-- Planned world save/load errors are typed `SaveError`s; see
+- World save/load errors are typed `SaveError`s; see
   [World management](world-management.md#corruption-recovery).
 - Surface acquisition that reports validation logs an error and skips that frame.
 - There is no panic hook, crash reporter, or minidump writer.
@@ -106,6 +106,7 @@ does not compile it.
 | v0.0.3 | After an edit: dirty chunk count, total vertices, and rebuild time. Implemented. |
 | v0.0.5 | Per frame at debug level: frame time, visible and total chunks, vertices, draw calls, rebuild time, and upload time. Implemented. |
 | v0.0.7 | Per frame at debug level: generated columns and their elapsed generation time, plus queue depth, visible and total chunks, vertices, and frame time. Implemented; `generated_columns` and `generation_ms` are also Tracy plots. |
+| v0.0.8 | Headless runs print frame work percentiles, ready columns, pending jobs, and resident bytes. Implemented; the `Perf` workflow gates on them. |
 
 ## External tools
 

@@ -1,7 +1,7 @@
 # FAQ and troubleshooting
 
 Short answers for the current pre-alpha engine and a symptom-first index into the detailed pages.
-Only v0.0.1 through v0.0.6 are released; v0.0.7 is planned. A planned feature is not a bug.
+Only v0.0.1 through v0.0.7 are released; v0.0.8 is implemented and in acceptance. A planned feature is not a bug.
 
 | I need to... | Start here |
 |---|---|
@@ -14,23 +14,24 @@ Only v0.0.1 through v0.0.6 are released; v0.0.7 is planned. A planned feature is
 
 ## Project and status
 
-The current release is **v0.0.6, pre-alpha**. The build has a
-window, a depth-buffered `wgpu` renderer, chunked greedy meshes with two LODs, frustum culling, asynchronous remeshing, walking and collision,
-block breaking and placing, procedural block textures, and `VCHK` chunk saves. It does not have
-lighting, fog, water, or terrain generation.
+The current release is **v0.0.7, pre-alpha**; v0.0.8 is implemented and in acceptance. The build has a
+window, a depth-buffered `wgpu` renderer, seeded procedural terrain, chunked greedy meshes with three
+LODs, frustum culling, asynchronous remeshing, seed-native streaming, walking and collision, block
+breaking and placing, procedural block textures, voxel lighting with baked AO, fog and water, and
+`VCHK` chunk saves.
 
 | Question | Answer |
 |---|---|
 | What is Valescent Engine? | A voxel engine written in Rust on `wgpu` and `winit`. It is source-available, not open source. See [the landing page](index.md) and [Architecture](dev/architecture.md). |
-| What is the current version? | `0.0.6` is released. v0.0.7 is planned. See [Roadmap](roadmap.md) and [Changelog](https://github.com/Valescent/engine/blob/main/CHANGELOG.md). |
+| What is the current version? | `0.0.7` is released; `0.0.8` is implemented and awaiting release. See [Roadmap](roadmap.md) and [Changelog](https://github.com/Valescent/engine/blob/main/CHANGELOG.md). |
 | Is it stable? | No. It is pre-alpha and there is no public API stability before 1.0. See [Versioning](dev/versioning.md). |
 | Why is the version `0.0.x`? | Each roadmap milestone ships as the next `0.0.x` patch. There is no `0.1.0` or `1.0.0` target yet. See [Versioning](dev/versioning.md#semantic-versioning). |
-| What is next? | v0.0.7 for procedural terrain, biomes, and streaming. See [the roadmap](roadmap.md). |
+| What is next? | The v0.0.8 scale pass is in acceptance; lighting and terrain are drawn up in the [design pages](design/lighting-pipeline.md). See [the roadmap](roadmap.md). |
 | Why is the world one mesh? | It is not. Since v0.0.3 each non-empty chunk owns its mesh and GPU buffer. See [Architecture](dev/architecture.md#rendering-resources). |
 | Can I walk, fall, jump, or collide? | Yes. WASD walks, `Space` jumps, and swept AABB collision stops the player at solid blocks. See [Controls](dev/controls.md#bindings-by-milestone). |
 | Can I break or place blocks? | Yes, after the cursor is captured. Left click breaks and right click places the selected block. See [Interaction](dev/controls.md#interaction-current-v004). |
 | Why are there no light, fog, or water? | They are current: v0.0.6 added voxel light, AO, fog, and water. Procedural block textures shipped in v0.0.4. See the [Roadmap](roadmap.md). |
-| Is there multiplayer, a server, modding, or scripting? | No. They are out of scope through v0.0.7. See the non-goals in the [Roadmap](roadmap.md). |
+| Is there multiplayer, a server, modding, or scripting? | No. They are out of scope through v0.0.8. See the non-goals in the [Roadmap](roadmap.md). |
 | What platforms are supported? | Windows, Linux, and macOS through `winit`/`wgpu`, with Vulkan, Direct3D 12, or Metal. CI tests all three. See [Setup](dev/setup.md#platform-prerequisites) and [CI](dev/ci.md#ci-workflow). |
 | Are there release binaries? | No. The release workflow publishes changelog notes, not binaries. See [CI](dev/ci.md#release-workflow) and [Release checklist](dev/release-checklist.md). |
 | What licence is it under? | PolyForm Shield License 1.0.0. It is source-available, not OSI open source. See [the licence](https://github.com/Valescent/engine/blob/main/LICENSE). |
@@ -82,7 +83,7 @@ lighting, fog, water, or terrain generation.
 | Faces are missing or inside-out | Check winding, front face, and cull mode. See [Shader debugging](dev/shaders.md#debug). |
 | Resizing or minimising breaks the image | The renderer reconfigures the surface and clamps zero-sized dimensions. See [Rendering resources](dev/architecture.md#rendering-resources). |
 | Why do blocks show noise patterns? | The current tiles are deterministic procedural placeholders, not final art. See [Texture pipeline](dev/textures.md). |
-| Where are the game textures or assets? | There are no image assets yet. v0.0.6 generates ten procedural tiles; `docs/assets/` is documentation-site material. See [Current texture state](dev/textures.md#current-state). |
+| Where are the game textures or assets? | There are no image assets yet. v0.0.7 generates eleven procedural tiles; `docs/assets/` is documentation-site material. See [Current texture state](dev/textures.md#current-state). |
 | Can I use my own textures or a texture pack? | Not yet. The external asset pipeline and texture-pack format are deferred. See [External assets](dev/textures.md#external-assets-and-texture-packs). |
 | Why is there no lighting, fog, or water? | There is: v0.0.6 ships voxel light, AO, day/night, fog, and water. See the [Roadmap](roadmap.md) and [v0.0.6 spec](specs/v0.0.6.md). |
 | How do I add or change a shader? | Follow [Shader authoring](dev/shaders.md). A shader edit needs a rebuild; there is no hot reload. |
@@ -95,30 +96,30 @@ lighting, fog, water, or terrain generation.
 | Question or symptom | Answer |
 |---|---|
 | How do I measure FPS and frame time? | Run with `RUST_LOG=engine=debug` and read `fps` and `frame_ms`. See [Logging](dev/debugging.md#logging). |
-| Why is performance low? | The world uses one draw per visible chunk, greedy meshes, two LODs, frustum culling, and asynchronous remeshing. Missing are occlusion culling, streaming, lighting, and terrain generation. See [Current limitations](dev/architecture.md#current-limitations) and the [Roadmap](roadmap.md). |
+| Why is performance low? | The world uses one draw per visible chunk and water mesh, greedy meshes with three LODs, frustum culling, and asynchronous remeshing at a render distance of `8..=32`. Missing are occlusion culling and batched indirect draws. See [Current limitations](dev/architecture.md#current-limitations) and the [Roadmap](roadmap.md). |
 | Is Tracy integrated? | Yes, behind the `tracy` feature: `cargo run --features tracy` adds CPU spans, memory events, GPU timer zones, and metric plots. See [Profiling](dev/profiling.md). |
-| Why are there no GPU timings? | `wgpu-profiler` and timestamp queries are not integrated. See [Profiling](dev/profiling.md). |
+| Why are there no GPU timings? | There are with the local `tracy` feature: `wgpu-profiler` adds GPU zones when the adapter supports timestamp queries. Without the feature, no GPU timing is recorded. See [Profiling](dev/profiling.md). |
 | What is `pool_sim`? | A benchmark that compares rayon with micropool on the v0.0.5 async-meshing frame loop. It is a decision aid, not a CI gate. See [Current aids](dev/debugging.md#current-aids) and [Benchmark results](dev/benchmarks.md). |
 | Why does the window keep redrawing? | Continuous redraw runs even while unfocused so profilers keep receiving frames; only occlusion pauses it. Input stays focus-gated. See [Frame flow](dev/architecture.md#frame-flow). |
 | Should I profile a debug or release build? | Use dev for symbols and release for realistic frame times. See [Profiling](dev/profiling.md). |
-| A frame is stuttering | There is no async meshing or LOD yet, and frame delta is clamped to `100 ms`. See [Architecture](dev/architecture.md) and [Profiling](dev/profiling.md). |
+| A frame is stuttering | Check `frame_ms` and the overlap of uploads with streaming, then profile with Tracy. Frame delta is clamped to `100 ms`. See [Architecture](dev/architecture.md) and [Profiling](dev/profiling.md). |
 
 ## World, saves, and files
 
 | Question or symptom | Answer |
 |---|---|
-| Where are my saves? | Under `world/chunks/`, one `VCHK` file per non-empty chunk. v0.0.7 adds `world/seed` and modified-only saves. See [World management](dev/world-management.md). |
+| Where are my saves? | Under `world/chunks/`, one `VCHK` v3 file per modified chunk; unmodified chunks regenerate from `world/seed`. See [World management](dev/world-management.md). |
 | Closing the window lost my edits | The engine saves on a clean window close and on `Ctrl+S`. A crash or forced kill loses edits since the last save. See [World management](dev/world-management.md). |
 | How do I back up, restore, recover, or reset a world? | See [Backups](dev/world-management.md#backups), [Restore](dev/world-management.md#restore), [Corruption recovery](dev/world-management.md#corruption-recovery), and [Reset](dev/world-management.md#reset). |
-| Why is `world/` missing? | It is created on the first save. A missing `world/chunks/` on startup seeds the demo world. See [World directory](dev/world-management.md#world-directory). |
+| Why is `world/` missing? | It is created on the first save. A missing `world/` creates a new seed and generates the world. See [World directory](dev/world-management.md#world-directory). |
 | What is `world/seed`? | A v0.0.7 file containing one decimal `u64`, used to regenerate unmodified chunks. See [World directory](dev/world-management.md#world-directory). |
 | Why is `world/` ignored by Git? | It is local save data, not source. Back it up outside the repository. See [Paths](dev/configuration.md#paths) and [World management](dev/world-management.md). |
-| Can I import or export a world? | No importer or exporter exists. The format is `VCHK` v1, one file per saved chunk. See [World management](dev/world-management.md) and [ADR-0008](decisions/0008-chunk-save-format.md). |
-| Where is `config.toml`? | It is not read yet. Current inputs are environment variables and compile-time constants. See [Configuration](dev/configuration.md). |
+| Can I import or export a world? | No importer or exporter exists. The format is `VCHK` v3, one file per modified chunk. See [World management](dev/world-management.md) and [ADR-0008](decisions/0008-chunk-save-format.md). |
+| Where is `config.toml`? | In the process working directory. It is read once at startup and only sets `world.render_distance_chunks`. See [Configuration](dev/configuration.md). |
 | Where are the logs? | They go to stderr today. A per-run `logs/` file is planned with no milestone. See [Logging](dev/debugging.md#logging). |
 | What is the stress scene? | `ENGINE_STRESS_SCENE=1` loads a deterministic 64-chunk in-memory scene that bypasses `world/chunks/` and saving. See [Configuration](dev/configuration.md) and the [v0.0.5 spec](specs/v0.0.5.md). |
-| Can I choose the world seed? | v0.0.7 will read `world/seed`; see [Choose a seed](dev/world-management.md#choose-a-seed). |
-| Can I change the render distance? | It is planned as `world.render_distance_chunks` in v0.0.7. See [Configuration](dev/configuration.md). |
+| Can I choose the world seed? | Yes, through `world/seed`; see [Choose a seed](dev/world-management.md#choose-a-seed). `ENGINE_SEED=<u64>` chooses the seed of a new world. |
+| Can I change the render distance? | Yes: `world.render_distance_chunks` in `config.toml`, `8..=32`, default `12`. See [Configuration](dev/configuration.md). |
 
 ## Docs, CI, and contributing
 
@@ -129,7 +130,7 @@ lighting, fog, water, or terrain generation.
 | Does CI check documentation links? | No. It builds mdBook but does not run a link checker. See [CI](dev/ci.md#ci-workflow). |
 | Which mdBook and typos versions does CI use? | mdBook `0.5.4` and typos `1.52.2`. See [CI](dev/ci.md#docs-workflow). |
 | Why does CI not use `--all-features`? | The optional `tracy` feature builds a C++ client and stays local, so CI uses explicit commands. See [CI](dev/ci.md#ci-workflow) and [Profiling](dev/profiling.md#constraints). |
-| Why are benchmarks, GPU tests, coverage, and link checks not in CI? | They are current CI gaps. See [CI](dev/ci.md). |
+| Why are benchmarks, GPU tests, coverage, and link checks not in CI? | `Perf` gates the headless harness, but `pool_sim`, GPU tests, coverage, and link checks are still gaps. See [CI](dev/ci.md). |
 | My commit was rejected | Commits follow [Conventional Commits](https://www.conventionalcommits.org). See [Commits](CONTRIBUTING.md#commits). |
 | CI says the changelog is missing | `feat`, `fix`, `perf`, `refactor`, and `revert` commits need an `[Unreleased]` entry. See [Changelog](CONTRIBUTING.md#changelog) and [Commits workflow](dev/ci.md#commits-workflow). |
 | Do I need an ADR? | Architectural changes do. Start from the [decision index](decisions/index.md#conventions) and the template. |
@@ -147,8 +148,8 @@ lighting, fog, water, or terrain generation.
 | No window, no adapter, or a driver error | [Graphics backend](dev/setup.md#graphics-backend), [Rendering failures](dev/testing.md#rendering-failures) |
 | Window opens but the scene is black | [Rendering failures](dev/testing.md#rendering-failures), [Shader debugging](dev/shaders.md#debug) |
 | Startup fails with a validation error | [Validate shaders](dev/shaders.md#validate), [Errors and panics](dev/debugging.md#errors-and-panics) |
-| Mouse look does not work | [Current capture and focus](dev/controls.md#current-capture-and-focus-v002) |
-| Cursor is stuck or hidden | [Current capture and focus](dev/controls.md#current-capture-and-focus-v002) |
+| Mouse look does not work | [Current capture and focus](dev/controls.md#current-capture-and-focus-v004) |
+| Cursor is stuck or hidden | [Current capture and focus](dev/controls.md#current-capture-and-focus-v004) |
 | WASD or `Space` does something unexpected | [Bindings by milestone](dev/controls.md#bindings-by-milestone) |
 | Low FPS, stutter, or no frame-time log | [Logging](dev/debugging.md#logging), [Profiling](dev/profiling.md) |
 | Tracy or GPU timings are missing | [Profiling](dev/profiling.md#run-tracy) |

@@ -10,9 +10,10 @@ them.
 | `Docs` workflow | Current |
 | `Commits` workflow | Current |
 | `Release` workflow | Current |
+| `Perf` workflow | Current; headless runs on `main` |
 | Dependabot | Current |
 | Release binaries | Not built |
-| Coverage, GPU tests, benchmarks, link checks | Not covered |
+| Coverage, GPU tests, pool benchmark, link checks | Not covered |
 
 ## Workflow map
 
@@ -22,10 +23,11 @@ them.
 | `Docs` | `.github/workflows/docs.yml` | Push to `main`, pull request, manual dispatch | mdBook build, GitHub Pages deploy |
 | `Commits` | `.github/workflows/commits.yml` | Push to `main`, pull request | Conventional Commits, changelog gate |
 | `Release` | `.github/workflows/release.yml` | `v*` tag push, manual dispatch | Version bump, GitHub release |
+| `Perf` | `.github/workflows/perf.yml` | Push to `main`, manual dispatch | Headless static and walking runs, budget gate |
 | Dependabot | `.github/dependabot.yml` | Weekly schedule | Grouped Cargo and Actions updates |
 
 `Docs` builds on pull requests but deploys only on non-pull-request events. `Release` does not
-run on pull requests.
+run on pull requests. `Perf` does not run on pull requests.
 
 ## CI workflow
 
@@ -107,6 +109,22 @@ The workflow builds no binaries and attaches no artifacts. A GitHub release cont
 changelog notes only. See [Versioning](versioning.md) for the version and tag policy, and
 [Release checklist](release-checklist.md) for the full procedure.
 
+## Perf workflow
+
+`Perf` declares `contents: read`, cancels superseded runs in the same ref group, and runs on
+`ubuntu-latest` with a 20-minute timeout. It builds with `cargo build --release --locked`, then
+runs the headless harness twice with `ENGINE_HEADLESS=1`, `ENGINE_HEADLESS_FRAMES=600`, and
+`ENGINE_SEED=42`:
+
+- a static camera at distance 12 (`ENGINE_HEADLESS_SPEED=0`);
+- a walk at 32 m/s (`ENGINE_HEADLESS_SPEED=32`).
+
+Each `HEADLESS` summary line is appended to the job summary, and the budget step gates on 625
+ready columns, mean frame work under 20 ms, p95 under 50 ms, and resident blocks and light under
+200 MB. Both raw outputs are uploaded as the `headless-results` artifact. The budgets are
+deliberately generous because GitHub runners are shared; they catch order-of-magnitude
+regressions, not small drift. See [Benchmark results](benchmarks.md#headless-run-v008).
+
 ## Dependency updates
 
 Dependabot runs weekly for Cargo and GitHub Actions, both rooted at `/`. Updates are grouped
@@ -152,8 +170,8 @@ test, rustdoc, typos, and mdBook checks before a release.
 
 - Declare explicit workflow permissions: read-only for `CI` and `Commits`, `contents: write`
   for `Release`, and Pages permissions for `Docs`.
-- Cancel superseded `CI` and `Commits` runs. Do not cancel `Docs` deployments or `Release`
-  runs.
+- Cancel superseded `CI`, `Commits`, and `Perf` runs. Do not cancel `Docs` deployments or
+  `Release` runs.
 - Use `--locked` for Clippy and tests. Do not switch these to `--all-features`: the optional
   `tracy` feature builds a C++ client and stays local (ADR-0006).
 - Reference actions by version tags and let Dependabot update them.
@@ -167,7 +185,7 @@ test, rustdoc, typos, and mdBook checks before a release.
 |---|---|
 | Release binaries | No build or upload step; releases contain changelog notes only. |
 | GPU and window tests | Not run; rendering is checked manually. |
-| Benchmarks | `pool_sim` is not run in CI. |
+| Benchmarks | `pool_sim` is not run in CI. `Perf` runs the headless harness, not `pool_sim`. |
 | Public API diff or semver check | Not run; the API is unstable and unpublished. See [Public API](public-api.md). |
 | Coverage | Not measured. |
 | mdBook link checking | Not run. |

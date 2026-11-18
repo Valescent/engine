@@ -21,7 +21,8 @@ out of scope; see [Out of scope](#out-of-scope).
 window title embeds the version at compile time through `CARGO_PKG_VERSION`.
 
 - Git tags are `vX.Y.Z`. The `v` prefix comes from `cog.toml`.
-- `v0.0.1` through `v0.0.6` are the current release tags.
+- `v0.0.1` through `v0.0.7` are the current release tags. `v0.0.8` is implemented and awaiting
+  release.
 - Release from the script rather than tagging by hand, so the tag and manifest stay in sync.
 - The package has `publish = false`. No crates.io releases are part of the versioning scheme.
 - Version numbers in the roadmap, scope pages, and README are updated manually during release;
@@ -88,9 +89,9 @@ surface and the gate for a stable reference are in [Public API](public-api.md).
 
 ## Out of scope
 
-- **Save formats.** The planned `VCHK` format has its own format-version field. That policy is
+- **Save formats.** The `VCHK` format has its own format-version field. That policy is
   separate from the package version; see the [v0.0.4 scope](v0.0.4-scope.md) and
-  [ADR 0005](../decisions/0005-bytemuck-for-gpu-layout.md).
+  [ADR 0008](../decisions/0008-chunk-save-format.md).
 - **MSRV.** The workspace pins Rust `1.99.1` in `rust-toolchain.toml`, `Cargo.toml`, and
   `clippy.toml`. No support window or versioning policy for older compilers is defined here; see
   [Configuration](configuration.md).

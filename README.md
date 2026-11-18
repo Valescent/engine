@@ -2,7 +2,7 @@
 
 A voxel engine written in Rust.
 
-**Status: pre-alpha.** `0.0.1` through `0.0.6` are released; `0.0.7` is implemented and in acceptance. The world is procedurally generated from a saved seed, streams in and out around the player, and keeps player edits. It has voxel lighting, ambient occlusion, a day/night cycle, distance fog, and transparent animated water.
+**Status: pre-alpha.** `0.0.1` through `0.0.7` are released; `0.0.8` is implemented and in acceptance. The world is procedurally generated from a saved seed, streams in and out around the player, and keeps player edits. It has voxel lighting, ambient occlusion, a day/night cycle, distance fog, transparent animated water, and three LOD levels out to a configurable render distance.
 
 This is **source-available, not open source**. The code is under the [PolyForm Shield License 1.0.0](LICENSE): you may read, run, modify, and redistribute it, but not use it to provide a product that competes with it. PolyForm Shield is not OSI-approved.
 
@@ -49,7 +49,7 @@ See [`docs/dev/controls.md`](docs/dev/controls.md) for the full binding table.
 
 ```console
 cargo test
-cargo clippy --all-targets -- -D warnings
+cargo clippy --all-targets --locked -- -D warnings
 cargo fmt --all
 ```
 
@@ -77,7 +77,7 @@ See [`docs/dev/setup.md`](docs/dev/setup.md) for platform details and [`docs/dev
 |---|---|
 | `src/` | Library and binary crate. |
 | `docs/` | [Roadmap](docs/roadmap.md), [decision records](docs/decisions/index.md), development guide. |
-| `scripts/` | Release tooling. |
+| `scripts/` | Release, changelog, and progress tooling. |
 | `.github/` | CI, issue and pull request templates, Dependabot. |
 
 ## Documentation
@@ -96,7 +96,7 @@ The documentation site is published at **https://valescent.github.io/engine/**.
 - [v0.0.5 spec](docs/specs/v0.0.5.md) - normative greedy meshing, LOD, frustum, async, and stress-scene contract.
 - [v0.0.6 spec](docs/specs/v0.0.6.md) - normative light, AO, day/night, fog, water, and VCHK v2 contract.
 - [v0.0.7 spec](docs/specs/v0.0.7.md) - normative generation, biomes, streaming, modified saves, and VCHK v3 contract.
-- [Configuration](docs/dev/configuration.md) - runtime inputs, the planned config file, and repository tooling.
+- [Configuration](docs/dev/configuration.md) - runtime inputs, the config file, and repository tooling.
 - [World management](docs/dev/world-management.md) - backups, corruption recovery, and reset.
 - [Debugging](docs/dev/debugging.md) - logging, error reporting, and the planned log file.
 - [Profiling](docs/dev/profiling.md) - Tracy CPU, memory, and GPU timelines behind the local `tracy` feature.

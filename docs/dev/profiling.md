@@ -16,7 +16,7 @@ guessed at. [ADR-0006](../decisions/0006-tracy-for-profiling.md) selects this pa
 | `tracy` Cargo feature | Current; local builds only, not in CI |
 | Timestamp-query device features | Requested only with `tracy`, intersected with adapter support |
 | Memory allocations | Current; `ProfiledAllocator` in `src/main.rs` |
-| Plots | Current; `frame_ms`, `gpu_ms`, `visible_chunks`, `draw_calls`, `visible_vertices`, `rebuild_ms`, `upload_ms`, `mesh_jobs` |
+| Plots | Current; `frame_ms`, `gpu_ms`, `visible_chunks`, `draw_calls`, `visible_vertices`, `rebuild_ms`, `upload_ms`, `mesh_jobs`, `generated_columns`, `generation_ms` |
 | Frame-timing log | Current; see [Debugging](debugging.md#logging) |
 | `pool_sim` benchmark | Current; see [Benchmark results](benchmarks.md) |
 | Frame debuggers (RenderDoc, Nsight, PIX) | Complementary external tools; see ADR-0006 |
@@ -214,6 +214,8 @@ cap fills and newer frames are dropped. The returned per-scope times are in seco
 | `present` | main | `Queue::present` |
 | `profiler end` | main | `wgpu-profiler` frame end and timestamp readback |
 | `chunk mesh` | worker | One greedy mesh from a chunk snapshot |
+| `chunk generate` | worker | One generation job for a column |
+| `chunk light` | worker | One light propagation job |
 
 Rules:
 
@@ -246,6 +248,8 @@ pub(crate) fn frame_ms(value: f64) {
 | `rebuild_ms` | Worker mesh time received this frame |
 | `upload_ms` | Main-thread vertex-buffer upload time this frame |
 | `mesh_jobs` | Mesh jobs currently in flight |
+| `generated_columns` | Columns committed to the world this frame |
+| `generation_ms` | Worker generation time received this frame |
 
 Plots are emitted every frame. Do not add a plot per chunk.
 
@@ -261,7 +265,7 @@ connects and the client connects automatically over loopback. The GUI then shows
 
 - the CPU timeline, including `frame`, `player update`, `mesh request`, `mesh upload`, `encode`,
   and the `chunk worker` lanes;
-- the frame graph from the `frame` marks and the eight plots above;
+- the frame graph from the `frame` marks and the ten plots above;
 - the memory view from the global allocator: live allocations, frees, and allocation counts;
 - GPU zones `world` and `terrain` once a few frames of timestamp readback have completed.
 

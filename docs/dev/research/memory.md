@@ -1,8 +1,8 @@
 # Memory research
 
-Resident memory is the nearest ceiling on render distance. At distance 24 the engine holds 5,394
-chunks in 637 MB, about 118 KiB per stored chunk. At distance 32 that is roughly 230 MB more before
-meshes.
+Resident memory is the nearest ceiling on render distance. At distance 24 the engine holds about
+5,300 settled chunks in 626 MB, roughly 118 KiB per stored chunk before the v0.0.8 vertex packing
+and somewhat less after it. At distance 32 that is roughly 230 MB more before meshes.
 
 ## Where the bytes go
 
@@ -13,26 +13,27 @@ meshes.
 | Mesh buffers | ~40 KiB | ~215 MB | Opaque plus water, split across LODs |
 | Allocator and wgpu | - | ~38 MB | Fragmentation, buffers, bind groups |
 
+The per-chunk figures are the pre-v0.0.8 baseline. The 12-byte indexed vertex keeps mesh buffers
+lower; the settled distance-24 working set was 626 MB before the headless gate was added.
+
 A light job is transiently far larger than a chunk: it copies a 3x3 footprint (27 chunks, 864 KiB)
 and allocates a 96^3 working grid with three `u8` arrays (2.65 MB). With 44 jobs in flight the
 engine can hold about 150 MB of scratch that never shows up in the per-chunk table.
 
 ## Options
 
-### 1. Indexed and packed vertices
+### 1. Indexed and packed vertices — implemented in v0.0.8
 
-The mesh emits six 40-byte vertices per quad and draws non-indexed. Two independent wins:
+The mesh used to emit six 40-byte vertices per quad and draw non-indexed. Two independent wins:
 
 - **Indices**: four vertices plus six indices is 160 + 12 bytes (16-bit indices) instead of 240, a
-  28% cut. The GPU post-transform cache also reuses shaded vertices. This requires 16-bit indices
-  per chunk (65,536 vertices is the limit; a LOD0 chunk with many materials can exceed it, so pick
-  16 or 32-bit per chunk).
-- **Packing**: positions fit in chunk-local `u8` triples, the normal and texture layer in one `u16`,
-  and light/AO is already a `u16`. A 12-16 byte vertex is realistic against 40 today, another 60%
-  cut on top of indices.
+  28% cut. The GPU post-transform cache also reuses shaded vertices. The mesher picks 16- or
+  32-bit indices per chunk.
+- **Packing**: positions fit in chunk-local `u8` triples, the face index replaces the normal, and
+  the texture layer shares the second word. The live vertex is 12 bytes, down from 40.
 
-Combined, the mesh side can fall from ~215 MB to ~60-80 MB at distance 24, with the same or better
-GPU vertex throughput. The cost is shader decode and mesher changes; both are contained.
+Combined, the mesh side fell from ~215 MB to ~60-80 MB at distance 24, with the same or better
+GPU vertex throughput. The cost was shader decode and mesher changes; both were contained.
 
 ### 2. Nibble block IDs
 
@@ -87,7 +88,7 @@ measured A/B, with no API change.
 
 ## Recommendation
 
-1. Packed, indexed vertices. Largest and most visible win, and it also cuts GPU bandwidth.
+1. Packed, indexed vertices. Done in v0.0.8.
 2. Nibble block IDs. Simple, contained, and halves the block array.
 3. Reuse light scratch per worker. Least effort, removes hidden spikes.
 4. LZ4 `VCHK` v4 with atomic writes on an I/O thread. Smaller saves and no frame stalls.

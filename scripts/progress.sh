@@ -15,7 +15,7 @@ commits=$(git rev-list --count HEAD)
 tests=$(grep -rh --include='*.rs' -c '#\[test\]' src | awk '{ n += $1 } END { print n + 0 }')
 loc=$(find src -name '*.rs' -exec cat {} + | wc -l | tr -d ' ')
 pages=$(find docs -name '*.md' | wc -l | tr -d ' ')
-adrs=$(find docs/decisions -name '0[0-9][0-9][0-9]-*.md' | wc -l | tr -d ' ')
+adrs=$(find docs/decisions -name '0[0-9][0-9][0-9]-*.md' ! -name '0000-*' | wc -l | tr -d ' ')
 
 git log --date=short --format=%ad |
 	awk -v commits="$commits" \

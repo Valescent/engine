@@ -6,9 +6,9 @@ environment variables.
 
 | Area | Status |
 |---|---|
-| Runtime `config.toml` | Current (v0.0.7) |
+| Runtime `config.toml` | Current (v0.0.7); render distance range extended in v0.0.8 |
 | Remappable bindings | Planned, no milestone |
-| Render distance | Current (v0.0.7) |
+| Render distance | Current (v0.0.8) |
 | Environment variables | Current |
 | Compile-time constants | Current |
 | Repository tooling | Current |
@@ -76,7 +76,7 @@ render_distance_chunks = 12
   timing; those stay environment variables or compile-time constants.
 - The render distance sets the streaming ring, the camera far plane
   (`(render_distance + 2) * 32` metres), and the fog range (`0.7 * render_distance * 32` to
-  `render_distance * 32` metres). See the [v0.0.7 spec](../specs/v0.0.7.md).
+  `render_distance * 32` metres). See the [v0.0.8 spec](../specs/v0.0.8.md).
 - Remappable bindings are still planned with no milestone.
 
 ### Paths
@@ -85,7 +85,7 @@ render_distance_chunks = 12
 |---|---|
 | `config.toml` | Current (v0.0.7); working directory. |
 | `world/` | Current (v0.0.4); working directory. |
-| `world/seed` | Planned (v0.0.7); decimal world seed. |
+| `world/seed` | Current (v0.0.7); decimal world seed. |
 | `logs/` | Planned; working directory; per-run log files. |
 
 Both are resolved against the process working directory. `.gitignore` ignores `/target`,
@@ -146,6 +146,7 @@ duplicate crate versions.
 | `.github/workflows/docs.yml` | Builds with mdBook `0.5.4` and deploys to GitHub Pages. |
 | `.github/workflows/commits.yml` | Conventional Commit check and the changelog-entry gate for user-facing commits. |
 | `.github/workflows/release.yml` | Tag-triggered or manual release. Manual runs call `scripts/release.sh`; tag pushes publish the GitHub release. |
+| `.github/workflows/perf.yml` | Runs the headless static and walking scenes on `main` and gates on generous budgets. |
 | `.github/dependabot.yml` | Weekly grouped Cargo and GitHub Actions updates. |
 
 See [CI](ci.md) for the full workflow map, local equivalents, and current gaps.

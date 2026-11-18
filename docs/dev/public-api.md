@@ -65,8 +65,8 @@ pub struct ChunkCoord(IVec3);
   or accessor; the world-facing methods are `pub(crate)`.
 - `RendererError` is defined in the private `renderer` module, `SaveError` in the private `world`
   module; their re-exports are public API.
-- There are no public modules, traits, constants, macros, or Cargo features.
-  `--all-features` currently selects nothing.
+- There are no public modules, traits, constants, or macros. The crate has two optional Cargo
+  features, `tracy` and `rayon-pool`, and both are development aids rather than API surface.
 - None of the error enums or `ChunkCoord` is `#[non_exhaustive]`. Adding a variant is a breaking
   change under the current definition.
 - The public errors expose `winit`, `wgpu`, and `std::io` error types directly. Their stability is
@@ -78,9 +78,9 @@ This surface has no semver compatibility promise. Any `0.0.x` release may change
 
 - `App`, `Camera`, `Player`, `Aabb`, `Block`, `Renderer`, `Vertex`, `World`, `RaycastHit`, `Lod`,
   `build_mesh`, `MeshQueue`, `WorkerPool`, `Frustum`, and renderer helpers are private or `pub(crate)`.
-- The `block`, `camera`, `frustum`, `mesh`, `mesher`, `metrics`, `overlay`, `player`, `raycast`, `renderer`,
-  `voxel`, and `world` modules
-  are private. Paths such as `engine::Camera` or `engine::Renderer` do not exist.
+- The `block`, `camera`, `config`, `frustum`, `generation`, `headless`, `light`, `mesh`, `mesher`,
+  `metrics`, `overlay`, `player`, `raycast`, `renderer`, `sky`, `streaming`, `voxel`, and `world`
+  modules are private. Paths such as `engine::Camera` or `engine::Renderer` do not exist.
 - `src/main.rs` is the only in-repo consumer. It calls `engine::run()` and returns
   `engine::RunError`.
 - The shader, mesh layout, texture pipeline, world state, and configuration are not public API.

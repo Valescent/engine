@@ -33,8 +33,11 @@
 
 # Design
 
+- [Lighting pipeline](design/lighting-pipeline.md)
 - [Terrain pipeline](design/terrain-pipeline.md)
+- [Terrain interview notes](design/terrain-interview.md)
 - [Seed-native LOD hierarchy](design/lod-hierarchy.md)
+- [Terrain reference notes](design/terrain-lessons.md)
 
 # Development
 

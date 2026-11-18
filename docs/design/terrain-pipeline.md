@@ -8,10 +8,10 @@ until a later ADR and spec say so. If this page disagrees with a spec, the spec 
 
 ## Why this page exists
 
-The [roadmap](../roadmap.md) stops at [v0.0.7](../specs/v0.0.7.md). That milestone ends with a
-finite, deterministic, seeded voxel world: five noise fields, heightmap terrain, caves, three
-biomes, trees, player-centred streaming, two LOD levels, and modified-chunk saves. It is a
-complete first world, not a terrain platform.
+The [roadmap](../roadmap.md) has shipped through [v0.0.7](../specs/v0.0.7.md), with v0.0.8 in
+acceptance. v0.0.7 ended with a finite, deterministic, seeded voxel world: five noise fields,
+heightmap terrain, caves, three biomes, trees, player-centred streaming, two LOD levels, and
+modified-chunk saves. It is a complete first world, not a terrain platform.
 
 This page describes the terrain platform that could grow after it. The goal is not more
 content in the same shape. The goal is a pipeline whose stages can be added, measured,
@@ -23,7 +23,7 @@ replaced, and versioned without rewriting the world model each time.
 
 ## What v0.0.7 establishes
 
-v0.0.7 is scoped but not implemented. This table describes its contract, not current behaviour.
+v0.0.7 has shipped; this table describes the contract it established.
 
 | Area | v0.0.7 contract | What it leaves open |
 |---|---|---|
@@ -62,8 +62,9 @@ These are the places where extending the v0.0.7 shape starts to hurt.
 
 1. **Terrain is a pure function.** Generation reads a world description and a coordinate. It
    does not read the clock, global RNG, chunk load order, or mutable engine state.
-2. **Edits are an overlay.** The generated baseline stays immutable for a given world version.
-   Player changes are a sparse, ordered, authoritative layer on top of it.
+2. **Saved data is the world.** A generated column is written once and thereafter only edited.
+   There is no regeneration of a saved column, and the edit log exists for undo and audits, not
+   for rebuilding terrain.
 3. **One versioned description.** Seed, generator version, parameter set, and content pack are
    one identity. A world is pinned to that identity.
 4. **Determinism has a defined boundary.** Same binary and platform is the baseline. Stronger
@@ -96,9 +97,9 @@ field graph ---> climate, terrain shape, caves, hydrology
         +--------------------+
                              |
                              v
-                     chunk baseline (immutable)
+                     generated section (immutable until edited)
                              |
-        player edits ---> chunk overlay <--- load/save
+        player edits ---> saved effective section <--- load/save
                              |
                              v
                      effective chunk data
@@ -118,13 +119,13 @@ field graph ---> climate, terrain shape, caves, hydrology
 |---|---|---|---|---|
 | World description | World manifest and content | Versioned description | Main thread | Yes, once per world |
 | Field graph | Description and position | Field samples | Workers, later GPU | Yes, per field tile |
-| Volume synthesis | Fields and rules | Baseline blocks | Workers | Yes, per baseline chunk |
+| Volume synthesis | Fields and rules | Generated blocks | Workers | Yes, per generated chunk |
 | Feature placement | Description and chunk | Feature index and writes | Workers | Yes, deterministic |
 | Residency | Description and player | Jobs and readiness state | Main thread | No |
 | Lighting | Effective blocks | Light field | Workers | Derived |
 | Meshing | Effective blocks, light | Mesh per LOD | Workers, later GPU | Derived |
 | Upload and render | Mesh buffers | Frames | Main thread | No |
-| Edits and persistence | Input and overlay | Overlay, journal, save files | Main thread and workers | Authoritative |
+| Edits and persistence | Input and saved sections | Effective sections, edit log | Main thread and workers | Authoritative |
 
 ### 1. World description
 
@@ -285,25 +286,31 @@ CPU remains the authority for collision, edits, and persistence.
 
 ### 9. Edits and persistence
 
-The save model should move from "whole modified chunk" to "baseline plus overlay plus journal".
+> **Superseded by the [terrain interview](terrain-interview.md).** The confirmed model saves
+> *effective* (post-edit) sections as the single source of truth; a saved column is never
+> regenerated, and the edit log is an audit and undo trail, not a re-application layer. There
+> is no baseline cache. Disposable caches are limited to derived data that is a pure function of
+> `(description, tile)`.
 
-- **Baseline** is regenerable from the world description. It is cacheable and hashable.
-- **Overlay** is the authoritative record of player changes, keyed by world coordinate and
-  ordered by revision.
-- **Journal** records edits between compactions so a crash does not lose the most recent work.
-- **Snapshot** is a compacted form of the overlay, used when a chunk is heavily edited or when
-  a save format needs a simple path.
+The save model should move from "whole modified chunk" to "effective section plus edit log".
 
-`VCHK` should keep loading its existing versions. A later format can add the world description
-identity, the base hash, and overlay records without invalidating old worlds. The exact layout
-is a spec decision, not this page.
+- **Effective section** is the authoritative record of what exists: generated, then edited.
+  It is saved for every column the player generates and is never rebuilt from the generator.
+- **Edit log** records what changed, with the old value, for undo, conflict reporting, and
+  migration audits. It never overrides a saved section.
+- **Derived caches** (field tiles, hydrology tiles, feature candidates) are pure functions of
+  `(description, coord)` and live outside the world directory. Deleting them changes nothing.
+
+`VCHK` keeps loading its existing versions. A later format adds the world description identity,
+a per-section baseline hash, and the edit-log records. The exact layout is a spec decision, not
+this page.
 
 When the generator version changes, an existing world has three honest options:
 
 1. **Pin and keep.** The world stays on its old generator version and the engine keeps that
    evaluator available.
-2. **Migrate.** A one-way migration rewrites the baseline and reports every edit that cannot be
-   applied.
+2. **Migrate.** A one-way migration transforms the stored sections, reports every edit it
+   could not preserve, and never regenerates a saved section.
 3. **Fork.** The world is copied to a new identity, leaving the original untouched.
 
 Silently regenerating a world under new rules is not an option. It destroys player work and
@@ -315,12 +322,15 @@ makes bug reports irreproducible.
 WorldDescription
   seed, generator version, parameters, content hash
         |
-        +--> ChunkBaseline      immutable, regenerable, hashable
+        +--> SavedSection      effective blocks, authoritative, never regenerated
+        |         ^
+        |         |
+        |    EditLog           old/new per block, audit and undo only
         |
-        +--> ChunkOverlay       sparse, authoritative, ordered
+        +--> Derived            field tiles, hydrology, candidates (disposable)
                     |
                     v
-             EffectiveChunk     baseline + overlay
+              EffectiveSection  read by collision, light, mesh
                     |
           +---------+---------+
           |                   |
@@ -330,11 +340,11 @@ WorldDescription
 | Layer | Authority | Persisted | Invalidated by |
 |---|---|---|---|
 | World description | World manifest | Yes | Explicit migration or fork |
-| Baseline | Generated | No, cache optional | Description change |
-| Overlay | Player edits | Yes | New edits, compaction |
-| Effective chunk | Derived | No | Baseline or overlay change |
-| Light | Derived | No | Effective chunk change |
-| Mesh | Derived | No | Effective chunk, light, or LOD change |
+| Saved section | Effective blocks | Yes | Player edits |
+| Edit log | Audit and undo | Yes | Compaction, retention |
+| Derived tiles | Disposable | Optional cache | Description change |
+| Light | Derived | No | Effective section change |
+| Mesh | Derived | No | Effective section, light, or LOD change |
 
 The effective chunk is the only thing collision, interaction, lighting, and meshing should read.
 That keeps the baseline and overlay from leaking into every consumer.
@@ -415,15 +425,15 @@ in a defined order: distant LOD, then prefetch, then background cache fill. Visi
 player edits are last to be dropped. The player guard or fog is the visible consequence, not a
 frame hitch.
 
-Generated baselines can be cached on disk:
+Derived tiles can be cached on disk, outside the world directory:
 
 ```text
-world/cache/{generator_version}/{chunk_x}_{chunk_y}_{chunk_z}.vchk
+cache/{description_hash}/{tile_x}_{tile_z}.tiles
 ```
 
-A cache entry is valid only when its world identity and content hash match. A corrupt or stale
-entry is deleted and regenerated; it is never treated as an edit. This cache is optional and
-must not replace the overlay as the authority for player changes.
+A cache entry is valid only when its description hash matches. A corrupt or stale entry is
+deleted and regenerated. These caches are optional and never hold player changes; saved
+sections are the only authority for what exists in the world.
 
 ## Observability and failure
 
@@ -569,8 +579,8 @@ contracts; the matching ADR and spec still own the details.
 | Area | Choice | Consequence |
 |---|---|---|
 | Mesh representation | Blocky greedy | The existing block, texture, collision, light, and save model stays the reference. Isosurface extraction is out of scope unless a later ADR reopens it. |
-| Versioning and persistence | Baseline + sparse overlay + generator version | A world description pins generation; edits are authoritative deltas; upgrade is pin, migrate, or fork, never a silent regeneration. `VCHK` keeps loading v1–v3 and a later version adds the description identity and overlay records. |
-| LOD | Voxy SeedGen-style multi-level, seed-native hierarchy | LOD sections become first-class terrain generated at their own resolution and rendered through a node hierarchy. This replaces the two-level derived LOD as the long-range direction. |
+| Versioning and persistence | Saved effective sections + audit log | A generated column is saved and never regenerated; the edit log provides undo and migration reporting; upgrade is pin, migrate, or fork, and migration transforms stored data rather than regenerating it. `VCHK` keeps loading v1–v3. |
+| LOD | Voxy SeedGen-style multi-level, seed-native hierarchy | LOD sections become first-class terrain generated at their own resolution and rendered through a node hierarchy. This replaces the per-chunk derived LOD as the long-range direction. |
 | Erosion and hydrology | Hybrid: 2.5D macro default, bounded volume-aware repair | The macro solver handles slopes, rivers, and surface lakes. The 3D detail pass emits interaction regions; only those regions run the volume-aware repair. Full volume-aware erosion stays out of scope. |
 
 ### Interview decisions
@@ -619,7 +629,7 @@ and specs that will implement it.
 | Edit migration | Coordinate first, stable feature ID when available; report conflicts. |
 | Seed migration | Auto-create a v0 world description on load, pinned to the current generator and default content hash. |
 | Removed blocks | Preserve the edit as an unknown/placeholder block and report it. |
-| Baseline cache | LRU near the player and recently visited; 2 GB default, configurable. |
+| Baseline cache | None. Saved sections are the authority; only derived tiles may be cached, outside the world directory, and deleting them changes nothing. |
 | Player guard | Remove after 64 chunks at 60 FPS with no holes; keep a debug guard. |
 | Capture | World description, camera path, edit log, and stage timings. |
 
@@ -681,6 +691,10 @@ solver for the common case and pays for 3D only where the result is visible.
 
 ### Voxy SeedGen-style LOD
 
+[ADR-0014](../decisions/0014-seed-native-lod-hierarchy.md) records the decision, and
+[Seed-native LOD hierarchy](lod-hierarchy.md) expands the representation, generation, streaming,
+and rendering. This section remains the terrain-pipeline summary.
+
 Voxy and Voxy SeedGen are all-rights-reserved. Use them as behavioural prior art, not as a code
 source. The architecture below is an independent interpretation.
 
@@ -720,7 +734,7 @@ A practical start:
    compare it with the eight current LOD1 chunk meshes covering the same region.
 3. Add levels 2–4 and a CPU-side node tree with distance selection.
 4. Move traversal and occlusion to the GPU once the CPU hierarchy is correct.
-5. Keep the current two-level LOD as the fallback until the hierarchy is measured.
+5. Keep the current per-chunk LOD as the fallback until the hierarchy is measured.
 
 The open questions are coarse/fine consistency (direct coarse sampling versus conservative
 downsample), lighting and water at coarse levels, upward edit invalidation, and whether a
@@ -742,8 +756,8 @@ downsample), lighting and water at coarse levels, upward edit invalidation, and 
 
 ## ADRs still to write
 
-The high-level choices are recorded in Chosen direction above. These are the decisions that
-still need an ADR before implementation.
+The high-level choices are recorded in Chosen direction above. The LOD hierarchy decision is
+[ADR-0014](../decisions/0014-seed-native-lod-hierarchy.md); the rows below remain open.
 
 | ADR | Question | Trigger |
 |---|---|---|
@@ -766,7 +780,7 @@ still need an ADR before implementation.
 | A generator change silently rewrites existing worlds. | Pin the description; version every output-changing change; require explicit migration or fork. |
 | The field graph becomes a slow interpreter. | Compile the graph to a per-world evaluator; measure against fixed code. |
 | Cross-platform determinism is promised too late. | Define the boundary before worlds ship; keep block hashes and capture files. |
-| LOD hierarchy becomes a rendering project of its own. | Keep the two-level LOD as the fallback; build the Voxy-style hierarchy behind a feature flag and measure node count, traversal time, and draw cost. |
+| LOD hierarchy becomes a rendering project of its own. | Keep the per-chunk LOD as the fallback; build the Voxy-style hierarchy behind a feature flag and measure node count, traversal time, and draw cost. |
 | The hybrid pass grows into a second full erosion pipeline. | Keep it bounded to interaction regions; measure how many chunks trigger it; fall back to masks. |
 | Volume-aware repairs create seams between regions. | Use overlapping windows and deterministic region order; test boundary fixtures. |
 | Direct coarse sampling pops visibly. | Measure at 64 chunks; add a screen-space error gate or geomorph only if the pop is worse than the fog transition. |

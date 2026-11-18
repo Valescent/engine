@@ -34,11 +34,14 @@ something else; it does not ban the word everywhere.
 | [WGSL](shaders.md) | WebGPU Shading Language, the shader language used by wgpu. | Current | GLSL or HLSL, when you mean WGSL |
 | [chunk mesh](v0.0.3-scope.md) | Mesh for one chunk, built in chunk-local space. | Current (v0.0.3) | world mesh |
 | [face culling](v0.0.3-scope.md) | Omitting a voxel face when the neighbouring voxel is solid. | Current (v0.0.3) | backface culling |
-| [backface culling](architecture.md#rendering-resources) | GPU test that discards triangles facing away from the camera; currently disabled. | Current | face culling |
+| [backface culling](architecture.md#rendering-resources) | GPU test that discards triangles facing away from the camera; enabled for terrain and water. | Current (v0.0.8) | face culling |
 | [dirty chunk](v0.0.3-scope.md) | Chunk whose mesh must be rebuilt after an edit. | Current (v0.0.3) | stale chunk |
 | [rebuild](v0.0.3-scope.md) | Regenerate and upload a dirty chunk's mesh. | Current (v0.0.3) | remesh, when you mean the whole edit path |
 | [greedy meshing](../specs/v0.0.5.md) | Merging adjacent coplanar same-type faces into larger quads. | Current (v0.0.5) | merging, when it is ambiguous |
-| [LOD](../decisions/0010-two-level-lod-for-chunks.md) | Level of detail; LOD0 full resolution and LOD1 conservative 2×2×2 for distant chunks. | Current (v0.0.5) | mipmap |
+| [LOD](../specs/v0.0.8.md) | Level of detail; the current per-chunk path has LOD0 full resolution, LOD1 conservative 2×2×2, and LOD2 4×4×4 for distant chunks. | Current (v0.0.8) | mipmap |
+| [LOD section](../decisions/0014-seed-native-lod-hierarchy.md) | Derived `32³` sample section at a spacing of `2^level`; level 1 covers `64³` blocks and level 4 covers `512³`. | Planned (ADR-0014) | chunk, when you mean a coarse section |
+| [seed-native LOD](../decisions/0014-seed-native-lod-hierarchy.md) | Generating a coarse section directly from the seed at its own spacing, without full-resolution children. | Planned (ADR-0014) | mipmap |
+| [node hierarchy](../decisions/0014-seed-native-lod-hierarchy.md) | Parent-first LOD tree where a node is drawn or replaced by its eight children. | Planned (ADR-0014) | quadtree |
 | [frustum culling](../specs/v0.0.5.md) | Skipping chunks outside the camera's view frustum. | Current (v0.0.5) | occlusion culling |
 | [occlusion culling](../specs/v0.0.5.md) | Skipping chunks hidden behind other geometry. | Deferred | frustum culling |
 | [async meshing](../specs/v0.0.5.md) | Building meshes on worker threads instead of the main thread. | Current (v0.0.5) | parallel rendering |
@@ -46,7 +49,7 @@ something else; it does not ban the word everywhere.
 | [revision](../specs/v0.0.5.md) | Version number for a chunk mesh or job; results from older revisions are discarded. | Current (v0.0.5) | version, when you mean the package version |
 | [stress scene](../specs/v0.0.5.md) | Exact 64-chunk in-memory fixture selected by `ENGINE_STRESS_SCENE=1`. | Current (v0.0.5) | benchmark, when you mean the fixture |
 | [upload budget](../specs/v0.0.5.md) | Maximum completed chunk meshes uploaded per frame; fixed at two. | Current (v0.0.5) | frame budget |
-| [draw call](v0.0.3-scope.md) | One draw submission to the GPU. v0.0.5 issues one per visible non-empty chunk. | Current | pass |
+| [draw call](v0.0.3-scope.md) | One draw submission to the GPU. The renderer issues one per visible chunk and one per visible water mesh. | Current | pass |
 | [frame time](debugging.md#logging) | Time to produce one frame, logged as `frame_ms`. | Current | FPS |
 | [FPS](debugging.md#logging) | Frames per second; the reciprocal of frame time. | Current | frame time |
 | [debug overlay](debugging.md#profiling) | On-screen FPS and frame time, toggled with `F3` and refreshed once per second. | Current | HUD |
@@ -67,27 +70,27 @@ something else; it does not ban the word everywhere.
 | [texture array](../decisions/0007-texture-array-for-block-textures.md) | GPU `texture_2d_array` with one layer per block tile, used instead of a flat atlas. | Current (v0.0.4) | atlas |
 | [tile](textures.md) | One 16x16 RGBA8 block texture stored in a texture-array layer. | Current (v0.0.4) | atlas tile |
 | [texture pack](textures.md) | External set of block tiles; deferred, and must preserve layer indices when introduced. | Deferred | asset pack |
-| [Sand](../specs/v0.0.7.md) | Solid desert surface block with ID 8 and texture layer 10. | Planned (v0.0.7) | dirt, when you mean sand |
+| [Sand](../specs/v0.0.7.md) | Solid desert surface block with ID 8 and texture layer 10. | Current (v0.0.7) | dirt, when you mean sand |
 
 ## Persistence
 
 | Term | Meaning | Status | Avoid |
 |---|---|---|---|
 | [persistence](v0.0.4-scope.md) | Saving and loading chunks so edits survive a restart. | Current (v0.0.4) | storage, when it is ambiguous |
-| [modified chunk](../specs/v0.0.7.md) | Chunk changed by the player and therefore saved; unmodified chunks regenerate from the seed. | Planned (v0.0.7) | dirty chunk, when you mean light/mesh dirty |
-| [render distance](../decisions/0013-player-centred-chunk-streaming.md) | Horizontal streaming radius in chunks; configured as `world.render_distance_chunks`. | Planned (v0.0.7) | view distance, when you mean fog |
-| [`VCHK`](../decisions/0008-chunk-save-format.md) | Chunk save-file magic; v1 ships in v0.0.4, and v0.0.7 adds v3 and loads v1-v3. | Current (v0.0.4) | save file, when you mean the format |
+| [modified chunk](../specs/v0.0.7.md) | Chunk changed by the player and therefore saved; unmodified chunks regenerate from the seed. | Current (v0.0.7) | dirty chunk, when you mean light/mesh dirty |
+| [render distance](../decisions/0013-player-centred-chunk-streaming.md) | Horizontal streaming radius in chunks; configured as `world.render_distance_chunks`. | Current (v0.0.8) | view distance, when you mean fog |
+| [`VCHK`](../decisions/0008-chunk-save-format.md) | Chunk save-file magic; v1 ships in v0.0.4, and v0.0.7 adds v3 and loads v1-v3. | Current (v0.0.7) | save file, when you mean the format |
 | [format version](versioning.md#out-of-scope) | Version field inside a save format such as `VCHK`, separate from the package version. | Current (v0.0.4) | package version |
 
 ## Lighting and generation
 
 | Term | Meaning | Status | Avoid |
 |---|---|---|---|
-| [seed](../specs/v0.0.7.md) | Deterministic input to world generation. | Planned (v0.0.7) | random, when you mean reproducible |
-| [noise](../decisions/0012-fastnoise-lite-and-opensimplex2.md) | Deterministic terrain fields; fastnoise-lite 1.1.1 with OpenSimplex2. | Planned (v0.0.7) | random |
-| [biome](../specs/v0.0.7.md) | Terrain and climate region; plains, hills, or desert. | Planned (v0.0.7) | zone |
-| [streaming](../decisions/0013-player-centred-chunk-streaming.md) | Loading and unloading chunks around the player as they move. | Planned (v0.0.7) | generation |
-| [hysteresis](../decisions/0013-player-centred-chunk-streaming.md) | Extra margin before unloading a chunk, to avoid load/unload thrashing. | Planned (v0.0.7) | delay |
+| [seed](../specs/v0.0.7.md) | Deterministic input to world generation. | Current (v0.0.7) | random, when you mean reproducible |
+| [noise](../decisions/0012-fastnoise-lite-and-opensimplex2.md) | Deterministic terrain fields; fastnoise-lite 1.1.1 with OpenSimplex2. | Current (v0.0.7) | random |
+| [biome](../specs/v0.0.7.md) | Terrain and climate region; plains, hills, or desert. | Current (v0.0.7) | zone |
+| [streaming](../decisions/0013-player-centred-chunk-streaming.md) | Loading and unloading chunks around the player as they move. | Current (v0.0.7) | generation |
+| [hysteresis](../decisions/0013-player-centred-chunk-streaming.md) | Extra margin before unloading a chunk, to avoid load/unload thrashing. | Current (v0.0.7) | delay |
 | [SVDAG](../specs/v0.0.7.md) | Sparse voxel directed acyclic graph; optional compression for far or static chunks. | Optional (v0.0.7) | — |
 | [raymarching](../specs/v0.0.7.md) | Rendering by marching rays per pixel instead of drawing meshes. | Optional (v0.0.7) | raycasting |
 | [sky light](../specs/v0.0.6.md) | Light propagated from the sky through transparent cells. | Current (v0.0.6) | sunlight, when you mean the light value |
@@ -107,9 +110,9 @@ something else; it does not ban the word everywhere.
 | [pitch](coordinates.md#camera-and-direction) | Vertical camera angle; positive looks up and is clamped to ±89°. | Current | elevation |
 | [FOV](coordinates.md#camera-and-direction) | Field of view; π/3 vertically. | Current | zoom |
 | [view-projection](coordinates.md#camera-and-direction) | Combined view and projection matrix used by the vertex shader. | Current | camera matrix |
-| [cursor capture](controls.md#current-capture-and-focus-v002) | Grabbing and hiding the cursor so mouse motion drives the camera. | Current | pointer capture, pointer lock |
-| [mouse look](controls.md#current-capture-and-focus-v002) | Rotating the camera from raw mouse motion while captured and focused. | Current | mouse steering |
-| [raw mouse motion](controls.md#current-capture-and-focus-v002) | Device motion delta, not the cursor's screen position. | Current | cursor position |
+| [cursor capture](controls.md#current-capture-and-focus-v004) | Grabbing and hiding the cursor so mouse motion drives the camera. | Current | pointer capture, pointer lock |
+| [mouse look](controls.md#current-capture-and-focus-v004) | Rotating the camera from raw mouse motion while captured and focused. | Current | mouse steering |
+| [raw mouse motion](controls.md#current-capture-and-focus-v004) | Device motion delta, not the cursor's screen position. | Current | cursor position |
 | [physical key code](controls.md#keybindings) | Key position reported by the platform, independent of keyboard layout. | Current | scan code |
 | [delta time](architecture.md#frame-flow) | Elapsed time between frames, clamped to `100 ms`. | Current | tick |
 
@@ -127,7 +130,7 @@ something else; it does not ban the word everywhere.
 | [changelog](versioning.md#changelog) | User-visible changes grouped by release. | commit log |
 | [Unreleased](versioning.md#changelog) | Changelog section for changes not yet released. | pending |
 | [SemVer](versioning.md#semantic-versioning) | Semantic Versioning 2.0.0. | version numbers, when you mean the policy |
-| [public API](public-api.md) | The exported surface of the `engine` crate; currently `run`, `RunError`, and `RendererError`. It is unstable before 1.0. | exported internals |
+| [public API](public-api.md) | The exported surface of the `engine` crate; currently `run`, `RunError`, `RendererError`, `SaveError`, and `ChunkCoord`. It is unstable before 1.0. | exported internals |
 | [Keep a Changelog](versioning.md#changelog) | Changelog format used by `CHANGELOG.md`. | release notes, when you mean the file format |
 | [MSRV](versioning.md#out-of-scope) | Minimum supported Rust version; currently `1.99.1`. | toolchain, when you mean the policy |
 | [pre-alpha](../index.md) | Early project status with no stability promise. | beta |
@@ -152,7 +155,7 @@ something else; it does not ban the word everywhere.
 | [tracing](debugging.md#logging) | Structured logging and diagnostics. | Current |
 | pollster | Small executor used to block on `wgpu` futures. | Current |
 | [Tracy / wgpu-profiler](profiling.md) | CPU spans, memory events, GPU timer zones, and metric plots behind the `tracy` feature. | Current |
-| [rayon / micropool](../decisions/0009-micropool-for-chunk-workers.md) | Worker-pool candidates compared by `pool_sim`; micropool is selected, rayon remains benchmark-only. | Current dev dependencies; micropool pending runtime use |
+| [rayon / micropool](../decisions/0009-micropool-for-chunk-workers.md) | Worker-pool candidates compared by `pool_sim`; micropool is the runtime default, rayon is the optional `rayon-pool` A/B build. | Current (v0.0.5) |
 | [mdBook](configuration.md#documentation-and-releases) | Documentation site generator. | Current |
 | [Cocogitto](configuration.md#documentation-and-releases) | Conventional Commits and release-tag tooling. | Current |
 | [cargo-deny](configuration.md#toolchain-and-build) | Dependency licence, advisory, ban, and source checks. | Current |

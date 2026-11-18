@@ -13,10 +13,11 @@ One file per decision. Each record states the context, the decision, the alterna
 | [0007](0007-texture-array-for-block-textures.md) | Texture array for block textures | Accepted |
 | [0008](0008-chunk-save-format.md) | Chunk save format (VCHK) | Accepted |
 | [0009](0009-micropool-for-chunk-workers.md) | micropool for chunk worker jobs | Accepted |
-| [0010](0010-two-level-lod-for-chunks.md) | Two LOD levels with conservative downsampling | Accepted |
+| [0010](0010-two-level-lod-for-chunks.md) | Two LOD levels with conservative downsampling | Accepted; extended by v0.0.8 LOD2 |
 | [0011](0011-voxel-light-and-baked-ao.md) | Voxel lighting with baked AO instead of shadows | Accepted |
 | [0012](0012-fastnoise-lite-and-opensimplex2.md) | fastnoise-lite with OpenSimplex2 | Accepted |
 | [0013](0013-player-centred-chunk-streaming.md) | Finite player-centred chunk streaming | Accepted |
+| [0014](0014-seed-native-lod-hierarchy.md) | Seed-native multi-level LOD sections | Accepted |
 
 ## Conventions
 

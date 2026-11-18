@@ -22,8 +22,9 @@ The engine is a small `winit` and `wgpu` application. This page describes the cu
 | `src/generation.rs` | Seeded noise fields, height, biomes, caves, water fill, trees, and the spawn column. |
 | `src/streaming.rs` | Player-centred load rings, forward-first ordering, unload hysteresis, readiness, and the movement guard. |
 | `src/config.rs` | `config.toml` parsing for the render distance. |
+| `src/headless.rs` | Windowless fixed-step run selected by `ENGINE_HEADLESS=1`; drives generation, streaming, light, and meshing, then prints one `HEADLESS` summary line. |
 | `src/sky.rs` | Day/night cycle, sun direction, sky/ambient/sun colours, and the CPU fog formula. |
-| `src/voxel.rs` | Texture vertices, the highlight mesh, and the v0.0.4 face-culled mesher kept as a test reference. |
+| `src/voxel.rs` | The packed 12-byte chunk vertex, the highlight mesh, and the v0.0.4 face-culled mesher kept as a test reference. |
 | `src/renderer.rs` | `wgpu` device/surface setup, pipelines, block texture array, buffers, depth texture, resizing, and draw submission. |
 | `src/shader.wgsl` | Chunk vertex transform, lit/fogged opaque shading, and the animated water fragment. See [Shader authoring](shaders.md). |
 | `src/highlight.wgsl` | Line-list block outline. |
@@ -115,7 +116,7 @@ See [Coordinates](coordinates.md) for the full conventions, including chunk and 
 - Surface format comes from `Surface::get_default_config`; the default is typically `Bgra8UnormSrgb`.
 - The chunk pipeline uses `Depth32Float`, depth write enabled, and `Less` depth comparison.
 - Bind group 0 holds a 160-byte frame uniform: view-projection, sky, ambient, and sun colours, sun direction, an unlit flag, the far plane, time of day, and the camera position.
-- Each non-empty chunk owns an origin uniform in bind group 1 and up to three vertex buffers: LOD0, LOD1, and an optional transparent water mesh. The vertex shader adds the origin to the chunk-local vertex position.
+- Each non-empty chunk owns an origin uniform in bind group 1 and up to four vertex/index meshes: LOD0, LOD1, LOD2, and an optional transparent water mesh. The vertex shader adds the origin to the chunk-local vertex position.
 - Bind group 2 holds one ten-layer `texture_2d_array` and a nearest-filtering sampler that repeats in U and V and clamps in W. The table is in [Texture and asset pipeline](textures.md).
 - The clear colour follows the interpolated sky colour, so fog blends into the distance instead of ending against a fixed backdrop.
 - A chunk's previous buffer stays visible until a newer mesh for its LOD is uploaded. Edits invalidate both LODs; a chunk with an empty mesh releases that buffer.
@@ -130,10 +131,8 @@ See [Coordinates](coordinates.md) for the full conventions, including chunk and 
 
 ## Current limitations
 
-- No occlusion culling and no third LOD level.
-- No terrain generation or streaming. World management and backups are described in
-  [World management](world-management.md).
-- No shadow maps, occlusion culling, or sorted transparency; water faces blend in mesh order.
+- No occlusion culling, horizon culling, or batched indirect drawing.
+- No shadow maps or sorted transparency; water faces blend in mesh order.
 - One block palette; no inventory UI.
 
 These are deliberate milestone boundaries. See `docs/roadmap.md` and the scope pages under `docs/dev/` for what replaces them.

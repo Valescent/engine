@@ -1,7 +1,7 @@
 # Why I Chose Two LOD Levels with Conservative 2×2×2 Downsampling
 
 **Document type:** Architecture Decision Record / Devlog Entry  
-**Status:** Accepted  
+**Status:** Accepted; extended by v0.0.8, which adds LOD2 (4×4×4) without changing the conservative downsample rule.  
 **Date:** 2026-11-15  
 **Project:** Valescent Engine  
 **Owner:** Project Owner  

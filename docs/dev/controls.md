@@ -101,4 +101,5 @@ not change the walk direction. The v0.0.3 demo toggle is not carried forward on 
 
 ## Later milestones
 
-- v0.0.6: `Lamp` and `Water` are not on the hotbar; water has no mesh pass yet.
+- v0.0.6 onward: `Lamp` and `Water` are not on the hotbar. Water has its own transparent mesh
+  pass and cannot be placed from the hotbar.

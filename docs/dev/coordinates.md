@@ -37,7 +37,7 @@ Conventions shared by the camera, voxel storage, meshing, and rendering. Section
   `[-1, 0] × [0, 1] × [0, 1]`.
 - A face normal is an axis-aligned unit vector pointing out of the solid voxel.
 - Faces are wound counter-clockwise when viewed from outside the voxel. Backface culling is
-  currently disabled; if it is enabled, counter-clockwise remains the front face.
+  enabled for terrain and water; counter-clockwise remains the front face.
 - Adjacent voxels share a face. The shared pair is culled in v0.0.3 and later.
 
 ## Chunk coordinates (v0.0.3)
@@ -77,7 +77,9 @@ Conventions shared by the camera, voxel storage, meshing, and rendering. Section
   [ADR 0004](../decisions/0004-glam-for-math.md).
 - The draw path supplies each chunk's origin to the vertex stage. The GPU mechanism is an
   implementation detail, not part of this convention.
-- Each non-empty chunk owns one vertex buffer, replacing the v0.0.2 world-space buffer.
+- Each non-empty chunk owns a vertex buffer and an index buffer per built LOD, replacing the v0.0.2 world-space buffer.
+- Packed vertices store whole-block cell and UV bytes, so a position or UV that is not a whole block
+  does not fit the current layout.
 
 ## Camera and direction
 
@@ -91,7 +93,7 @@ Conventions shared by the camera, voxel storage, meshing, and rendering. Section
 - The view matrix is right-handed `look_to_mat4(position, forward, +Y)`.
 - Projection is right-handed with a `0..1` depth range
   (`glam::camera::rh::proj::directx`). The field of view is π/3, the near plane is `0.1 m`, and
-  the far plane is `100 m`.
+  the far plane is `(render_distance_chunks + 2) * 32 m` (448 m at the default distance of 12).
 
 ## Interaction (v0.0.4)
 
@@ -106,8 +108,8 @@ Conventions shared by the camera, voxel storage, meshing, and rendering. Section
 
 - Integer world coordinates are `i32` per axis. That is the storage limit, not a supported play
   radius.
-- World space and mesh vertices are `f32`. Precision degrades far from the origin; the current
-  far plane is `100 m`.
+- World space and mesh vertices are `f32`. Precision degrades far from the origin; the far plane
+  follows the render distance and is `448 m` at the default.
 - No playable radius or `f32` precision budget is fixed yet.
   [ADR 0004](../decisions/0004-glam-for-math.md) records camera-relative rendering and
   chunk-local origins as the mitigation for large worlds. Camera-relative rendering is not
