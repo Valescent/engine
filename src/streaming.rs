@@ -50,6 +50,14 @@ impl Streaming {
         self.loaded.iter().copied()
     }
 
+    pub(crate) fn loaded_count(&self) -> usize {
+        self.loaded.len()
+    }
+
+    pub(crate) fn ready_count(&self) -> usize {
+        self.ready.len()
+    }
+
     /// Whether a player AABB at `position` overlaps only ready columns.
     #[allow(clippy::cast_possible_truncation)]
     pub(crate) fn aabb_ready(&self, position: Vec3) -> bool {

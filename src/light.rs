@@ -93,6 +93,11 @@ pub(crate) struct LightField {
 }
 
 impl LightField {
+    /// Bytes held by the two packed planes.
+    pub(crate) fn resident_bytes(&self) -> usize {
+        self.sky.resident_bytes() + self.block.resident_bytes()
+    }
+
     /// Sky light at a local coordinate in `-1..=32`.
     pub(crate) fn sky(&self, local: IVec3) -> u8 {
         self.sky.get(field_index(local))
@@ -116,6 +121,10 @@ impl PackedLight {
         Self {
             cells: vec![0; cells.div_ceil(2)].into_boxed_slice(),
         }
+    }
+
+    fn resident_bytes(&self) -> usize {
+        self.cells.len()
     }
 
     fn get(&self, index: usize) -> u8 {

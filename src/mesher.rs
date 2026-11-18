@@ -415,6 +415,11 @@ impl MeshQueue {
         self.light_built.get(&chunk) == Some(&self.revision(chunk))
     }
 
+    /// Columns with a generation job queued or running.
+    pub(crate) fn generation_pending_len(&self) -> usize {
+        self.gen_pending.len()
+    }
+
     /// Returns whether a light job is queued or running for the chunk.
     pub(crate) fn light_pending(&self, chunk: ChunkCoord) -> bool {
         self.light_pending.contains_key(&chunk)

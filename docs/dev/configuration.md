@@ -30,6 +30,9 @@ environment variables.
 | `ENGINE_NO_VSYNC` | Engine (`App::resumed`) | `1` starts the surface with vsync off, for benchmark runs. `V` still toggles it at runtime. |
 | `ENGINE_MESH_POOL` | Engine (`mesher::create_pool`) | `rayon` uses the rayon mesh pool when built with the `rayon-pool` feature. Unset, or any other value, uses micropool. |
 | `ENGINE_SEED` | Engine (`run`) | A `u64` chooses the seed when `world/seed` is being created. An existing `world/seed` wins. Unset uses OS entropy for a new world. |
+| `ENGINE_HEADLESS` | Engine (`run`) | `1` runs a windowless fixed-step benchmark instead of opening a window. Prints one `HEADLESS` summary line to stdout. |
+| `ENGINE_HEADLESS_FRAMES` | Engine (`headless`) | Measured frames for a headless run; default `600`. |
+| `ENGINE_HEADLESS_SPEED` | Engine (`headless`) | Camera speed in metres per second for a headless run; default `0` (standing). `32` triggers streaming and unloads. |
 | `WGPU_BACKEND` | `wgpu` | Forces a backend such as `dx12`, `vulkan`, or `metal`, depending on the platform. Unset lets `wgpu` choose. The engine does not parse it. |
 
 See [Testing](testing.md) for manual-run examples, [Setup](setup.md) for backend selection, and

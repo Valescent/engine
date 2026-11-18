@@ -11,6 +11,20 @@ The default test suite is headless and deterministic. Rendering and window behav
 | Manual GPU checks | Window, surface, pipeline, input, resize, and visual correctness. | No |
 | Opt-in GPU tests | Automated rendering checks behind a feature or environment variable. | Not yet |
 
+## Headless runs
+
+`ENGINE_HEADLESS=1` runs the normal generation, streaming, light, and mesh paths without a window,
+at a fixed 60 Hz step, then prints one machine-readable line:
+
+```console
+ENGINE_HEADLESS=1 ENGINE_HEADLESS_FRAMES=600 ENGINE_HEADLESS_SPEED=32 ENGINE_SEED=42 cargo run --release
+```
+
+The line reports frame work (`mean_ms`, `p50_ms`, `p95_ms`, `max_ms`), generated columns, chunks,
+loaded and ready columns, pending jobs, and resident block and light bytes. The **Perf** workflow
+runs it for a static camera and a walk on every `main` push and gates on a generous budget. See
+[Benchmark results](benchmarks.md#headless-run-v008).
+
 ## Commands
 
 ```console

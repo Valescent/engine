@@ -1,0 +1,84 @@
+name: Perf
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: perf-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  headless:
+    name: Headless run
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Show toolchain
+        run: rustup show
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Static camera at distance 12
+        env:
+          ENGINE_HEADLESS: "1"
+          ENGINE_HEADLESS_FRAMES: "600"
+          ENGINE_HEADLESS_SPEED: "0"
+          ENGINE_SEED: "42"
+          RUST_LOG: "warn"
+        run: |
+          target/release/engine | tee headless-static.txt
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep '^HEADLESS ' headless-static.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Walk at 32 m/s
+        env:
+          ENGINE_HEADLESS: "1"
+          ENGINE_HEADLESS_FRAMES: "600"
+          ENGINE_HEADLESS_SPEED: "32"
+          ENGINE_SEED: "42"
+          RUST_LOG: "warn"
+        run: |
+          target/release/engine | tee headless-walk.txt
+          grep '^HEADLESS ' headless-walk.txt >> "$GITHUB_STEP_SUMMARY"
+
+      # Generous budgets: GitHub runners are shared and slower than the reference
+      # machine. These catch order-of-magnitude regressions, not small drift.
+      - name: Budgets
+        run: |
+          line=$(grep '^HEADLESS ' headless-static.txt)
+          value() { echo "$line" | tr ' ' '\n' | grep "^$1=" | cut -d= -f2; }
+
+          ready=$(value ready_columns)
+          mean=$(value mean_ms)
+          p95=$(value p95_ms)
+          resident=$(value resident_bytes)
+
+          echo "ready_columns=$ready mean_ms=$mean p95_ms=$p95 resident_bytes=$resident"
+          test "$ready" = "625" || { echo "expected 625 ready columns at distance 12"; exit 1; }
+          awk -v mean="$mean" 'BEGIN { exit !(mean < 20.0) }' || { echo "mean frame work above 20 ms"; exit 1; }
+          awk -v p95="$p95" 'BEGIN { exit !(p95 < 50.0) }' || { echo "p95 frame work above 50 ms"; exit 1; }
+          test "$resident" -lt 200000000 || { echo "resident world data above 200 MB"; exit 1; }
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: headless-results
+          path: |
+            headless-static.txt
+            headless-walk.txt

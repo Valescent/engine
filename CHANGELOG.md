@@ -11,8 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - LOD2, a 4x4x4 downsample for chunks beyond 16 chunk units, and `render_distance_chunks` up to `32`; LOD2 emits every chunk-boundary face like LOD1.
 - Light fields store one nibble per cell, halving resident light memory, and a light snapshot is built from 27 direct chunk lookups instead of a world scan.
-- Back faces are culled for terrain and water; greedy quads wind counter-clockwise around their outward normal on all six faces.
 - Chunk level work is tracked in a set fed by generated columns, edits, and player-chunk changes, so the steady-state frame no longer scans every chunk. The queue checks pool admission before building a snapshot.
+- A windowless fixed-step run (`ENGINE_HEADLESS=1`) reports frame work, generated columns, ready columns, and resident bytes, and a Perf workflow gates it on every main push.
+- Back faces are culled for terrain and water; greedy quads wind counter-clockwise around their outward normal on all six faces.
+
+### Fixed
+
+- Columns whose chunks are built only at LOD2 now count as ready; the readiness check previously ignored the coarsest level, leaving the outer ring unready.
 
 ## [0.0.7] - 2026-11-18
 
@@ -80,17 +85,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A deterministic 64-chunk stress scene on `ENGINE_STRESS_SCENE=1`; it never reads or writes `world/chunks/`.
 - Per-second debug metrics for frame time, visible and total chunks, visible vertices, draw calls, worker rebuild time, and upload time.
 
-### Added
-
-- Deterministic procedural generation: five seeded noise fields (continentalness, erosion, temperature, humidity, and 3D caves) drive a 128-block-tall world with hills, mountains, sea level 32, three biomes, surface palettes, caves, water fill, and deterministic trees on plains and hills. `ENGINE_SEED=<u64>` builds a fixed generated area around the spawn column.
-- `Sand` (block ID 8, texture layer 10); the texture array grows to eleven layers.
-- Player-centred chunk streaming for generated worlds: columns inside `render_distance_chunks` are generated on the worker pool and committed two per frame, nearest and forward first, and chunks are meshed once their light is ready.
-- A movement guard stops the player entering a column that is not yet generated, lit, and meshed.
-- `config.toml` with `[world] render_distance_chunks` (`8..=16`, default `12`); the camera far plane follows the render distance.
-
-### Fixed
-`n- Player collision no longer scans every block in the world. The swept AABB query visits only the blocks inside its bounds, cutting `Player::update` from 1.15 ms to 0.9 us per frame on the 64-chunk stress scene and the uncapped frame time from 1.28 ms to 0.23 ms.
-`n### Changed
+### Changed
 
 - The texture sampler repeats in U and V so merged greedy quads tile correctly instead of clamping.
 - The camera far plane moved from 100 m to 512 m so the 10-chunk stress draw distance is visible.
@@ -108,20 +103,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `VCHK` v1 chunk persistence under `world/chunks/`, load on startup, save on exit and `Ctrl+S`.
 - A demo world with grass over dirt, stone, wood, and leaves, plus a safe spawn column.
 
-### Added
-
-- Deterministic procedural generation: five seeded noise fields (continentalness, erosion, temperature, humidity, and 3D caves) drive a 128-block-tall world with hills, mountains, sea level 32, three biomes, surface palettes, caves, water fill, and deterministic trees on plains and hills. `ENGINE_SEED=<u64>` builds a fixed generated area around the spawn column.
-- `Sand` (block ID 8, texture layer 10); the texture array grows to eleven layers.
-- Player-centred chunk streaming for generated worlds: columns inside `render_distance_chunks` are generated on the worker pool and committed two per frame, nearest and forward first, and chunks are meshed once their light is ready.
-- A movement guard stops the player entering a column that is not yet generated, lit, and meshed.
-- `config.toml` with `[world] render_distance_chunks` (`8..=16`, default `12`); the camera far plane follows the render distance.
-
-### Fixed
-`n- Player collision no longer scans every block in the world. The swept AABB query visits only the blocks inside its bounds, cutting `Player::update` from 1.15 ms to 0.9 us per frame on the 64-chunk stress scene and the uncapped frame time from 1.28 ms to 0.23 ms.
-`n### Changed
+### Changed
 
 - WASD now walks on the ground instead of flying; `Space` jumps instead of toggling a demo voxel.
-- Number keys `1`–`5` select the block to place; the cursor still captures on left click.
+- Number keys `1`ΓÇô`5` select the block to place; the cursor still captures on left click.
 - Chunk meshes use the 36-byte textured vertex layout.
 - `V` toggles vsync by reconfiguring the surface between FIFO and immediate or mailbox presentation.
 
@@ -133,34 +118,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Chunked world storage: 32×32×32 chunks, Euclidean chunk coordinates, and dirty-chunk tracking.
+- Chunked world storage: 32├ù32├ù32 chunks, Euclidean chunk coordinates, and dirty-chunk tracking.
 - Face culling through world coordinates, including across chunk borders.
 - One GPU vertex buffer and one draw call per non-empty chunk, with a per-chunk origin uniform.
 - Debug logging for dirty chunk count, total vertices, and rebuild time after an edit.
 
-### Added
+### Changed
 
-- Deterministic procedural generation: five seeded noise fields (continentalness, erosion, temperature, humidity, and 3D caves) drive a 128-block-tall world with hills, mountains, sea level 32, three biomes, surface palettes, caves, water fill, and deterministic trees on plains and hills. `ENGINE_SEED=<u64>` builds a fixed generated area around the spawn column.
-- `Sand` (block ID 8, texture layer 10); the texture array grows to eleven layers.
-- Player-centred chunk streaming for generated worlds: columns inside `render_distance_chunks` are generated on the worker pool and committed two per frame, nearest and forward first, and chunks are meshed once their light is ready.
-- A movement guard stops the player entering a column that is not yet generated, lit, and meshed.
-- `config.toml` with `[world] render_distance_chunks` (`8..=16`, default `12`); the camera far plane follows the render distance.
-
-### Fixed
-`n- Player collision no longer scans every block in the world. The swept AABB query visits only the blocks inside its bounds, cutting `Player::update` from 1.15 ms to 0.9 us per frame on the 64-chunk stress scene and the uncapped frame time from 1.28 ms to 0.23 ms.
-`n### Changed
-
-- The demo scene is a 4×4 floor spanning four chunks with a raised voxel on the chunk boundary.
+- The demo scene is a 4├ù4 floor spanning four chunks with a raised voxel on the chunk boundary.
 - `Space` toggles that boundary voxel and rebuilds only the affected chunks.
 - The camera starts near `(37, 4.5, 38)` and is aimed at `(32, 0.5, 32)`.
-
-### Added
-
-- Deterministic procedural generation: five seeded noise fields (continentalness, erosion, temperature, humidity, and 3D caves) drive a 128-block-tall world with hills, mountains, sea level 32, three biomes, surface palettes, caves, water fill, and deterministic trees on plains and hills. `ENGINE_SEED=<u64>` builds a fixed generated area around the spawn column.
-- `Sand` (block ID 8, texture layer 10); the texture array grows to eleven layers.
-- Player-centred chunk streaming for generated worlds: columns inside `render_distance_chunks` are generated on the worker pool and committed two per frame, nearest and forward first, and chunks are meshed once their light is ready.
-- A movement guard stops the player entering a column that is not yet generated, lit, and meshed.
-- `config.toml` with `[world] render_distance_chunks` (`8..=16`, default `12`); the camera far plane follows the render distance.
 
 ### Fixed
 

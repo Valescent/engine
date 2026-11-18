@@ -9,6 +9,7 @@ mod camera;
 mod config;
 mod frustum;
 mod generation;
+mod headless;
 mod light;
 mod mesh;
 mod mesher;
@@ -102,7 +103,6 @@ pub fn run() -> Result<(), RunError> {
         Path::new(WORLD_DIRECTORY),
         config.render_distance_chunks,
     )?;
-    let event_loop = EventLoop::new()?;
     let mut app = App::with_world(setup.world, stress);
     if let Some(spawn) = setup.spawn {
         app.set_spawn(spawn);
@@ -111,6 +111,11 @@ pub fn run() -> Result<(), RunError> {
     app.streaming = setup.streaming;
     app.seed = setup.seed;
     app.apply_render_distance();
+    if let Some(options) = headless::options() {
+        headless::run(app, options);
+        return Ok(());
+    }
+    let event_loop = EventLoop::new()?;
     let result = event_loop.run_app(&mut app);
     if let Some(error) = app.error {
         return Err(error);
@@ -981,7 +986,8 @@ impl App {
             self.world.chunk(chunk).is_none()
                 || (self.queue.light_is_current(chunk)
                     && (self.queue.is_built(chunk, Lod::Lod0, MeshKind::Opaque)
-                        || self.queue.is_built(chunk, Lod::Lod1, MeshKind::Opaque)))
+                        || self.queue.is_built(chunk, Lod::Lod1, MeshKind::Opaque)
+                        || self.queue.is_built(chunk, Lod::Lod2, MeshKind::Opaque)))
         })
     }
 
@@ -1222,7 +1228,7 @@ mod tests {
 
     use super::*;
     use crate::generation::GenResult;
-    use mesher::{Job, JobResult};
+    use mesher::{Job, JobResult, MeshResult};
 
     #[test]
     fn mouse_look_requires_capture_and_focus() {
@@ -1549,6 +1555,34 @@ mod tests {
 
         assert_eq!(app.camera.far_plane(), 448.0);
         assert_eq!(app.camera.fog_end(), 384.0);
+    }
+
+    #[test]
+    fn a_column_built_at_lod2_is_ready() {
+        let mut app = App::with_world(World::default(), false);
+        let chunk = ChunkCoord::new(0, 0, 0);
+        app.world.set_block(IVec3::new(0, 0, 0), Block::Stone);
+        app.queue.mark_light_built(chunk);
+        let pool = InlinePool::default();
+        app.queue.request(
+            &pool,
+            &app.world,
+            chunk,
+            Lod::Lod2,
+            MeshKind::Opaque,
+            Priority::Background,
+        );
+        let revision = app.queue.revision(chunk);
+
+        assert!(app.queue.accept(&MeshResult {
+            chunk,
+            lod: Lod::Lod2,
+            kind: MeshKind::Opaque,
+            revision,
+            mesh: Vec::new(),
+            elapsed: Duration::ZERO,
+        }));
+        assert!(app.column_ready(IVec2::ZERO));
     }
 
     #[test]

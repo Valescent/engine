@@ -297,6 +297,21 @@ frame time in the log is the comparable number.
 The distance-24 run is sampled while the ring is still filling: generation commits 125-150
 columns per second and the level work set keeps the steady-state scan off the frame. At distance
 12 the resident light cost falls from about 79 KiB to 39 KiB per chunk.
+
+### Headless run (v0.0.8)
+
+`ENGINE_HEADLESS=1` drives the same generation, streaming, light, and mesh paths without a window
+at a fixed 60 Hz step. Reported work excludes the paced sleep, so the numbers are per-frame CPU
+cost, not wall time.
+
+| Run (distance 12, seed 42) | Generated columns | Chunks | Ready columns | Mean / p95 / max work | Blocks + light |
+|---|---:|---:|---:|---:|---:|
+| Static camera, 600 frames | 624 | 1,376 | 625 / 625 | 0.42 / 1.9 / 3.8 ms | 95 MB |
+| Walk at 32 m/s, 600 frames | 630 | 1,405 | 631 / 631 | 0.46 / 2.1 / 5.7 ms | 97 MB |
+
+`resident_bytes` covers stored blocks and light fields only; meshes and GPU buffers are not
+included. The **Perf** workflow runs both scenes on every `main` push and gates on a generous
+budget (625 ready columns, mean under 20 ms, p95 under 50 ms, under 200 MB of blocks and light).
 ## 2026-11-17 runs
 
 - **Machine:** AMD Ryzen 5 7600, 6 cores / 12 logical processors, Windows 11 Home.

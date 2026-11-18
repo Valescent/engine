@@ -256,6 +256,16 @@ impl World {
         self.light.remove(&chunk);
     }
 
+    /// Bytes held by stored blocks and light fields, excluding meshes and GPU state.
+    pub(crate) fn resident_bytes(&self) -> usize {
+        self.chunks.len() * CHUNK_CELLS
+            + self
+                .light
+                .values()
+                .map(|field| field.resident_bytes())
+                .sum::<usize>()
+    }
+
     /// Iterates over every non-empty chunk in unspecified order.
     pub(crate) fn iter_chunks(&self) -> impl Iterator<Item = (ChunkCoord, &Chunk)> {
         self.chunks
