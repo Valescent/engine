@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Deterministic procedural generation: five seeded noise fields (continentalness, erosion, temperature, humidity, and 3D caves) drive a 128-block-tall world with hills, mountains, sea level 32, three biomes, surface palettes, caves, and water fill. `ENGINE_SEED=<u64>` builds a fixed generated area around the spawn column.
+- Deterministic procedural generation: five seeded noise fields (continentalness, erosion, temperature, humidity, and 3D caves) drive a 128-block-tall world with hills, mountains, sea level 32, three biomes, surface palettes, caves, water fill, and deterministic trees on plains and hills. `ENGINE_SEED=<u64>` builds a fixed generated area around the spawn column.
 - `Sand` (block ID 8, texture layer 10); the texture array grows to eleven layers.
 
 ### Fixed
@@ -54,7 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Deterministic procedural generation: five seeded noise fields (continentalness, erosion, temperature, humidity, and 3D caves) drive a 128-block-tall world with hills, mountains, sea level 32, three biomes, surface palettes, caves, and water fill. `ENGINE_SEED=<u64>` builds a fixed generated area around the spawn column.
+- Deterministic procedural generation: five seeded noise fields (continentalness, erosion, temperature, humidity, and 3D caves) drive a 128-block-tall world with hills, mountains, sea level 32, three biomes, surface palettes, caves, water fill, and deterministic trees on plains and hills. `ENGINE_SEED=<u64>` builds a fixed generated area around the spawn column.
 - `Sand` (block ID 8, texture layer 10); the texture array grows to eleven layers.
 
 ### Fixed
@@ -79,7 +79,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Deterministic procedural generation: five seeded noise fields (continentalness, erosion, temperature, humidity, and 3D caves) drive a 128-block-tall world with hills, mountains, sea level 32, three biomes, surface palettes, caves, and water fill. `ENGINE_SEED=<u64>` builds a fixed generated area around the spawn column.
+- Deterministic procedural generation: five seeded noise fields (continentalness, erosion, temperature, humidity, and 3D caves) drive a 128-block-tall world with hills, mountains, sea level 32, three biomes, surface palettes, caves, water fill, and deterministic trees on plains and hills. `ENGINE_SEED=<u64>` builds a fixed generated area around the spawn column.
 - `Sand` (block ID 8, texture layer 10); the texture array grows to eleven layers.
 
 ### Fixed
@@ -106,7 +106,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Deterministic procedural generation: five seeded noise fields (continentalness, erosion, temperature, humidity, and 3D caves) drive a 128-block-tall world with hills, mountains, sea level 32, three biomes, surface palettes, caves, and water fill. `ENGINE_SEED=<u64>` builds a fixed generated area around the spawn column.
+- Deterministic procedural generation: five seeded noise fields (continentalness, erosion, temperature, humidity, and 3D caves) drive a 128-block-tall world with hills, mountains, sea level 32, three biomes, surface palettes, caves, water fill, and deterministic trees on plains and hills. `ENGINE_SEED=<u64>` builds a fixed generated area around the spawn column.
 - `Sand` (block ID 8, texture layer 10); the texture array grows to eleven layers.
 
 ### Fixed
@@ -119,7 +119,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Deterministic procedural generation: five seeded noise fields (continentalness, erosion, temperature, humidity, and 3D caves) drive a 128-block-tall world with hills, mountains, sea level 32, three biomes, surface palettes, caves, and water fill. `ENGINE_SEED=<u64>` builds a fixed generated area around the spawn column.
+- Deterministic procedural generation: five seeded noise fields (continentalness, erosion, temperature, humidity, and 3D caves) drive a 128-block-tall world with hills, mountains, sea level 32, three biomes, surface palettes, caves, water fill, and deterministic trees on plains and hills. `ENGINE_SEED=<u64>` builds a fixed generated area around the spawn column.
 - `Sand` (block ID 8, texture layer 10); the texture array grows to eleven layers.
 
 ### Fixed

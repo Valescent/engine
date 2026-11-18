@@ -31,6 +31,10 @@ const EROSION_TAG: u64 = 0x02;
 const TEMPERATURE_TAG: u64 = 0x03;
 const HUMIDITY_TAG: u64 = 0x04;
 const CAVE_TAG: u64 = 0x05;
+const TREE_TAG: u64 = 0x06;
+
+/// Shortest tree trunk.
+const TRUNK_MIN: i32 = 4;
 
 /// `SplitMix64`, the seed mixer pinned by ADR-0012.
 pub(crate) fn splitmix64(mut value: u64) -> u64 {
@@ -60,6 +64,7 @@ pub(crate) enum Biome {
 
 /// One world's noise fields and derived terrain.
 pub(crate) struct Generator {
+    seed: u64,
     continentalness: FastNoiseLite,
     erosion: FastNoiseLite,
     temperature: FastNoiseLite,
@@ -70,6 +75,7 @@ pub(crate) struct Generator {
 impl Generator {
     pub(crate) fn new(seed: u64) -> Self {
         Self {
+            seed,
             continentalness: field(seed, CONTINENTALNESS_TAG, 0.0015, 4),
             erosion: field(seed, EROSION_TAG, 0.0030, 4),
             temperature: field(seed, TEMPERATURE_TAG, 0.0010, 3),
@@ -151,7 +157,109 @@ impl Generator {
                 }
             }
         }
+
+        let first_candidate = self.tree_hash(chunk, 0);
+        for index in 0..2u64 {
+            let hash = if index == 0 {
+                first_candidate
+            } else {
+                self.tree_hash(chunk, 1)
+            };
+            let local_x = (hash & 31) as i32;
+            let local_z = ((hash >> 8) & 31) as i32;
+            if index == 1 {
+                let previous_x = (first_candidate & 31) as i32;
+                let previous_z = ((first_candidate >> 8) & 31) as i32;
+                if local_x == previous_x && local_z == previous_z {
+                    continue;
+                }
+            }
+            let trunk = TRUNK_MIN + ((hash >> 16) % 3) as i32;
+            self.plant_tree(&mut blocks, chunk, IVec3::new(local_x, 0, local_z), trunk);
+        }
+
         blocks
+    }
+
+    /// `SplitMix64` hash for one tree candidate in a chunk.
+    #[allow(clippy::cast_sign_loss)]
+    pub(crate) fn tree_hash(&self, chunk: ChunkCoord, index: u64) -> u64 {
+        let coordinates = chunk.coordinates();
+        splitmix64(
+            self.seed
+                ^ TREE_TAG
+                ^ (coordinates.x as u64)
+                ^ ((coordinates.z as u64) << 32)
+                ^ index.wrapping_mul(0x9E37_79B9_7F4A_7C15),
+        )
+    }
+
+    /// Places one tree when the column and canopy volume allow it.
+    #[allow(clippy::cast_possible_truncation)]
+    fn plant_tree(
+        &self,
+        blocks: &mut HashMap<IVec3, Block>,
+        chunk: ChunkCoord,
+        local: IVec3,
+        trunk: i32,
+    ) {
+        let origin = chunk.world_origin();
+        let biome = self.biome(origin.x + local.x, origin.z + local.z);
+        if !matches!(biome, Biome::Plains | Biome::Hills) {
+            return;
+        }
+        if !(1..=CHUNK_SIZE - 2).contains(&local.x) || !(1..=CHUNK_SIZE - 2).contains(&local.z) {
+            return;
+        }
+
+        let height = self.height(origin.x + local.x, origin.z + local.z);
+        let local_height = height - origin.y;
+        if blocks.get(&IVec3::new(local.x, local_height, local.z)) != Some(&Block::Grass) {
+            return;
+        }
+
+        let top = height + trunk;
+        let highest = top + 1;
+        let local_top = highest - origin.y;
+        if highest >= WORLD_HEIGHT || local_top >= CHUNK_SIZE {
+            return;
+        }
+
+        for y in (local_height + 1)..=local_top {
+            if blocks.contains_key(&IVec3::new(local.x, y, local.z)) {
+                return;
+            }
+        }
+        for y in [top - 1, top] {
+            for dx in -1..=1 {
+                for dz in -1..=1 {
+                    if blocks.contains_key(&IVec3::new(local.x + dx, y - origin.y, local.z + dz)) {
+                        return;
+                    }
+                }
+            }
+        }
+        if blocks.contains_key(&IVec3::new(local.x, highest - origin.y, local.z)) {
+            return;
+        }
+
+        for y in [top - 1, top] {
+            for dx in -1..=1 {
+                for dz in -1..=1 {
+                    blocks.insert(
+                        IVec3::new(local.x + dx, y - origin.y, local.z + dz),
+                        Block::Leaves,
+                    );
+                }
+            }
+        }
+        blocks.insert(
+            IVec3::new(local.x, highest - origin.y, local.z),
+            Block::Leaves,
+        );
+        for y in (height + 1)..=top {
+            blocks.insert(IVec3::new(local.x, y - origin.y, local.z), Block::Wood);
+        }
     }
 
     /// First dry spawn column scanning `+X` along `z = 0`.
@@ -448,6 +556,105 @@ mod tests {
 
         assert!(carved > 0);
         assert!(bottom > 0);
+    }
+
+    fn find_tree(generator: &Generator) -> Option<(ChunkCoord, HashMap<IVec3, Block>)> {
+        for cx in 0..6 {
+            for cz in 0..6 {
+                for cy in 0..4 {
+                    let chunk = ChunkCoord::new(cx, cy, cz);
+                    let blocks = generator.generate_chunk(chunk);
+                    if blocks.values().any(|block| *block == Block::Wood) {
+                        return Some((chunk, blocks));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn trees_have_a_wood_trunk_and_leaf_canopy() {
+        let generator = Generator::new(7);
+        let (_, blocks) = find_tree(&generator).expect("a tree");
+        let base = blocks
+            .iter()
+            .find(|(local, block)| {
+                **block == Block::Wood && blocks.get(&(*local - IVec3::Y)) == Some(&Block::Grass)
+            })
+            .map(|(local, _)| *local)
+            .expect("trunk base");
+
+        let mut trunk = 0;
+        while blocks.get(&(base + IVec3::Y * trunk)) == Some(&Block::Wood) {
+            trunk += 1;
+        }
+        assert!((4..=6).contains(&trunk), "trunk {trunk}");
+
+        let top = base + IVec3::Y * (trunk - 1);
+        for y in [top - IVec3::Y, top] {
+            for dx in -1..=1 {
+                for dz in -1..=1 {
+                    let cell = y + IVec3::X * dx + IVec3::Z * dz;
+                    let expected = if dx == 0 && dz == 0 {
+                        Block::Wood
+                    } else {
+                        Block::Leaves
+                    };
+                    assert_eq!(blocks.get(&cell), Some(&expected), "{cell}");
+                }
+            }
+        }
+        assert_eq!(blocks.get(&(top + IVec3::Y)), Some(&Block::Leaves));
+    }
+
+    #[test]
+    fn trees_only_grow_on_grass_in_plains_or_hills() {
+        let generator = Generator::new(7);
+        let mut bases = 0;
+
+        for cx in 0..6 {
+            for cz in 0..6 {
+                for cy in 0..4 {
+                    let chunk = ChunkCoord::new(cx, cy, cz);
+                    let origin = chunk.world_origin();
+                    let blocks = generator.generate_chunk(chunk);
+                    for (local, block) in &blocks {
+                        if *block != Block::Wood {
+                            continue;
+                        }
+                        let below = *local - IVec3::Y;
+                        if below.y < 0 {
+                            continue;
+                        }
+                        if blocks.get(&below) != Some(&Block::Grass) {
+                            continue;
+                        }
+                        let world = origin + *local;
+                        assert!(matches!(
+                            generator.biome(world.x, world.z),
+                            Biome::Plains | Biome::Hills
+                        ));
+                        bases += 1;
+                    }
+                }
+            }
+        }
+
+        assert!(bases > 0);
+    }
+
+    #[test]
+    fn tree_hashes_are_seeded_and_indexed() {
+        let generator = Generator::new(7);
+        let chunk = ChunkCoord::new(1, 0, 2);
+
+        assert_eq!(generator.tree_hash(chunk, 0), generator.tree_hash(chunk, 0));
+        assert_ne!(generator.tree_hash(chunk, 0), generator.tree_hash(chunk, 1));
+        assert_ne!(
+            generator.tree_hash(chunk, 0),
+            Generator::new(8).tree_hash(chunk, 0)
+        );
     }
 
     #[test]

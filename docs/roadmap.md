@@ -233,7 +233,7 @@ See [v0.0.7 scope](dev/v0.0.7-scope.md) for the concrete deliverables, technical
 
 #### 1. Procedural generation
 - [x] Noise functions (Perlin / Simplex / OpenSimplex)
-- [ ] Terrain, caves, biomes, structures
+- [x] Terrain, caves, biomes, structures
 
 #### 2. Advanced rendering (optional)
 - [ ] Sparse Voxel DAGs for compression
