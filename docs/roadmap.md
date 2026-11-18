@@ -249,7 +249,7 @@ See [v0.0.7 scope](dev/v0.0.7-scope.md) for the concrete deliverables, technical
 
 ## v0.0.8: Scale
 
-**Status:** In progress - scoped; slice 1 in progress.
+**Status:** In progress - implementation and acceptance complete; release pending.
 
 **Goal:** Hold the frame budget and resident memory as the render distance grows.
 
