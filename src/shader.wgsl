@@ -4,7 +4,7 @@ struct Camera {
     ambient_colour: vec4<f32>,
     sun_colour: vec4<f32>,
     sun_direction: vec4<f32>,
-    // x: unlit flag, y: far plane, z: time of day, w: unused.
+    // x: unlit flag, y: far plane, z: time of day, w: fog end distance.
     settings: vec4<f32>,
     camera_position: vec4<f32>,
 };
@@ -97,8 +97,8 @@ fn fs_main(input: VertexOut) -> @location(0) vec4<f32> {
     let lamp = vec3<f32>(1.00, 0.75, 0.45) * block;
     let lit = albedo.rgb * ao * (ambient + sun + moon + lamp);
 
-    let far_plane = camera.settings.y;
-    let fog = clamp((input.fog_distance - 0.7 * far_plane) / (0.3 * far_plane), 0.0, 1.0);
+    let fog_end = camera.settings.w;
+    let fog = clamp((input.fog_distance - 0.7 * fog_end) / (0.3 * fog_end), 0.0, 1.0);
     let fogged = mix(lit, camera.sky_colour.rgb, fog);
     return vec4<f32>(clamp(fogged, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
 }
@@ -137,8 +137,8 @@ fn fs_water(input: VertexOut) -> @location(0) vec4<f32> {
     let lamp = vec3<f32>(1.00, 0.75, 0.45) * block;
     let lit = albedo.rgb * ao * (ambient + sun + moon + lamp);
 
-    let far_plane = camera.settings.y;
-    let fog = clamp((input.fog_distance - 0.7 * far_plane) / (0.3 * far_plane), 0.0, 1.0);
+    let fog_end = camera.settings.w;
+    let fog = clamp((input.fog_distance - 0.7 * fog_end) / (0.3 * fog_end), 0.0, 1.0);
     let fogged = mix(lit, camera.sky_colour.rgb, fog);
     return vec4<f32>(clamp(fogged, vec3<f32>(0.0), vec3<f32>(1.0)), 0.65);
 }

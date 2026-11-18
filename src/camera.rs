@@ -16,6 +16,7 @@ pub(crate) struct Camera {
     fov_y_radians: f32,
     z_near: f32,
     z_far: f32,
+    fog_end: f32,
     sensitivity: f32,
 }
 
@@ -29,6 +30,7 @@ impl Camera {
             fov_y_radians: std::f32::consts::FRAC_PI_3,
             z_near: 0.1,
             z_far: 512.0,
+            fog_end: 384.0,
             sensitivity: 0.0025,
         }
     }
@@ -51,6 +53,15 @@ impl Camera {
 
     pub(crate) fn set_far_plane(&mut self, far_plane: f32) {
         self.z_far = far_plane;
+    }
+
+    /// Distance where fog is fully opaque.
+    pub(crate) fn fog_end(&self) -> f32 {
+        self.fog_end
+    }
+
+    pub(crate) fn set_fog_end(&mut self, fog_end: f32) {
+        self.fog_end = fog_end;
     }
 
     pub(crate) fn yaw(&self) -> f32 {

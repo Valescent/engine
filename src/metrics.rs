@@ -44,6 +44,14 @@ mod imp {
     pub(crate) fn mesh_jobs(value: f64) {
         plot(plot_name!("mesh_jobs"), value);
     }
+
+    pub(crate) fn generated_columns(value: f64) {
+        plot(plot_name!("generated_columns"), value);
+    }
+
+    pub(crate) fn generation_ms(value: f64) {
+        plot(plot_name!("generation_ms"), value);
+    }
 }
 
 #[cfg(not(feature = "tracy"))]
@@ -63,6 +71,8 @@ mod imp {
         rebuild_ms,
         upload_ms,
         mesh_jobs,
+        generated_columns,
+        generation_ms,
     );
 }
 

@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `world/seed`: one decimal `u64` written when a world is created and reused by every launch. `ENGINE_SEED=<u64>` chooses the seed of a new world.
 - Modified-chunk persistence: `set_block` marks the owning chunk, unload and `Ctrl+S` write only modified chunks, and saved files are applied over regenerated blocks. An emptied chunk is a valid `VCHK` v3 file with zero records.
 - Unloading saves, then releases chunk blocks, light, GPU meshes, water meshes, and queued jobs; a late result for the unloaded column is discarded.
+- Generation metrics: the per-second debug frame line reports committed columns and their worker time, and `generated_columns` and `generation_ms` are Tracy plots.
 
 ### Fixed
 
@@ -24,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Fog runs from 70% to 100% of the render distance (`0.7 * r * 32` to `r * 32` metres) instead of percentages of the camera far plane, which stays two chunks beyond the fog end.
 - Chunks store blocks in one dense `[Block; 32768]` array (32 KiB) with a non-air count, replacing the `HashMap` and the duplicate per-chunk light arrays; light lives only beside the chunk map. Chunk snapshots for light and meshing are a direct array copy, and borders sample only the shared face. A 1434-chunk world at `render_distance_chunks = 12` now runs at 60 FPS with a ~350 MB working set.
 - `VCHK` writes format version 3 and still loads versions 1 and 2; v3 accepts block IDs `1..=8` and a zero record count for an emptied modified chunk.
 - A world is always generated from `world/seed`. A `world/chunks/` directory without a seed file is a typed `MissingSeed` error instead of an eager load, so a pre-v0.0.7 world needs a seed added deliberately.

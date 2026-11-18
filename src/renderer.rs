@@ -40,7 +40,7 @@ struct FrameUniform {
     ambient_colour: [f32; 4],
     sun_colour: [f32; 4],
     sun_direction: [f32; 4],
-    /// Unlit flag, camera far plane, time of day, unused.
+    /// Unlit flag, camera far plane, time of day, fog end distance.
     settings: [f32; 4],
     camera_position: [f32; 4],
 }
@@ -53,7 +53,7 @@ impl Default for FrameUniform {
             ambient_colour: [0.65, 0.70, 0.75, 0.0],
             sun_colour: [1.00, 0.95, 0.85, 0.0],
             sun_direction: [0.0, 1.0, 0.0, 0.0],
-            settings: [0.0, 100.0, 0.25, 0.0],
+            settings: [0.0, 100.0, 0.25, 100.0],
             camera_position: [0.0; 4],
         }
     }
@@ -221,7 +221,7 @@ impl Renderer {
 
         let frame = FrameUniform {
             view_projection: camera.view_projection().to_cols_array(),
-            settings: [0.0, camera.far_plane(), 0.25, 0.0],
+            settings: [0.0, camera.far_plane(), 0.25, camera.fog_end()],
             ..FrameUniform::default()
         };
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -330,6 +330,7 @@ impl Renderer {
     pub(crate) fn set_camera(&mut self, camera: &Camera) {
         self.frame.view_projection = camera.view_projection().to_cols_array();
         self.frame.settings[1] = camera.far_plane();
+        self.frame.settings[3] = camera.fog_end();
         let position = camera.position();
         self.frame.camera_position = [position.x, position.y, position.z, 0.0];
         self.write_frame();

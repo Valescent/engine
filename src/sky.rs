@@ -110,16 +110,16 @@ impl Sky {
     }
 }
 
-/// Linear fog factor between 70% and 100% of the far plane.
+/// Linear fog factor between 70% and 100% of the fog distance.
 ///
 /// This mirrors the shader formula so the range is covered by CPU tests.
 #[cfg(test)]
-pub(crate) fn fog_factor(distance: f32, far_plane: f32) -> f32 {
-    if far_plane <= 0.0 {
+pub(crate) fn fog_factor(distance: f32, fog_end: f32) -> f32 {
+    if fog_end <= 0.0 {
         return 1.0;
     }
-    let start = FOG_START * far_plane;
-    ((distance - start) / ((1.0 - FOG_START) * far_plane)).clamp(0.0, 1.0)
+    let start = FOG_START * fog_end;
+    ((distance - start) / ((1.0 - FOG_START) * fog_end)).clamp(0.0, 1.0)
 }
 
 fn lerp(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
@@ -243,10 +243,13 @@ mod tests {
     }
 
     #[test]
-    fn fog_uses_the_configured_far_plane() {
-        assert_eq!(fog_factor(358.0, 512.0), 0.0);
-        assert!((fog_factor(435.2, 512.0) - 0.5).abs() < 1e-4);
-        assert!((fog_factor(512.0, 512.0) - 1.0).abs() < 1e-6);
+    fn fog_uses_the_render_distance() {
+        let fog_end = 12.0 * 32.0;
+
+        assert_eq!(fog_factor(0.7 * fog_end - 1.0, fog_end), 0.0);
+        assert!((fog_factor(0.85 * fog_end, fog_end) - 0.5).abs() < 1e-4);
+        assert!((fog_factor(fog_end, fog_end) - 1.0).abs() < 1e-6);
+        assert_eq!(fog_factor(500.0, fog_end), 1.0);
     }
 
     #[test]

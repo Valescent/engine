@@ -14,7 +14,7 @@ input bindings are in [Controls](controls.md). For a symptom-first index, see
 | FPS/frame-time overlay (`F3`) | Current |
 | `pool_sim` benchmark | Current |
 | Tracy CPU/GPU profiling | Current behind the `tracy` feature |
-| Milestone metrics | v0.0.3 and v0.0.5 current; v0.0.7 planned |
+| Milestone metrics | v0.0.3, v0.0.5, and v0.0.7 current |
 | Debug overlay and crash reporting | FPS/frame-time overlay current; crash reporting not implemented |
 
 ## Logging
@@ -34,7 +34,7 @@ or spans.
 | `info` | `engine::renderer` | Selected GPU adapter, with adapter name and backend. |
 | `info` | `engine::renderer` | Renderer ready, with surface size and vertex count. |
 | `info` | `engine` | Window ready, with physical size. |
-| `debug` | `engine` | Frame timing (`fps`, `frame_ms`) about once per second while focused. |
+| `debug` | `engine` | Frame timing (`fps`, `frame_ms`, chunk counts, vertices, draw calls, rebuild/upload/generation times, generated columns) about once per second while focused. |
 | `debug` | `engine` | Toggled voxel, with the new voxel count. |
 | `debug` | `engine` | Cursor captured or released. |
 | `debug` | `engine` | Locked cursor grab unavailable; trying a confined grab. |
@@ -105,7 +105,7 @@ does not compile it.
 |---|---|
 | v0.0.3 | After an edit: dirty chunk count, total vertices, and rebuild time. Implemented. |
 | v0.0.5 | Per frame at debug level: frame time, visible and total chunks, vertices, draw calls, rebuild time, and upload time. Implemented. |
-| v0.0.7 | Generation time, queue depth, loaded and visible chunks, vertices, and frame time. Planned. |
+| v0.0.7 | Per frame at debug level: generated columns and their elapsed generation time, plus queue depth, visible and total chunks, vertices, and frame time. Implemented; `generated_columns` and `generation_ms` are also Tracy plots. |
 
 ## External tools
 

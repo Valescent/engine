@@ -396,6 +396,8 @@ struct FrameAccumulator {
     last_rebuild_ms: f64,
     last_upload_ms: f64,
     pending_jobs: usize,
+    generated_columns: u32,
+    generation_ms: f64,
 }
 
 impl FrameAccumulator {
@@ -581,6 +583,8 @@ impl App {
 
         let chunk_directory = save_directory(self.stress);
         for generation in generations {
+            self.stats.generated_columns += 1;
+            self.stats.generation_ms += generation.elapsed.as_secs_f64() * 1000.0;
             let mut loaded = true;
             for (chunk, blocks) in generation.chunks {
                 let saved = if let Some(directory) = chunk_directory {
@@ -791,6 +795,8 @@ impl App {
         metrics::rebuild_ms(self.stats.last_rebuild_ms);
         metrics::upload_ms(self.stats.last_upload_ms);
         metrics::mesh_jobs(self.stats.pending_jobs as f64);
+        metrics::generated_columns(f64::from(self.stats.generated_columns));
+        metrics::generation_ms(self.stats.generation_ms);
         profiling::finish_frame!();
 
         if let Some(window) = &self.window {
@@ -813,6 +819,8 @@ impl App {
                 draw_calls = self.stats.totals.draw_calls,
                 rebuild_ms = self.stats.rebuild_ms,
                 upload_ms = self.stats.upload_ms,
+                generated_columns = self.stats.generated_columns,
+                generation_ms = self.stats.generation_ms,
                 player = ?self.player.position,
                 on_ground = self.player.on_ground,
                 "frame timing"
@@ -902,8 +910,9 @@ impl App {
 
     #[allow(clippy::cast_precision_loss)]
     fn apply_render_distance(&mut self) {
-        let far_plane = (self.config.render_distance_chunks + 2) as f32 * 32.0;
-        self.camera.set_far_plane(far_plane);
+        let distance = self.config.render_distance_chunks as f32 * 32.0;
+        self.camera.set_far_plane(distance + 64.0);
+        self.camera.set_fog_end(distance);
     }
 
     /// Whether all four chunks of a column are lit and meshed.
@@ -1465,6 +1474,17 @@ mod tests {
         assert_eq!(setup.seed, Some(seed));
         assert!(setup.streaming.is_some());
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn the_render_distance_sets_the_far_plane_and_fog_range() {
+        let mut app = App::new(demo_world());
+        app.config.render_distance_chunks = 12;
+
+        app.apply_render_distance();
+
+        assert_eq!(app.camera.far_plane(), 448.0);
+        assert_eq!(app.camera.fog_end(), 384.0);
     }
 
     #[test]

@@ -72,7 +72,8 @@ render_distance_chunks = 12
 - The file does not configure logging, the GPU backend, the window, camera tuning, or frame
   timing; those stay environment variables or compile-time constants.
 - The render distance sets the streaming ring, the camera far plane
-  (`(render_distance + 2) * 32` metres), and fog. See the [v0.0.7 spec](../specs/v0.0.7.md).
+  (`(render_distance + 2) * 32` metres), and the fog range (`0.7 * render_distance * 32` to
+  `render_distance * 32` metres). See the [v0.0.7 spec](../specs/v0.0.7.md).
 - Remappable bindings are still planned with no milestone.
 
 ### Paths
