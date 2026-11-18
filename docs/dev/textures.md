@@ -11,7 +11,7 @@ tiles.
 | `docs/assets/` documentation assets | Current, not game textures |
 | Procedural block tiles | Current (v0.0.4) |
 | Texture array, sampler, and UV/layer vertex | Current (v0.0.4) |
-| Ten layers now; eleven planned | Current; v0.0.7 adds sand |
+| Eleven layers now | Current |
 | External asset pipeline and texture packs | Deferred; needs a separate decision |
 | Mipmaps, anisotropy, and compression | Not used; deferred |
 | Automated GPU texture tests | Not implemented; CPU mapping tests and manual GPU checks |

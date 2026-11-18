@@ -10,7 +10,7 @@ Milestones move from **planned** to **in progress** to **shipped**. Each one nam
 | 0.0.4   | Playable              | Shipped  |
 | 0.0.5   | Scale and Performance | Shipped  |
 | 0.0.6   | Atmosphere            | Shipped  |
-| 0.0.7   | Advanced Horizons     | Planned  |
+| 0.0.7   | Advanced Horizons     | In progress |
 
 ## v0.0.1: The Foundation
 
@@ -221,7 +221,7 @@ See [v0.0.6 scope](dev/v0.0.6-scope.md) for the concrete deliverables, technical
 
 ## v0.0.7: Advanced Horizons
 
-**Status:** Planned
+**Status:** In progress - deterministic terrain, biomes, caves, and sea level are implemented.
 
 **Goal:** Turn the engine into a game-ready, procedurally generated world.
 
@@ -232,7 +232,7 @@ See [v0.0.7 scope](dev/v0.0.7-scope.md) for the concrete deliverables, technical
 ### Milestones
 
 #### 1. Procedural generation
-- [ ] Noise functions (Perlin / Simplex / OpenSimplex)
+- [x] Noise functions (Perlin / Simplex / OpenSimplex)
 - [ ] Terrain, caves, biomes, structures
 
 #### 2. Advanced rendering (optional)

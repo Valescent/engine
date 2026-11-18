@@ -1,7 +1,7 @@
 //! Block types and their texture-array layers.
 
 /// Number of layers in the block texture array.
-pub(crate) const TEXTURE_LAYERS: u32 = 10;
+pub(crate) const TEXTURE_LAYERS: u32 = 11;
 
 /// Edge length of one block texture tile in pixels.
 pub(crate) const TEXTURE_SIZE: u32 = 16;
@@ -18,6 +18,7 @@ pub(crate) enum Block {
     Leaves = 5,
     Lamp = 6,
     Water = 7,
+    Sand = 8,
 }
 
 /// Texture-array layers used by one block's top, side, and bottom faces.
@@ -58,6 +59,7 @@ impl Block {
             Self::Leaves => Some(uniform(7)),
             Self::Lamp => Some(uniform(8)),
             Self::Water => Some(uniform(9)),
+            Self::Sand => Some(uniform(10)),
         }
     }
 
@@ -72,6 +74,7 @@ impl Block {
             5 => Some(Self::Leaves),
             6 => Some(Self::Lamp),
             7 => Some(Self::Water),
+            8 => Some(Self::Sand),
             _ => None,
         }
     }
@@ -109,13 +112,14 @@ mod tests {
             Block::Leaves,
             Block::Lamp,
             Block::Water,
+            Block::Sand,
         ];
 
         for (id, block) in blocks.into_iter().enumerate() {
             assert_eq!(block.id(), u8::try_from(id).unwrap());
             assert_eq!(Block::from_id(block.id()), Some(block));
         }
-        assert_eq!(Block::from_id(8), None);
+        assert_eq!(Block::from_id(9), None);
     }
 
     #[test]
@@ -129,6 +133,7 @@ mod tests {
             Block::Wood,
             Block::Leaves,
             Block::Lamp,
+            Block::Sand,
         ] {
             assert!(block.is_solid());
         }
@@ -149,6 +154,7 @@ mod tests {
             (Block::Leaves, 7, 7, 7),
             (Block::Lamp, 8, 8, 8),
             (Block::Water, 9, 9, 9),
+            (Block::Sand, 10, 10, 10),
         ];
 
         for (block, top, side, bottom) in expected {

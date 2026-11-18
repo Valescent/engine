@@ -388,6 +388,7 @@ name = "engine"
 version = "0.0.6"
 dependencies = [
  "bytemuck",
+ "fastnoise-lite",
  "glam",
  "micropool",
  "pollster",
@@ -417,6 +418,15 @@ checksum = "e35d6e78f4cebb90e51d543db8fe41528851d6deeef6ef21ebd4bfdc1e784776"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "fastnoise-lite"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e5f3c3cc9081e5d0e18bcd50e80cd33cba47fc22f88a9da9c33ecd1c87ea5c0"
+dependencies = [
+ "num-traits",
 ]
 
 [[package]]

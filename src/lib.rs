@@ -7,6 +7,7 @@
 mod block;
 mod camera;
 mod frustum;
+mod generation;
 mod light;
 mod mesh;
 mod mesher;
@@ -38,6 +39,7 @@ use winit::window::{CursorGrabMode, Window, WindowId};
 use block::Block;
 use camera::Camera;
 use frustum::Frustum;
+use generation::{CHUNK_COLUMN, Generator};
 use mesh::Lod;
 use mesher::{MeshKind, MeshPool, MeshQueue, Priority, collect_finished, create_pool};
 use player::{Player, PlayerInput};
@@ -86,9 +88,12 @@ pub fn run() -> Result<(), RunError> {
     let _tracy_client = tracy_client::Client::start();
 
     let stress = stress_requested();
-    let world = world_for(stress, Path::new(WORLD_CHUNKS))?;
+    let (world, spawn) = world_for(stress, Path::new(WORLD_CHUNKS))?;
     let event_loop = EventLoop::new()?;
     let mut app = App::with_world(world, stress);
+    if let Some(spawn) = spawn {
+        app.set_spawn(spawn);
+    }
     let result = event_loop.run_app(&mut app);
     if let Some(error) = app.error {
         return Err(error);
@@ -120,20 +125,69 @@ fn no_vsync_requested() -> bool {
     std::env::var("ENGINE_NO_VSYNC").is_ok_and(|value| value == "1")
 }
 
-/// Loads the stress scene or the saved (or demo) world.
+/// Seed from `ENGINE_SEED`, when set and valid.
+fn generated_seed() -> Option<u64> {
+    let value = std::env::var("ENGINE_SEED").ok()?;
+    match value.trim().parse() {
+        Ok(seed) => Some(seed),
+        Err(error) => {
+            warn!(%error, %value, "ignoring invalid ENGINE_SEED");
+            None
+        }
+    }
+}
+
+/// Builds a fixed area of generated terrain around the spawn column.
 ///
-/// Stress mode never touches `directory`.
-fn world_for(stress: bool, directory: &Path) -> Result<World, SaveError> {
+/// Streaming replaces the fixed area in a later v0.0.7 slice.
+#[allow(clippy::cast_precision_loss)]
+fn generated_world(seed: u64) -> (World, Vec3) {
+    let generator = Generator::new(seed);
+    let (spawn_x, spawn_z, spawn_height) = generator.spawn_column();
+    let center = ChunkCoord::from_world(IVec3::new(spawn_x, 0, spawn_z)).0;
+    let mut world = World::default();
+
+    for dx in -2..=2 {
+        for dz in -2..=2 {
+            for y in 0..CHUNK_COLUMN {
+                let chunk =
+                    ChunkCoord::new(center.coordinates().x + dx, y, center.coordinates().z + dz);
+                let blocks = generator.generate_chunk(chunk);
+                world.insert_chunk(chunk, blocks);
+            }
+        }
+    }
+    world.relight();
+
+    let spawn = Vec3::new(
+        spawn_x as f32 + 0.5,
+        (spawn_height + 1) as f32,
+        spawn_z as f32 + 0.5,
+    );
+    info!(seed, ?spawn, "generated world ready");
+    (world, spawn)
+}
+
+/// Loads the stress scene, a generated world, or the saved (or demo) world.
+///
+/// Stress mode never touches `directory`. The returned spawn overrides the
+/// default player position.
+fn world_for(stress: bool, directory: &Path) -> Result<(World, Option<Vec3>), SaveError> {
     if stress {
         let mut world = stress_world();
         world.relight();
-        Ok(world)
+        Ok((world, None))
+    } else if let Some(seed) = generated_seed() {
+        Ok({
+            let (world, spawn) = generated_world(seed);
+            (world, Some(spawn))
+        })
     } else if directory.exists() {
-        World::load_chunks(directory)
+        Ok((World::load_chunks(directory)?, None))
     } else {
         let mut world = demo_world();
         world.relight();
-        Ok(world)
+        Ok((world, None))
     }
 }
 
@@ -733,6 +787,11 @@ impl App {
             window.set_cursor_visible(true);
         }
         self.mouse_captured = false;
+    }
+
+    fn set_spawn(&mut self, position: Vec3) {
+        self.player = Player::new(position);
+        self.camera.set_position(self.player.eye_position());
     }
 
     fn set_focused(&mut self, focused: bool) {

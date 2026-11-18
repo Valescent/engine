@@ -19,6 +19,7 @@ The engine is a small `winit` and `wgpu` application. This page describes the cu
 | `src/frustum.rs` | Six-plane frustum extraction and conservative AABB tests. |
 | `src/metrics.rs` | Tracy plots for frame, GPU, chunk, draw, rebuild, upload, and queue metrics; no-ops without the `tracy` feature. |
 | `src/light.rs` | Sky/block light storage accessors, BFS propagation, and the padded `LightField`. |
+| `src/generation.rs` | Seeded noise fields, height, biomes, caves, water fill, and the spawn column. |
 | `src/sky.rs` | Day/night cycle, sun direction, sky/ambient/sun colours, and the CPU fog formula. |
 | `src/voxel.rs` | Texture vertices, the highlight mesh, and the v0.0.4 face-culled mesher kept as a test reference. |
 | `src/renderer.rs` | `wgpu` device/surface setup, pipelines, block texture array, buffers, depth texture, resizing, and draw submission. |
@@ -32,7 +33,7 @@ The engine is a small `winit` and `wgpu` application. This page describes the cu
 - `Renderer` owns the `wgpu` instance, surface, device, queue, surface configuration, chunk and highlight pipelines, camera uniform, per-chunk LOD buffers and origin uniforms, the block texture array, and depth attachment.
 - `Camera` owns only look state; it does not read the clock or input devices.
 - `Player` owns feet position, velocity, and ground state; it does not read input devices.
-- `World` owns the chunk map and the cached light fields; every stored chunk is non-empty.
+- `World` owns the chunk map and the cached light fields; every stored chunk is non-empty. Generated chunks are inserted through `World::insert_chunk`.
 - `mesh::build_mesh` is a pure function over a chunk snapshot and its border blocks.
 - `mesher::WorkerPool` owns the worker threads for mesh and light jobs; `MeshQueue` owns revisions, pending jobs, built state, and desired LODs.
 

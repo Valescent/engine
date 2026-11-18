@@ -27,9 +27,10 @@ pub(crate) const CHUNK_CELLS: usize = (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) as 
 pub(crate) type DirtyChunks = BTreeSet<ChunkCoord>;
 
 const MAGIC: [u8; 4] = *b"VCHK";
-const FORMAT_VERSION: u16 = 2;
+const FORMAT_VERSION: u16 = 3;
 const OLDEST_FORMAT_VERSION: u16 = 1;
 const V1_MAX_BLOCK_ID: u8 = 5;
+const V2_MAX_BLOCK_ID: u8 = 7;
 const HEADER_BYTES: usize = 22;
 const RECORD_BYTES: usize = 4;
 const MAX_BLOCK_COUNT: u32 = 32_768;
@@ -45,6 +46,11 @@ impl ChunkCoord {
     pub(crate) fn from_world(world: IVec3) -> (Self, IVec3) {
         let size = IVec3::splat(CHUNK_SIZE);
         (Self(world.div_euclid(size)), world.rem_euclid(size))
+    }
+
+    /// Builds a chunk coordinate from chunk-space axes.
+    pub(crate) fn new(x: i32, y: i32, z: i32) -> Self {
+        Self(IVec3::new(x, y, z))
     }
 
     /// Minimum-corner world coordinate of the chunk.
@@ -190,6 +196,20 @@ impl World {
     /// Returns a stored chunk, or `None` when the chunk is empty.
     pub(crate) fn chunk(&self, chunk: ChunkCoord) -> Option<&Chunk> {
         self.chunks.get(&chunk)
+    }
+
+    /// Inserts a generated or loaded chunk. Empty block maps are ignored.
+    pub(crate) fn insert_chunk(&mut self, chunk: ChunkCoord, blocks: HashMap<IVec3, Block>) {
+        if blocks.is_empty() {
+            return;
+        }
+        self.chunks.insert(
+            chunk,
+            Chunk {
+                blocks,
+                ..Chunk::default()
+            },
+        );
     }
 
     /// Iterates over every non-empty chunk in unspecified order.
@@ -501,7 +521,8 @@ fn parse_chunk(bytes: &[u8]) -> Result<(ChunkCoord, Chunk), SaveError> {
     }
 
     let block_count = read_u32(bytes, 18).expect("header length checked");
-    if block_count == 0 || block_count > MAX_BLOCK_COUNT {
+    let minimum_count = u32::from(version < 3);
+    if block_count < minimum_count || block_count > MAX_BLOCK_COUNT {
         return Err(SaveError::InvalidBlockCount(block_count));
     }
     let block_count_usize = usize::try_from(block_count).expect("block count fits in usize");
@@ -526,10 +547,10 @@ fn parse_chunk(bytes: &[u8]) -> Result<(ChunkCoord, Chunk), SaveError> {
         }
 
         let block_id = bytes[offset + 3];
-        let max_id = if version == 1 {
-            V1_MAX_BLOCK_ID
-        } else {
-            u8::MAX
+        let max_id = match version {
+            1 => V1_MAX_BLOCK_ID,
+            2 => V2_MAX_BLOCK_ID,
+            _ => u8::MAX,
         };
         let block = Block::from_id(block_id)
             .filter(|block| *block != Block::Air && block_id <= max_id)
@@ -963,33 +984,40 @@ mod tests {
     fn unsupported_version_is_rejected() {
         let directory = temp_dir("version");
         let mut bytes = header(ChunkCoord(IVec3::ZERO), 1);
-        bytes[4..6].copy_from_slice(&3_u16.to_le_bytes());
+        bytes[4..6].copy_from_slice(&4_u16.to_le_bytes());
         bytes.extend_from_slice(&[0, 0, 0, 1]);
         write_raw(&directory, "chunk_0_0_0.vchk", &bytes);
 
         assert!(matches!(
             World::load_chunks(&directory),
-            Err(SaveError::UnsupportedVersion(3))
+            Err(SaveError::UnsupportedVersion(4))
         ));
         fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
     fn invalid_block_count_is_rejected() {
-        for count in [0, MAX_BLOCK_COUNT + 1] {
-            let directory = temp_dir("count");
-            write_raw(
-                &directory,
-                "chunk_0_0_0.vchk",
-                &header(ChunkCoord(IVec3::ZERO), count),
-            );
+        let directory = temp_dir("count");
+        write_raw(
+            &directory,
+            "chunk_0_0_0.vchk",
+            &header(ChunkCoord(IVec3::ZERO), MAX_BLOCK_COUNT + 1),
+        );
+        assert!(matches!(
+            World::load_chunks(&directory),
+            Err(SaveError::InvalidBlockCount(value)) if value == MAX_BLOCK_COUNT + 1
+        ));
+        fs::remove_dir_all(directory).unwrap();
 
-            assert!(matches!(
-                World::load_chunks(&directory),
-                Err(SaveError::InvalidBlockCount(value)) if value == count
-            ));
-            fs::remove_dir_all(directory).unwrap();
-        }
+        let directory = temp_dir("count-v1");
+        let mut bytes = header(ChunkCoord(IVec3::ZERO), 0);
+        bytes[4..6].copy_from_slice(&1_u16.to_le_bytes());
+        write_raw(&directory, "chunk_0_0_0.vchk", &bytes);
+        assert!(matches!(
+            World::load_chunks(&directory),
+            Err(SaveError::InvalidBlockCount(0))
+        ));
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
@@ -1008,7 +1036,7 @@ mod tests {
 
     #[test]
     fn invalid_or_air_block_ids_are_rejected() {
-        for block_id in [0, 8] {
+        for block_id in [0, 9] {
             let directory = temp_dir("block-id");
             let mut bytes = header(ChunkCoord(IVec3::ZERO), 1);
             bytes.extend_from_slice(&[0, 0, 0, block_id]);
@@ -1020,6 +1048,54 @@ mod tests {
             ));
             fs::remove_dir_all(directory).unwrap();
         }
+    }
+
+    #[test]
+    fn version_3_round_trips_sand() {
+        let directory = temp_dir("v3-sand");
+        let mut world = World::default();
+        world.set_block(IVec3::new(1, 0, 0), Block::Sand);
+        world.save_chunks(&directory).unwrap();
+
+        let loaded = World::load_chunks(&directory).unwrap();
+
+        assert_eq!(loaded.block(IVec3::new(1, 0, 0)), Block::Sand);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn version_2_rejects_sand() {
+        let directory = temp_dir("v2-sand");
+        let mut bytes = header(ChunkCoord(IVec3::ZERO), 1);
+        bytes[4..6].copy_from_slice(&2_u16.to_le_bytes());
+        bytes.extend_from_slice(&[0, 0, 0, 8]);
+        write_raw(&directory, "chunk_0_0_0.vchk", &bytes);
+
+        assert!(matches!(
+            World::load_chunks(&directory),
+            Err(SaveError::InvalidBlockId(8))
+        ));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn version_3_accepts_an_empty_modified_chunk_file() {
+        let directory = temp_dir("v3-empty");
+        write_raw(
+            &directory,
+            "chunk_0_0_0.vchk",
+            &header(ChunkCoord(IVec3::ZERO), 0),
+        );
+
+        let world = World::load_chunks(&directory).unwrap();
+
+        assert_eq!(
+            world
+                .chunk(chunk_at(IVec3::ZERO))
+                .map_or(0, |chunk| chunk.blocks.len()),
+            0
+        );
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

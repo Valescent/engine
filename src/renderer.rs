@@ -929,6 +929,7 @@ fn tile_pixel(layer: u32, x: u32, y: u32) -> [u8; 4] {
         8 => shade([238, 198, 108], variation),
         9 if noise.is_multiple_of(11) => shade([64, 132, 196], variation),
         9 => shade([46, 104, 172], variation),
+        10 => shade([214, 196, 138], variation),
         _ => {
             if noise.is_multiple_of(7) {
                 shade([42, 88, 42], variation)

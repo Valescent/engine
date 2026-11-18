@@ -23,6 +23,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 wgpu = "30"
 wgpu-profiler = { version = "=0.28.0", optional = true, features = ["tracy"] }
 winit = { version = "0.30", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
+fastnoise-lite = "1.1.1"
 
 [features]
 tracy = [

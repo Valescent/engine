@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The demo world has a small pond; water is not on the hotbar.
 - Edits recompute sky and block light on the worker pool: the edited chunk, its 3x3x3 neighbourhood, and loaded chunks below are invalidated, and each is remeshed after its new light field is accepted.
 
+### Added
+
+- Deterministic procedural generation: five seeded noise fields (continentalness, erosion, temperature, humidity, and 3D caves) drive a 128-block-tall world with hills, mountains, sea level 32, three biomes, surface palettes, caves, and water fill. `ENGINE_SEED=<u64>` builds a fixed generated area around the spawn column.
+- `Sand` (block ID 8, texture layer 10); the texture array grows to eleven layers.
+
 ### Fixed
 
 - Player collision no longer scans every block in the world. The swept AABB query visits only the blocks inside its bounds, cutting `Player::update` from 1.15 ms to 0.9 us per frame on the 64-chunk stress scene and the uncapped frame time from 1.28 ms to 0.23 ms.
@@ -47,6 +52,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A deterministic 64-chunk stress scene on `ENGINE_STRESS_SCENE=1`; it never reads or writes `world/chunks/`.
 - Per-second debug metrics for frame time, visible and total chunks, visible vertices, draw calls, worker rebuild time, and upload time.
 
+### Added
+
+- Deterministic procedural generation: five seeded noise fields (continentalness, erosion, temperature, humidity, and 3D caves) drive a 128-block-tall world with hills, mountains, sea level 32, three biomes, surface palettes, caves, and water fill. `ENGINE_SEED=<u64>` builds a fixed generated area around the spawn column.
+- `Sand` (block ID 8, texture layer 10); the texture array grows to eleven layers.
+
 ### Fixed
 `n- Player collision no longer scans every block in the world. The swept AABB query visits only the blocks inside its bounds, cutting `Player::update` from 1.15 ms to 0.9 us per frame on the 64-chunk stress scene and the uncapped frame time from 1.28 ms to 0.23 ms.
 `n### Changed
@@ -66,6 +76,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Debug FPS/frame-time overlay on `F3`; it refreshes once per second.
 - `VCHK` v1 chunk persistence under `world/chunks/`, load on startup, save on exit and `Ctrl+S`.
 - A demo world with grass over dirt, stone, wood, and leaves, plus a safe spawn column.
+
+### Added
+
+- Deterministic procedural generation: five seeded noise fields (continentalness, erosion, temperature, humidity, and 3D caves) drive a 128-block-tall world with hills, mountains, sea level 32, three biomes, surface palettes, caves, and water fill. `ENGINE_SEED=<u64>` builds a fixed generated area around the spawn column.
+- `Sand` (block ID 8, texture layer 10); the texture array grows to eleven layers.
 
 ### Fixed
 `n- Player collision no longer scans every block in the world. The swept AABB query visits only the blocks inside its bounds, cutting `Player::update` from 1.15 ms to 0.9 us per frame on the 64-chunk stress scene and the uncapped frame time from 1.28 ms to 0.23 ms.
@@ -89,6 +104,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - One GPU vertex buffer and one draw call per non-empty chunk, with a per-chunk origin uniform.
 - Debug logging for dirty chunk count, total vertices, and rebuild time after an edit.
 
+### Added
+
+- Deterministic procedural generation: five seeded noise fields (continentalness, erosion, temperature, humidity, and 3D caves) drive a 128-block-tall world with hills, mountains, sea level 32, three biomes, surface palettes, caves, and water fill. `ENGINE_SEED=<u64>` builds a fixed generated area around the spawn column.
+- `Sand` (block ID 8, texture layer 10); the texture array grows to eleven layers.
+
 ### Fixed
 `n- Player collision no longer scans every block in the world. The swept AABB query visits only the blocks inside its bounds, cutting `Player::update` from 1.15 ms to 0.9 us per frame on the 64-chunk stress scene and the uncapped frame time from 1.28 ms to 0.23 ms.
 `n### Changed
@@ -96,6 +116,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The demo scene is a 4×4 floor spanning four chunks with a raised voxel on the chunk boundary.
 - `Space` toggles that boundary voxel and rebuilds only the affected chunks.
 - The camera starts near `(37, 4.5, 38)` and is aimed at `(32, 0.5, 32)`.
+
+### Added
+
+- Deterministic procedural generation: five seeded noise fields (continentalness, erosion, temperature, humidity, and 3D caves) drive a 128-block-tall world with hills, mountains, sea level 32, three biomes, surface palettes, caves, and water fill. `ENGINE_SEED=<u64>` builds a fixed generated area around the spawn column.
+- `Sand` (block ID 8, texture layer 10); the texture array grows to eleven layers.
 
 ### Fixed
 
