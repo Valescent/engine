@@ -17,7 +17,7 @@ use terrain_core::header::{self, HASH_ALGORITHM, HEADER_FORMAT_VERSION, Header, 
 use terrain_core::pipeline::Terrain;
 use terrain_core::save::SectionStore;
 use terrain_core::section::{self, BlockId, Section, SectionKey};
-use terrain_core::world_save::WorldSave;
+use terrain_core::world_save::{GENERATOR_VERSION, WorldSave};
 
 const BIN: &str = env!("CARGO_BIN_EXE_terrain-gen");
 /// The vertical section index a fixture uses: it contains the sea-level surface.
@@ -118,7 +118,7 @@ fn write_header(directory: &Path, seed: u64) {
         .expect("the v1 description hashes");
     let header = Header {
         format_version: HEADER_FORMAT_VERSION,
-        generator_version: 2,
+        generator_version: GENERATOR_VERSION,
         description_hash: digest,
         hash_algorithm: HASH_ALGORITHM.to_owned(),
         seed,
@@ -236,7 +236,7 @@ fn write_bundle(
     let recorded_section = section_override.unwrap_or(&section_hash);
 
     let manifest = format!(
-        "{{\n  \"generator_version\": 2,\n  \"seed\": {seed},\n  \
+        "{{\n  \"generator_version\": {GENERATOR_VERSION},\n  \"seed\": {seed},\n  \
          \"description_hash\": \"{}\",\n  \"platform_tag\": \"test-triple\",\n  \
          \"failure\": {{ \"column\": [{}, {}], \"stage\": \"column\" }}\n}}\n",
         hex(&digest),
@@ -799,7 +799,10 @@ fn replay_refuses_an_unknown_generator_version() {
     let manifest = fs::read_to_string(&path).expect("the manifest is readable");
     fs::write(
         &path,
-        manifest.replace("\"generator_version\": 2", "\"generator_version\": 999"),
+        manifest.replace(
+            &format!("\"generator_version\": {GENERATOR_VERSION}"),
+            "\"generator_version\": 999",
+        ),
     )
     .expect("the edited manifest is written");
 

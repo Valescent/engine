@@ -280,6 +280,11 @@ pub struct Terrain {
     climate: Climate,
     climate_params: ClimateParams,
     biomes: BiomeTable,
+    /// Domain tag of the per-column biome dither, hashed once (`E3.3`).
+    ///
+    /// The tag is a pure function of its name, so caching it changes no output;
+    /// it keeps the column path to one hash and no string hashing.
+    dither_tag: u64,
     surface: SurfaceTable,
     volume: Volume,
     /// Runtime ids resolved from the content pack (`§2.6`). Every block the
@@ -457,6 +462,7 @@ impl Terrain {
             climate: Climate::default(),
             climate_params: ClimateParams::v1_default(),
             biomes: v1_biomes(),
+            dither_tag: domain(crate::climate::DITHER_DOMAIN),
             surface,
             volume,
             materials,
@@ -506,6 +512,24 @@ impl Terrain {
     #[must_use]
     pub fn seed(&self) -> u64 {
         self.seed
+    }
+
+    /// The per-column biome pick at one world column (`E3.3`).
+    ///
+    /// This is the same value [`Terrain::column`] uses for the surface rules and
+    /// [`Terrain::footprint`] uses for features. It is exposed for the blend
+    /// tests and debug dumps; generation itself reads the cached tile directly.
+    ///
+    /// # Errors
+    ///
+    /// Propagates tile failures.
+    pub fn biome_at(&self, block_x: i32, block_z: i32) -> Result<u8, TerrainError> {
+        let tile_x = crate::lattice::floor_div(block_x, TILE_BLOCKS);
+        let tile_z = crate::lattice::floor_div(block_z, TILE_BLOCKS);
+        let tile = self.tile(tile_x, tile_z)?;
+        let local_x = block_x - tile_x * TILE_BLOCKS;
+        let local_z = block_z - tile_z * TILE_BLOCKS;
+        Ok(self.column_biome(&tile, local_x, local_z, block_x, block_z))
     }
 
     /// The whole tile cache entry, built on first use.
@@ -770,6 +794,30 @@ impl Terrain {
         MIN_BASE + (base - MIN_BASE) * keep
     }
 
+    /// The per-column biome pick (`E3.3`).
+    ///
+    /// One cell lookup and one hash per column. The climate tile already owns the
+    /// quantised margin, so this does not re-derive a weight; the hash is keyed on
+    /// `(x, z)` only, so the surface rules and the feature footprint for a column
+    /// resolve the same biome.
+    fn column_biome(
+        &self,
+        tile: &TileData,
+        local_x: i32,
+        local_z: i32,
+        block_x: i32,
+        block_z: i32,
+    ) -> u8 {
+        tile.climate.biome_pick(
+            local_x.div_euclid(MACRO_CELL),
+            local_z.div_euclid(MACRO_CELL),
+            block_x,
+            block_z,
+            self.seed,
+            self.dither_tag,
+        )
+    }
+
     /// Generates one block column.
     ///
     /// # Errors
@@ -798,7 +846,7 @@ impl Terrain {
         let lake_level = hydro.lake_level(hydro_x, hydro_z);
         let humidity = tile.climate.humidity(cell_x, cell_z);
         let temp = tile.climate.temp(cell_x, cell_z);
-        let biome = tile.climate.best(cell_x, cell_z);
+        let biome = self.column_biome(&tile, local_x, local_z, block_x, block_z);
         let mut column = [self.materials.air; COLUMN];
         debug_assert!(humidity.is_finite());
         let facts = ColumnFacts {
@@ -1006,9 +1054,10 @@ impl Terrain {
     ///
     /// Tops and slopes are the same [`HeightTile`] values the column pipeline
     /// reads (`E4.3`, `E4.6`), so a tree stands on the surface before detail and
-    /// caves. Biomes come from the climate tile and flags mirror the river and
-    /// bank facts of [`Terrain::column`]. This reads tile caches only; it never
-    /// generates a column a second time.
+    /// caves. Biomes are the same per-column `biome_pick` result the surface
+    /// rules use, and flags mirror the river and bank facts of
+    /// [`Terrain::column`]. This reads tile caches only; it never generates a
+    /// column a second time.
     fn footprint(&self, section_x: i32, section_z: i32) -> Result<Footprint, TerrainError> {
         let origin = [
             section_x * features::REGION_SIZE - features::REGION_SIZE,
@@ -1029,10 +1078,8 @@ impl Terrain {
 
                 footprint.tops[slot] = tile.height.top(tile_local_x, tile_local_z);
                 footprint.slope[slot] = tile.height.slope_drop(tile_local_x, tile_local_z);
-                footprint.biome[slot] = tile.climate.best(
-                    tile_local_x.div_euclid(MACRO_CELL),
-                    tile_local_z.div_euclid(MACRO_CELL),
-                );
+                footprint.biome[slot] =
+                    self.column_biome(&tile, tile_local_x, tile_local_z, block_x, block_z);
 
                 let hydro = self.hydro_tile(
                     crate::lattice::floor_div(block_x, HYDRO_TILE),
@@ -1598,6 +1645,35 @@ mod tests {
                 scatter: &self.scatter,
             }
         }
+    }
+
+    #[test]
+    fn footprint_and_surface_share_the_column_pick() {
+        let terrain = terrain();
+        let footprint = terrain.footprint(0, 0).unwrap();
+        assert_eq!(
+            footprint.origin,
+            [-features::REGION_SIZE, -features::REGION_SIZE]
+        );
+        let mut compared = 0;
+        for local_z in 0..features::FOOTPRINT {
+            for local_x in 0..features::FOOTPRINT {
+                let x = footprint.origin[0] + local_x;
+                let z = footprint.origin[1] + local_z;
+                let slot = local_x + features::FOOTPRINT * local_z;
+                let slot = usize::try_from(slot).expect("a footprint slot fits usize");
+                assert_eq!(
+                    footprint.biome[slot],
+                    terrain.biome_at(x, z).unwrap(),
+                    "footprint differs from the column pick at ({x}, {z})"
+                );
+                compared += 1;
+            }
+        }
+        assert_eq!(
+            compared,
+            usize::try_from(features::FOOTPRINT * features::FOOTPRINT).unwrap()
+        );
     }
 
     #[test]

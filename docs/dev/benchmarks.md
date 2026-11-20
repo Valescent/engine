@@ -369,11 +369,15 @@ The earlier data-only attempt (halving the raw `d2` width to `0.025`) reached me
 left p90 at 117-161, so the normalising term was required. Biome centres and weights are
 unchanged, and the coverage rules (three biomes per seed, each at least 5% of land) still hold.
 
-The measured `q` is stored climate state, but the column pipeline still selects `best`
-directly; `biome_pick` is not called by generation yet. The generated block stream is
-therefore byte-identical (the golden fixture and the PR counter baseline did not move), so this
-is not a generator-version bump. Wiring the dithered pick into `pipeline.rs` is a separate
-change.
+The measured `q` is stored climate state and, in generator version 3, is the shipped
+transition: the column pipeline calls `biome_pick` once per column for the surface rules and
+once per column of the `3 x 3` feature footprint. The dither is observable in the output, not
+just in the tool: at seed `0x5EED` the plains/desert border near `(-870, -98)` produces grass on
+a column whose nearest centre is desert, and sand one block away. The golden `equator` section
+hash moved from `08ecf2b38fc52eb3` to `dd09269e8fc5b39c`; the PR counters are unchanged because
+a topsoil swap does not change solid, air, or water counts. Across the whole finite world the
+dithered coverage for seed `0x5EED` is plains 39.4%, forest 35.9%, desert 6.3%, tundra 18.4% of
+land (seeds 1 and 2 are similar), so all four biomes stay above the 5% floor.
 
 The tool remains a local diagnostic and is not part of the `Terrain gates` job.
 

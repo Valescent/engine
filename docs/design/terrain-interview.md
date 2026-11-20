@@ -791,10 +791,10 @@ an ADR, or the executable source.
       two measurement defects: the border walk skipped the nearest minimum, and the direction
       plane straddled the border's V. Both are fixed, and the gradient normaliser is now part of
       `q` rather than a later bump. At 16 seeds all five pairs pass (medians 23.33–27.17, p10
-      14.69–18.76, p90 32.55–63.32). The column pipeline still reads `biome_best` directly instead
-      of calling `biome_pick`, so the generated block stream is unchanged and the generator
-      version stays 2 until that call is wired. `q` quantisation is checked to be <0.1 block per
-      step at a ~24-block band.
+      14.69–18.76, p90 32.55–63.32). Generator version 3 calls `biome_pick` once per column for
+      the surface rules and the `3 x 3` feature footprint, so the measured transition is the
+      shipped one; the golden section hash and the PR counter baseline were refreshed. `q`
+      quantisation is checked to be <0.1 block per step at a ~24-block band.
 - [x] E3.2 How many biomes exist and how are they named and versioned?
       **Six records in two classes.** Climate biomes (the only argmin candidates): **plains**
       (~0.55, 0.45), **forest** (~0.50, 0.75), **desert** (~0.85, 0.10), **tundra** (~0.10, 0.35),

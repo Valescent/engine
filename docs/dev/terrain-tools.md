@@ -88,6 +88,8 @@ pair. `--json` is one object with sorted pairs and fixed two-decimal values:
 ```
 
 Current v1 status is recorded in [Benchmark results](benchmarks.md#terrain-blend-calibration-2026-11-20).
+Generator version 3 calls `biome_pick` once per column for the surface rules and the feature
+footprint, so the measured `q` is the shipped transition, not a diagnostic copy.
 
 ## counters
 

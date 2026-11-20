@@ -31,9 +31,12 @@ use crate::section::{SavedSection, Section, SectionKey};
 pub const DESCRIPTION_FILE: &str = "description.toml";
 /// Generator version this build writes and reads (`T1.2`).
 ///
-/// Version 2 solves hydrology over the whole finite world instead of per tile,
+/// Version 2 solved hydrology over the whole finite world instead of per tile,
 /// so lake and river levels at a 512-block seam can differ from version 1.
-pub const GENERATOR_VERSION: u16 = 2;
+/// Version 3 normalises the biome dither margin by its block-space gradient
+/// (so a transition is a fixed number of blocks) and applies the per-column
+/// `biome_pick` to the surface rules and the feature footprint.
+pub const GENERATOR_VERSION: u16 = 3;
 /// One-past-the-active counter for unique world ids within this process.
 static NEXT_WORLD: AtomicU64 = AtomicU64::new(0);
 

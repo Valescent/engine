@@ -165,12 +165,13 @@ than 5%; a baseline of zero must stay zero. The checked-in baseline is rewritten
 wall-clock counters, and the comparison rule are defined in
 [Terrain tools](terrain-tools.md#counters).
 
-`calibrate-blend` is a calibration tool, not a CI gate. It currently exits `1` against the v1
-starting `blend_width`; see [Benchmark results](benchmarks.md#terrain-blend-calibration-2026-11-20).
-Run it locally after any change to climate fields, `BLEND_W`, or biome centres:
+`calibrate-blend` is a calibration tool, not a CI gate. It passes at 16 seeds against the
+shipped generator version 3; see
+[Benchmark results](benchmarks.md#terrain-blend-calibration-2026-11-20). Run it locally after any
+change to climate fields, `BLEND_W`, or biome centres:
 
 ```console
-cargo run --locked --quiet --no-default-features --bin terrain-gen -- calibrate-blend --seeds 3
+cargo run --locked --quiet --no-default-features --bin terrain-gen -- calibrate-blend --seeds 16
 ```
 
 ## Local equivalents

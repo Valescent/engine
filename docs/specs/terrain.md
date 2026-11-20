@@ -679,8 +679,9 @@ first; the `q` formula itself is pinned.
 v1 status (16 seeds, 2026-11-20): all five pairs are assessed and pass. Medians are 23.33-27.17,
 p10 14.69-18.76, and p90 32.55-63.32. `terrain-gen calibrate-blend --seeds 16` exits `0`; the
 per-pair table is in [Benchmark results](../dev/benchmarks.md#terrain-blend-calibration-2026-11-20).
-The column pipeline still selects `biome_best` directly, so the dithered pick is not yet wired
-into generated blocks; `biome_pick` is the single helper that will replace that read.
+The column pipeline calls `biome_pick` once per column for the surface rules and the `3 x 3`
+feature footprint, so the stored margin is the shipped transition. Both are bit-identical for a
+column and do not depend on chunk order.
 
 ### 8.5 Surface rules (E4.1–E4.5)
 
@@ -1445,8 +1446,9 @@ contradict a MUST elsewhere in this document.
   worker, so a basin or river that crosses a 512-block tile seam has one level. This is generator
   version 2. Tile mode remains for tiles outside the solved grid, where the 16-cell halo still
   applies.
-- **Only generator version 2 ships.** No frozen evaluator for version 1 is implemented yet, so a
-  world pinned to version 1 is refused rather than regenerated with slightly different hydrology.
+- **Only generator version 3 ships.** No frozen evaluator for versions 1 or 2 is implemented yet,
+  so a world pinned to an older version is refused rather than regenerated with different
+  hydrology or biome blending.
 - **Snow is a full cube** (§10.5); `snow_layer` step geometry is deferred (§22).
 - **Cold beach uses sand** for both temperature variants (§8.5).
 - **Persistence** (16): section files, one-generation backup rotation, the journal file, replay,
@@ -1462,11 +1464,11 @@ contradict a MUST elsewhere in this document.
   shipped one.
 - **`terrain-gen map` is ASCII-only** for now: `--seed --from --size --cell` prints a height/water grid and `--json` rows. PNG modes, `tEXt` metadata, legends, and `--ndjson` are deferred.
 - **The full tooling bundle is deferred.** `verify --report <dir>` writes a manifest plus JSON/text; the zip bundle is not implemented. `calibrate-blend` and the PR counter gate are implemented.
-- **Biome blend calibration passes; the dither is not wired yet.** `terrain-gen calibrate-blend
+- **Biome blend calibration passes and the dither is wired.** `terrain-gen calibrate-blend
   --seeds 16` assesses all five pairs and passes (medians 23.33-27.17, p10 14.69-18.76, p90
-  32.55-63.32) after normalising the margin by its block-space gradient. The column pipeline
-  still reads `biome_best` directly instead of calling `biome_pick`, so generated blocks are
-  unchanged and the generator version stays 2. The command is diagnostic and is not a CI gate.
+  32.55-63.32) after normalising the margin by its block-space gradient. Generator version 3
+  calls `biome_pick` once per column for the surface rules and the feature footprint, so the
+  measured transition is the shipped one. The command is diagnostic and is not a CI gate.
 - **Section-record migration has no older format.** Version 2 records are canonicalised and headers upgrade v1 to v2; there is no normative v1 section record to decode or migrate.
 - **Camera-relative rendering is applied; the CPU camera is still `f32`** (§14.3). Both draw paths
   subtract one per-frame render origin (the camera's block position) from every submitted section
