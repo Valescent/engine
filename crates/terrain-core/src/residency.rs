@@ -514,15 +514,40 @@ pub const fn teleport_budget() -> Budget {
     }
 }
 
-/// The demo's column-ring radius: the spec's [`VIEW_RADIUS`].
+/// The demo's column-ring cap: the spec's [`VIEW_RADIUS`].
 ///
-/// `(2 * 16 + 1)^2 = 1,089` columns are wanted; the two-column unload margin
-/// bounds the resident set at 1,369. The ring is LOD1 beyond two columns, so
-/// the measured cost is ~126 MB of section bytes and ~590 MB peak working set
-/// on the reference machine, under the ~600 MB target. Nearest-first order
-/// makes the centre playable in under a second while the full ring fills in
-/// about 45 s.
+/// The demo chooses its radius from `config.toml` with [`demo_view_radius`], so
+/// this is an upper bound rather than the radius actually streamed.
+/// `[world] render_distance_chunks = 16` gives the spec ring: `(2 * 16 + 1)^2 =
+/// 1,089` columns wanted, with the two-column unload margin bounding the
+/// resident set at 1,369. The default `render_distance_chunks = 12` gives a
+/// 625-column ring (`(2 * 12 + 1)^2`).
 pub const DEMO_VIEW_RADIUS: i32 = 16;
+
+/// Smallest demo radius the render distance may select.
+///
+/// It matches the spec's degradation floor (`MIN_VIEW_RADIUS`), keeping a
+/// coherent ring even when `render_distance_chunks` is set below it.
+pub const MIN_DEMO_VIEW_RADIUS: i32 = 4;
+
+/// Derives the demo's column-ring radius from `render_distance_chunks`.
+///
+/// The ring follows the camera's visible extent: the camera's fog end is
+/// `render_distance_chunks * 32` blocks, so a ring of that many columns ends
+/// exactly at the fog and no resident column is spent beyond it. The spec's
+/// [`DEMO_VIEW_RADIUS`] remains the cap, and [`MIN_DEMO_VIEW_RADIUS`] keeps a
+/// small setting coherent. With the default `12` this is a 625-column ring;
+/// `[world] render_distance_chunks = 16` selects the spec's 1,089-column ring.
+#[must_use]
+pub const fn demo_view_radius(render_distance_chunks: i32) -> i32 {
+    if render_distance_chunks < MIN_DEMO_VIEW_RADIUS {
+        MIN_DEMO_VIEW_RADIUS
+    } else if render_distance_chunks > DEMO_VIEW_RADIUS {
+        DEMO_VIEW_RADIUS
+    } else {
+        render_distance_chunks
+    }
+}
 
 /// `K4.1`: the per-frame ring budget, in columns.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1242,13 +1267,31 @@ mod tests {
     }
 
     #[test]
-    fn demo_radius_is_the_spec_view_radius() {
+    fn demo_radius_caps_at_the_spec_view_radius() {
         assert_eq!(DEMO_VIEW_RADIUS, VIEW_RADIUS);
         let side = 2 * DEMO_VIEW_RADIUS + 1;
         assert_eq!(side, 33);
-        assert_eq!(side * side, 1_089, "33 x 33 columns");
+        assert_eq!(side * side, 1_089, "33 x 33 columns at the cap");
+
+        // The default render distance selects a smaller ring; the same cap and
+        // margin arithmetic holds one scale down.
+        assert_eq!(demo_view_radius(12), 12);
+        assert_eq!((2 * demo_view_radius(12) + 1).pow(2), 625);
         // The two-column unload margin is what bounds the resident set.
         assert_eq!(unload_radius(), 18);
         assert_eq!((2 * unload_radius() + 1) * (2 * unload_radius() + 1), 1_369);
+    }
+
+    #[test]
+    fn demo_view_radius_clamps_low_and_high() {
+        assert_eq!(demo_view_radius(i32::MIN), MIN_DEMO_VIEW_RADIUS);
+        assert_eq!(demo_view_radius(0), MIN_DEMO_VIEW_RADIUS);
+        assert_eq!(demo_view_radius(3), MIN_DEMO_VIEW_RADIUS);
+        assert_eq!(demo_view_radius(4), 4);
+        assert_eq!(demo_view_radius(8), 8);
+        assert_eq!(demo_view_radius(12), 12);
+        assert_eq!(demo_view_radius(16), DEMO_VIEW_RADIUS);
+        assert_eq!(demo_view_radius(24), DEMO_VIEW_RADIUS);
+        assert_eq!(demo_view_radius(i32::MAX), DEMO_VIEW_RADIUS);
     }
 }

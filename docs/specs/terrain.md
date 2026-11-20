@@ -1458,10 +1458,13 @@ contradict a MUST elsewhere in this document.
 - **`TERRAIN_DEMO` is a demo, not the product**: a column-level streaming ring with real
   per-column lighting (sky, block, water attenuation), per-face texture references resolved to
   procedural layers, collision, edits, per-edit saves, distance LOD1, and residency-driven
-  generate/build/evict decisions. The ring runs at the spec's 16-column view radius (1,089 wanted
-  columns, ~126 MB of section bytes, ~590 MB peak process working set, ~45 s cold fill), so the
-  memory margin against the 600 MB target is thin. LOD2 remains; the world model behind it is the
-  shipped one.
+  generate/build/evict decisions. The ring radius follows the render distance,
+  `render_distance_chunks.clamp(4, VIEW_RADIUS)`, so its outer columns end at the camera's fog
+  end instead of beyond the far plane. The default 12 gives 625 wanted columns (~71 MB of section
+  bytes, ~491 MB peak process working set, ~59 s cold fill); `[world] render_distance_chunks = 16`
+  selects the spec's 1,089-column ring (~118 MB, ~686 MB peak, ~79 s), which is the pressure point
+  against the 600 MB target. LOD2 remains, with complete far squares at the default and an LOD1
+  fallback when the ring is too small for any; the world model behind it is the shipped one.
 - **`terrain-gen map` is ASCII-only** for now: `--seed --from --size --cell` prints a height/water grid and `--json` rows. PNG modes, `tEXt` metadata, legends, and `--ndjson` are deferred.
 - **The full tooling bundle is deferred.** `verify --report <dir>` writes a manifest plus JSON/text; the zip bundle is not implemented. `calibrate-blend` and the PR counter gate are implemented.
 - **Biome blend calibration passes and the dither is wired.** `terrain-gen calibrate-blend

@@ -13,9 +13,10 @@ cargo run --bin engine
 ```
 
 The demo opens a column-level streaming ring on top of the legacy scene. Every column within the
-spec's 16-column view radius is resident (1,089 columns), fine-meshed inside two columns, drawn
-as LOD1 through the middle band, and drawn as LOD2 in the far band. Edits, saves, and repairs use
-`world/terrain-demo/`; the legacy `world/chunks/` path is untouched.
+configured render distance is resident: the default 12 gives 625 columns, and
+`[world] render_distance_chunks = 16` gives the spec cap of 1,089. Columns are fine-meshed inside
+two columns, drawn as LOD1 through the middle band, and drawn as LOD2 in the far band. Edits, saves,
+and repairs use `world/terrain-demo/`; the legacy `world/chunks/` path is untouched.
 
 | Input | Effect |
 |---|---|
@@ -53,21 +54,28 @@ Physics refuses movement while the player's column has no light.
 | `Terrain::new` + world hydrology solve | ~165 ms |
 | 12 worker threads, one `Terrain` each | < 1 ms |
 | First column (generation + light + mesh) | ~0.8 s |
-| Full 33x33 ring (1,089 columns) | **~56 s** (LOD1-only ~70 s on the same machine) |
-| Steady-state ring footprint (`terrain ring` log) | **~118 MB** (LOD1-only ~126 MB) |
-| `terrain ring` quads | **~862,000** (LOD1-only ~1,955,000) |
-| Process peak working set (RTX 4060, release) | **~570 MB** |
+| Full 25x25 ring (625 columns, default `render_distance_chunks = 12`) | **~59 s** |
+| Full 33x33 ring (1,089 columns, `render_distance_chunks = 16`) | **~79 s** |
+| Steady-state ring footprint, default 12 (`terrain ring` log) | **~71 MB**, **~724,000 quads** |
+| Steady-state ring footprint, cap 16 | **~118 MB**, **~863,000 quads** |
+| Process peak working set, default 12 (release, no vsync) | **~491 MB** |
+| Process peak working set, cap 16 | **~686 MB** |
 
 Every worker owns its own `Terrain` because the pipeline caches behind `RefCell`. One
 `Arc<WorldHydro>` solve is shared by every worker, so a lake or river that crosses a column
 boundary has one level. Output is keyed and sorted, so worker order cannot change the ring.
 
-The radius is the spec's **16** (`(2*16+1)^2 = 1,089` wanted columns; the two-column unload
-margin bounds the resident set at `(2*18+1)^2 = 1,369`). Section storage is paletted and
-bit-packed, and only the inner two columns are LOD0, so the measured steady state is ~118 MB of
-ring footprint (down from ~126 MB with LOD1 only) and ~570 MB peak working set, near the
-~600 MB target. Nearest-first order keeps the centre playable in under a second while the full
-ring fills in ~56 s (`ENGINE_NO_VSYNC=1`).
+The radius is derived from the render distance, `render_distance_chunks.clamp(4, 16)`. The
+camera's fog end is `render_distance_chunks * 32` blocks, so the ring ends exactly at the fog and
+no resident column sits outside the far plane. The default 12 gives
+`(2*12+1)^2 = 625` wanted columns, with the two-column unload margin bounding the resident set at
+`(2*14+1)^2 = 841`; `render_distance_chunks = 16` gives the spec ring
+(`(2*16+1)^2 = 1,089` wanted, `(2*18+1)^2 = 1,369` resident). Section storage is paletted and
+bit-packed, and only the inner two columns are LOD0. The measured steady state is ~71 MB of ring
+footprint and ~491 MB peak working set at the default 12, or ~118 MB and ~686 MB at the 16 cap;
+the default leaves headroom under the ~600 MB target that the cap does not. Nearest-first order
+keeps the centre playable in under a second while the full ring fills in ~59 s at 12 or ~79 s at
+16 (`ENGINE_NO_VSYNC=1`).
 
 ## Light
 
@@ -95,8 +103,10 @@ ring fills in ~56 s (`ENGINE_NO_VSYNC=1`).
 - Fine sections are greedy-meshed with `MeshLod::Lod0` inside a two-column radius, with one extra
   ring of fine meshes kept as a transition buffer. A coarse region is split at the same cutoff:
   LOD1 owns complete `2x2` column squares from radius 4 outward, and LOD2 owns complete `4x4`
-  column squares entirely beyond radius 7. The LOD1 band is therefore four columns wide and the
-  LOD2 band covers the outer half of the ring.
+  column squares entirely beyond radius 7. The bands stay coherent as the ring shrinks: at the
+  default 12 complete far squares remain on the `8..11` band (bases `8` and `-12`); at 8 no
+  complete square is clear of the LOD1 radius, so the outer band falls back to LOD1 and LOD2 is
+  empty.
 - Each quad takes the layer of the face it belongs to: the block's top reference for `+Y`, bottom
   for `-Y`, and side for `±X`/`±Z` and cross quads (`ADR-0015`). `Textures` are presentation-only,
   so changing one never invalidates a saved section.
@@ -161,8 +171,9 @@ block and the player lands at world `y = 64`.
   before streaming starts, so a column generated later already includes its edits.
 - Startup is non-blocking: the player is frozen on the centre column until its light lands, then
   moved to the measured surface. Movement is guarded by `TerrainDemo::aabb_ready`.
-- Measured: full 33x33 ring in ~45 s, ~126 MB of section bytes, ~590 MB peak process working set; the
-  per-second `terrain ring` info line reports resident/ready/fine/coarse counts and bytes.
+- Measured at the default 12: full 25x25 ring in ~59 s, ~71 MB of section bytes, ~724,000 quads,
+  ~491 MB peak process working set. At the 16 cap: ~79 s, ~118 MB, ~863,000 quads, ~686 MB peak.
+  The per-second `terrain ring` info line reports resident/ready/fine/coarse counts and bytes.
 
 ## Persistence
 
@@ -206,7 +217,7 @@ cargo tree -p terrain-core -e normal --no-default-features
 ```
 
 `terrain-gen` is the `terrain-core` binary; its golden and counter baselines are in
-`crates/terrain-core/tests/golden/`. Current local count: **653 lib tests** across `engine` and
+`crates/terrain-core/tests/golden/`. Current local count: **658 lib tests** across `engine` and
 `terrain-core` (2 ignored), **3** `light_preview`, **30** `terrain_gen` integration tests.
 
 ## Known gaps
