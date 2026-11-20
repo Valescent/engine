@@ -10,7 +10,7 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
-use glam::Vec3;
+use glam::{IVec3, Vec3};
 use thiserror::Error;
 #[cfg(feature = "tracy")]
 use tracing::warn;
@@ -20,7 +20,7 @@ use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
 use crate::block::{TEXTURE_LAYERS, TEXTURE_SIZE};
-use crate::camera::Camera;
+use crate::camera::{Camera, RenderView, relative_origin};
 use crate::frustum::Frustum;
 use crate::mesh::{Lod, MeshData};
 use crate::mesher2::Quad;
@@ -55,7 +55,10 @@ struct FrameUniform {
     sun_direction: [f32; 4],
     /// Unlit flag, camera far plane, time of day, fog end distance.
     settings: [f32; 4],
+    /// Camera position relative to the frame's render origin, for fog distance.
     camera_position: [f32; 4],
+    /// The render origin itself, used only to keep water waves world-anchored.
+    render_origin: [f32; 4],
 }
 
 impl Default for FrameUniform {
@@ -68,6 +71,7 @@ impl Default for FrameUniform {
             sun_direction: [0.0, 1.0, 0.0, 0.0],
             settings: [0.0, 100.0, 0.25, 100.0],
             camera_position: [0.0; 4],
+            render_origin: [0.0; 4],
         }
     }
 }
@@ -96,7 +100,8 @@ struct GpuMesh {
 }
 
 struct GpuChunk {
-    _origin_buffer: wgpu::Buffer,
+    /// Chunk origin relative to the frame's render origin.
+    origin_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     lod0: Option<(u64, GpuMesh)>,
     lod1: Option<(u64, GpuMesh)>,
@@ -238,8 +243,11 @@ pub(crate) fn decode_quad(raw: u64) -> DecodedQuad {
 /// so a draw needs no vertex buffer, no index buffer, and no per-quad data.
 /// Sections are keyed by world origin, so a submit is a diff: only new or
 /// changed origins allocate and upload, and unchanged origins keep their
-/// buffers. The path is created only when [`Renderer::enable_terrain`] is
-/// called, which keeps the legacy mesh demo untouched.
+/// buffers. The origin uniform itself is the section origin minus the frame's
+/// [`RenderView::origin`]; when the camera crosses a block, every resident
+/// origin buffer is rewritten. The path is created only when
+/// [`Renderer::enable_terrain`] is called, which keeps the legacy mesh demo
+/// untouched.
 #[derive(Debug)]
 pub(crate) struct TerrainDraw {
     device: wgpu::Device,
@@ -251,12 +259,17 @@ pub(crate) struct TerrainDraw {
     /// Draw order of the resident origins. Kept beside the map so a full
     /// submit draws in the caller's order, exactly like the old `Vec`.
     order: Vec<[i32; 3]>,
+    /// World block subtracted from every section origin this frame.
+    render_origin: IVec3,
 }
 
 #[derive(Debug)]
 struct GpuSection {
     /// The revision that produced the resident buffers.
     revision: u64,
+    /// World block origin, kept as integers so rebasing stays exact.
+    world_origin: [i32; 3],
+    /// World origin minus the current render origin, mirrored into the uniform.
     origin: Vec3,
     /// World blocks per cell, mirrored into the origin uniform.
     scale: u32,
@@ -330,6 +343,7 @@ impl TerrainDraw {
         format: wgpu::TextureFormat,
         camera_layout: &wgpu::BindGroupLayout,
         texture_layout: &wgpu::BindGroupLayout,
+        render_origin: IVec3,
     ) -> Result<Self, RendererError> {
         let section_layout = create_terrain_section_layout(device);
         let opaque_pipeline = create_terrain_pipeline(
@@ -364,6 +378,7 @@ impl TerrainDraw {
             water_pipeline,
             sections: BTreeMap::new(),
             order: Vec::new(),
+            render_origin,
         })
     }
 
@@ -483,7 +498,8 @@ impl TerrainDraw {
             return Ok(());
         }
 
-        let origin = section_origin(section.origin);
+        let world_origin = section.origin;
+        let origin = relative_origin(world_origin, self.render_origin);
         let origin_buffer =
             create_terrain_origin_buffer(device, origin, scale_factor(section.scale));
         let opaque = create_quad_range(device, queue, layout, &origin_buffer, section.opaque)?;
@@ -493,6 +509,7 @@ impl TerrainDraw {
             section.origin,
             GpuSection {
                 revision,
+                world_origin,
                 origin,
                 scale: section.scale,
                 origin_buffer,
@@ -502,6 +519,27 @@ impl TerrainDraw {
             },
         );
         Ok(())
+    }
+
+    /// Rebases every resident origin uniform for a new frame origin.
+    fn set_render_origin(&mut self, origin: IVec3) {
+        if self.render_origin == origin {
+            return;
+        }
+        self.render_origin = origin;
+        for section in self.sections.values_mut() {
+            let relative = relative_origin(section.world_origin, origin);
+            if relative == section.origin {
+                continue;
+            }
+            section.origin = relative;
+            write_terrain_origin(
+                &self.queue,
+                &section.origin_buffer,
+                relative,
+                scale_factor(section.scale),
+            );
+        }
     }
 
     fn draw_opaque(
@@ -620,15 +658,6 @@ fn section_visible(frustum: &Frustum, origin: Vec3, scale: f32) -> bool {
     frustum.intersects_aabb(origin, origin + Vec3::splat(SECTION_EXTENT * scale))
 }
 
-#[allow(clippy::cast_precision_loss)]
-fn section_origin(origin: [i32; 3]) -> Vec3 {
-    // World space, exactly like the legacy chunk origin uniform: `Camera` has
-    // no floating origin yet, so its view-projection is world-space and both
-    // draw paths must use the same frame. Section origins are small integers,
-    // so the `f32` conversion is exact.
-    Vec3::new(origin[0] as f32, origin[1] as f32, origin[2] as f32)
-}
-
 #[allow(
     clippy::cast_precision_loss,
     reason = "scale is 1, 2, or 4 and exact in f32"
@@ -642,8 +671,14 @@ fn create_terrain_origin_buffer(device: &wgpu::Device, origin: Vec3, scale: f32)
     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("terrain section origin"),
         contents: bytemuck::cast_slice(&data),
-        usage: wgpu::BufferUsages::UNIFORM,
+        // `COPY_DST` lets the camera-relative rebase rewrite this in place.
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     })
+}
+
+fn write_terrain_origin(queue: &wgpu::Queue, buffer: &wgpu::Buffer, origin: Vec3, scale: f32) {
+    let data = [origin.x, origin.y, origin.z, scale];
+    queue.write_buffer(buffer, 0, bytemuck::cast_slice(&data));
 }
 
 fn create_quad_range(
@@ -793,6 +828,10 @@ pub(crate) struct Renderer {
     highlight_pipeline: wgpu::RenderPipeline,
     highlight_buffer: wgpu::Buffer,
     highlight_count: u32,
+    /// World-space highlight vertices, rebased whenever the render origin moves.
+    highlight_world: Vec<HighlightVertex>,
+    /// World block subtracted from every submitted origin this frame.
+    render_origin: IVec3,
     overlay_pipeline: wgpu::RenderPipeline,
     overlay_buffer: wgpu::Buffer,
     overlay_buffer_size: u64,
@@ -868,9 +907,18 @@ impl Renderer {
         config.present_mode = wgpu::PresentMode::Fifo;
         surface.configure(&device, &config);
 
+        let view = camera.render_view();
+        let render_origin = view.origin.as_vec3().to_array();
         let frame = FrameUniform {
-            view_projection: camera.view_projection().to_cols_array(),
+            view_projection: view.view_projection.to_cols_array(),
             settings: [0.0, camera.far_plane(), 0.25, camera.fog_end()],
+            camera_position: [
+                view.camera_position.x,
+                view.camera_position.y,
+                view.camera_position.z,
+                0.0,
+            ],
+            render_origin: [render_origin[0], render_origin[1], render_origin[2], 0.0],
             ..FrameUniform::default()
         };
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -945,6 +993,8 @@ impl Renderer {
             highlight_pipeline,
             highlight_buffer,
             highlight_count,
+            highlight_world: Vec::new(),
+            render_origin: view.origin,
             overlay_pipeline,
             overlay_buffer,
             overlay_buffer_size,
@@ -977,16 +1027,44 @@ impl Renderer {
         let (depth_texture, depth_view) = create_depth_texture(&self.device, &self.config);
         self.depth_texture = depth_texture;
         self.depth_view = depth_view;
-        self.set_camera(camera);
+        self.set_camera(&camera.render_view());
     }
 
-    pub(crate) fn set_camera(&mut self, camera: &Camera) {
-        self.frame.view_projection = camera.view_projection().to_cols_array();
-        self.frame.settings[1] = camera.far_plane();
-        self.frame.settings[3] = camera.fog_end();
-        let position = camera.position();
-        self.frame.camera_position = [position.x, position.y, position.z, 0.0];
+    /// Applies one frame's render origin and camera-relative transform.
+    ///
+    /// Both draw paths and the highlight use the same origin. The origin only
+    /// changes when the camera crosses a block boundary, so resident origin
+    /// uniforms are rebased then rather than every frame.
+    pub(crate) fn set_camera(&mut self, view: &RenderView) {
+        self.frame.view_projection = view.view_projection.to_cols_array();
+        self.frame.settings[1] = view.far_plane;
+        self.frame.settings[3] = view.fog_end;
+        let camera_position = view.camera_position;
+        self.frame.camera_position = [camera_position.x, camera_position.y, camera_position.z, 0.0];
+        let render_origin = view.origin.as_vec3();
+        self.frame.render_origin = [render_origin.x, render_origin.y, render_origin.z, 0.0];
+        if view.origin != self.render_origin {
+            self.render_origin = view.origin;
+            self.rebase_chunks();
+            if let Some(terrain) = &mut self.terrain {
+                terrain.set_render_origin(view.origin);
+            }
+            self.upload_highlight();
+        }
         self.write_frame();
+    }
+
+    /// Rewrites every legacy chunk origin uniform in relative space.
+    fn rebase_chunks(&mut self) {
+        let queue = &self.queue;
+        for (chunk, gpu_chunk) in &mut self.chunks {
+            let origin = relative_origin(chunk.world_origin().to_array(), self.render_origin);
+            queue.write_buffer(
+                &gpu_chunk.origin_buffer,
+                0,
+                bytemuck::cast_slice(&[origin.x, origin.y, origin.z, 0.0]),
+            );
+        }
     }
 
     /// Writes sky colours, sun direction, the unlit flag, and the clear colour.
@@ -1055,16 +1133,18 @@ impl Renderer {
     fn chunk_entry(&mut self, chunk: ChunkCoord) -> &mut GpuChunk {
         let device = &self.device;
         let layout = &self.chunk_bind_group_layout;
+        let render_origin = self.render_origin;
         self.chunks.entry(chunk).or_insert_with(|| {
-            let origin = chunk.origin();
+            let origin = relative_origin(chunk.world_origin().to_array(), render_origin);
             let origin_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("chunk origin"),
                 contents: bytemuck::cast_slice(&[origin.x, origin.y, origin.z, 0.0]),
-                usage: wgpu::BufferUsages::UNIFORM,
+                // The camera-relative rebase rewrites this in place.
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             });
             GpuChunk {
                 bind_group: create_chunk_bind_group(device, layout, &origin_buffer),
-                _origin_buffer: origin_buffer,
+                origin_buffer,
                 lod0: None,
                 lod1: None,
                 lod2: None,
@@ -1132,7 +1212,26 @@ impl Renderer {
     }
 
     pub(crate) fn set_highlight(&mut self, mesh: &[HighlightVertex]) {
-        let (highlight_buffer, highlight_count) = create_highlight_buffer(&self.device, mesh);
+        self.highlight_world.clear();
+        self.highlight_world.extend_from_slice(mesh);
+        self.upload_highlight();
+    }
+
+    /// Uploads the world-space highlight mesh in the frame's relative space.
+    fn upload_highlight(&mut self) {
+        let origin = self.render_origin.as_vec3();
+        let relative: Vec<HighlightVertex> = self
+            .highlight_world
+            .iter()
+            .map(|vertex| HighlightVertex {
+                position: [
+                    vertex.position[0] - origin.x,
+                    vertex.position[1] - origin.y,
+                    vertex.position[2] - origin.z,
+                ],
+            })
+            .collect();
+        let (highlight_buffer, highlight_count) = create_highlight_buffer(&self.device, &relative);
         self.highlight_buffer = highlight_buffer;
         self.highlight_count = highlight_count;
     }
@@ -1173,6 +1272,7 @@ impl Renderer {
                 self.config.format,
                 &self.camera_bind_group_layout,
                 &self.textures_layout,
+                self.render_origin,
             )?;
             self.terrain = Some(terrain);
         }
@@ -1375,6 +1475,7 @@ impl Renderer {
         frustum: &Frustum,
         stats: &mut FrameStats,
     ) {
+        let render_origin = self.render_origin.as_vec3();
         if !self.chunks.is_empty() {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
@@ -1384,7 +1485,7 @@ impl Renderer {
                 let Some(mesh) = gpu_chunk.active_mesh() else {
                     continue;
                 };
-                let min = chunk.origin();
+                let min = chunk.origin() - render_origin;
                 if !frustum.intersects_aabb(min, min + Vec3::splat(CHUNK_SIZE as f32)) {
                     continue;
                 }
@@ -1417,7 +1518,7 @@ impl Renderer {
             let Some((_, mesh)) = &gpu_chunk.water else {
                 continue;
             };
-            let min = chunk.origin();
+            let min = chunk.origin() - render_origin;
             if !frustum.intersects_aabb(min, min + Vec3::splat(CHUNK_SIZE as f32)) {
                 continue;
             }
@@ -1527,7 +1628,7 @@ fn create_camera_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayo
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,
-                min_binding_size: wgpu::BufferSize::new(160),
+                min_binding_size: wgpu::BufferSize::new(176),
             },
             count: None,
         }],
@@ -1584,8 +1685,8 @@ fn create_terrain_section_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("terrain section bind group layout"),
         entries: &[
-            // The section origin, relative to the same world space as the
-            // legacy chunk origin uniform.
+            // The section origin, relative to the frame's render origin,
+            // exactly like the legacy chunk origin uniform.
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX,

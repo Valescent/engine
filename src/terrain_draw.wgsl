@@ -25,12 +25,15 @@ struct Camera {
     sun_direction: vec4<f32>,
     // x: unlit flag, y: far plane, z: time of day, w: fog end distance.
     settings: vec4<f32>,
+    // Camera is relative to the frame origin.
     camera_position: vec4<f32>,
+    // The world-space render origin; the terrain water pass does not use it.
+    render_origin: vec4<f32>,
 };
 
 struct Section {
-    // Block origin of the section in the same world space as the existing
-    // chunk origin uniform.
+    // Section origin relative to the frame's render origin, the same
+    // convention as the legacy chunk origin uniform and `camera_position`.
     origin: vec3<f32>,
     // World blocks per cell: 1 for fine, 2 or 4 for a coarse LOD section.
     scale: f32,

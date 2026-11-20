@@ -3613,13 +3613,16 @@ impl App {
                 )
             })
         };
+        // One render origin for the frame: the same value builds the frustum
+        // and rebases every submitted section/chunk origin.
+        let view = self.camera.render_view();
         let frustum = {
             profiling::scope!("frustum");
-            Frustum::from_view_projection(self.camera.view_projection())
+            Frustum::from_view_projection(view.view_projection)
         };
         let slow_render = Instant::now();
         if let Some(renderer) = &mut self.renderer {
-            renderer.set_camera(&self.camera);
+            renderer.set_camera(&view);
             renderer.set_sky(&self.sky.sample(), self.unlit);
             renderer.set_overlay(overlay.as_deref());
             self.stats.totals = renderer.render(&frustum);
@@ -5516,12 +5519,15 @@ mod tests {
     #[test]
     fn the_stress_spawn_frustum_contains_the_nearby_chunks() {
         let app = App::with_world(stress_world(), true);
-        let frustum = Frustum::from_view_projection(app.camera.view_projection());
+        let view = app.camera.render_view();
+        let frustum = Frustum::from_view_projection(view.view_projection);
 
         let inside = ChunkCoord::from_world(IVec3::new(16, 0, 16)).0.origin();
+        let inside = view.relative_point(inside);
         assert!(frustum.intersects_aabb(inside, inside + Vec3::splat(32.0)));
 
         let behind = ChunkCoord::from_world(IVec3::new(16, 0, 240)).0.origin();
+        let behind = view.relative_point(behind);
         assert!(!frustum.intersects_aabb(behind, behind + Vec3::splat(32.0)));
     }
 

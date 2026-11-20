@@ -178,7 +178,7 @@ Queued next:
    117-278 against <=64; halving the width lowers the median to ~31 but not p90. Tuning the biome
    centres and weights is a generation change (version bump + goldens).
 
-Verification at the 2026-11-20 ring merge point: `fmt`, `clippy`, `cargo test` (643 lib, 2 ignored,
+Verification at the 2026-11-20 ring merge point: `fmt`, `clippy`, `cargo test` (645 lib, 2 ignored,
 3 light_preview, 24 integration) and `golden check` exit 0. Start the demo with `TERRAIN_DEMO=1`
 and `cargo run --bin engine`; it needs `world/seed` (or `ENGINE_STRESS_SCENE=1`).
 

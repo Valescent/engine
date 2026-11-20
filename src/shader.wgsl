@@ -6,10 +6,15 @@ struct Camera {
     sun_direction: vec4<f32>,
     // x: unlit flag, y: far plane, z: time of day, w: fog end distance.
     settings: vec4<f32>,
+    // Camera is relative to the frame origin; the render origin itself is
+    // world-space and only anchors the water wave phase.
     camera_position: vec4<f32>,
+    render_origin: vec4<f32>,
 };
 
 struct Chunk {
+    // Chunk origin relative to the frame's render origin, the same convention
+    // as the packed-quad section origin and `camera.camera_position`.
     origin: vec3<f32>,
     padding: f32,
 };
@@ -135,7 +140,9 @@ fn fs_water(input: VertexOut) -> @location(0) vec4<f32> {
     );
 
     let phase = 40.0 * 3.141592653589793 * camera.settings.z;
-    let world = input.world_position;
+    // `world_position` is relative; add the render origin so the wave pattern
+    // stays anchored to world x/z as the camera crosses block boundaries.
+    let world = input.world_position + camera.render_origin.xyz;
     let wave = vec3<f32>(
         sin(phase + world.x * 0.7 + world.z * 0.5),
         0.0,
