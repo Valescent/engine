@@ -432,6 +432,8 @@ struct App {
     occluded: bool,
     show_overlay: bool,
     horizon_cull: bool,
+    auto_walk: bool,
+    auto_strafe: bool,
     horizon: horizon::Horizon,
     horizon_at: Instant,
     overlay_fps: f64,
@@ -529,7 +531,9 @@ impl App {
             focused: true,
             occluded: false,
             show_overlay: cfg!(debug_assertions),
-            horizon_cull: std::env::var("ENGINE_HORIZON_CULL").is_ok_and(|value| value == "1"),
+            horizon_cull: !std::env::var("ENGINE_HORIZON_CULL").is_ok_and(|value| value == "0"),
+            auto_walk: std::env::var("ENGINE_AUTO_WALK").is_ok_and(|value| value == "1"),
+            auto_strafe: std::env::var("ENGINE_AUTO_STRAFE").is_ok_and(|value| value == "1"),
             horizon: horizon::Horizon::disabled(),
             horizon_at: Instant::now(),
             overlay_fps: 0.0,
@@ -970,6 +974,26 @@ impl App {
         }
     }
 
+    fn move_axes(&self) -> (f32, f32) {
+        let forward = if self.auto_walk {
+            1.0
+        } else {
+            axis(
+                self.pressed.contains(&KeyCode::KeyW),
+                self.pressed.contains(&KeyCode::KeyS),
+            )
+        };
+        let right = if self.auto_strafe {
+            1.0
+        } else {
+            axis(
+                self.pressed.contains(&KeyCode::KeyD),
+                self.pressed.contains(&KeyCode::KeyA),
+            )
+        };
+        (forward, right)
+    }
+
     #[allow(clippy::cast_precision_loss)]
     fn redraw(&mut self) {
         if self.occluded {
@@ -986,14 +1010,7 @@ impl App {
             self.record_frame(elapsed);
 
             let delta_seconds = elapsed.min(MAX_FRAME_DELTA).as_secs_f32();
-            let forward_axis = axis(
-                self.pressed.contains(&KeyCode::KeyW),
-                self.pressed.contains(&KeyCode::KeyS),
-            );
-            let right_axis = axis(
-                self.pressed.contains(&KeyCode::KeyD),
-                self.pressed.contains(&KeyCode::KeyA),
-            );
+            let (forward_axis, right_axis) = self.move_axes();
             let input = PlayerInput {
                 forward: forward_axis,
                 right: right_axis,

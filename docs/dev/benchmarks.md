@@ -747,14 +747,14 @@ The horizon A/B at the spawn view:
 - **Off:** the full ridge and its trees are visible.
 - **On, before the fix:** the far part of the ridge beyond the near crest was removed, leaving a
   vertical cut at a chunk boundary.
-- **On, after the fix:** the capture matches the off view. Occluders now use the chunk's **minimum**
-  column top (`Chunk::terrain_min`) instead of its maximum, so a crest cannot act as a wall across a
-  slope; the occluder span also uses the chunk's 16 m half-width rather than 24 m. Trees are excluded
-  from both tops.
+- **On, after the fix:** the capture matches the off view on seed 42, seed 7, and a strafe
+  view. Occluders now use the chunk's **minimum** column top (`Chunk::terrain_min`) instead of its
+  maximum, so a crest cannot act as a wall across a slope; the occluder span also uses the chunk's
+  16 m half-width rather than 24 m. Trees are excluded from both tops.
 - The conservative occluder reduces the cull: 819 visible chunks instead of 166, 1.84 M vertices,
   and a 0.139 ms GPU scene against 0.245-0.253 ms with horizon off.
-- A second, moving-camera capture is still the remaining check before defaulting it on. The capture
-  tool is kept for that and for the hierarchy's section seam.
+- Horizon is now **on by default**; `ENGINE_HORIZON_CULL=0` disables it. `ENGINE_AUTO_STRAFE=1` is
+  the dev hook used for the moving capture.
 
 ### Section foundation (level 1)
 
@@ -869,29 +869,30 @@ The bitmask build evaluates passability for every padded cell; the current scan 
 exposure test for non-matching cells, and the per-cell corner/light key dominates the merge. Reverted.
 The next experiment is the relaxed merge key described in [Meshing research](research/meshing.md).
 
-### Horizon culling (opt-in)
+### Horizon culling
 
-`ENGINE_HORIZON_CULL=1` enables conservative chunk-top horizon culling. It builds a 128-bin horizon
-from the highest solid or water block in each chunk, patched across each chunk's azimuth span, and
+Horizon culling is on by default; `ENGINE_HORIZON_CULL=0` disables it. It builds a 128-bin horizon
+from the lowest terrain/water column top in each chunk, patched across each chunk's azimuth span, and
 culls only when nearer terrain hides the chunk's top in every direction its footprint covers.
 
 | Metric at distance 32, settled | Off | On |
 |---|---:|---:|
-| Visible chunks | 2,435 | 166 |
-| Visible vertices | 3.64 M | 1.18 M |
-| Visible geometry | 6.94 MiB | 2.25 MiB |
-| GPU scene | 0.245-0.253 ms | **0.095-0.097 ms** |
-| Frame | 0.479-0.498 ms | 0.509-0.517 ms |
+| Visible chunks | 2,435 | 819 |
+| Visible vertices | 3.64 M | 1.84 M |
+| Visible geometry | 6.94 MiB | 3.50 MiB |
+| GPU scene | 0.245-0.253 ms | **0.139 ms** |
+| Frame | 0.479-0.498 ms | 0.516-0.821 ms |
 
-- Culling removes 93% of the visible set on the spawn view and 68% of the visible vertices.
-- The measured GPU scene time falls by 61%; the frame is still acquire/present-bound, so frame time
-  does not improve. The periodic horizon build makes it slightly worse in these samples.
+- Culling removes two-thirds of the visible set on the spawn view and about half of the visible
+  vertices.
+- The measured GPU scene time falls by 45%; the frame is still acquire/present-bound, so frame time
+  does not improve. The periodic horizon build and run-to-run variance dominate the frame samples.
 - A full horizon build costs about 2.4 ms, so it is cached and rebuilt at most every 250 ms.
 - The threshold and margins make it deliberately conservative: chunks under 256 m are never culled,
-  empty bins keep a chunk, and the elevation margin is about 1.7 degrees. Tops use
-  `max(solid top, water top)`, so a coastal water surface is not culled behind its solid floor.
-- It stays opt-in until the hierarchy gives it a larger node set and the seam/visual check runs on a
-  moving camera. The GPU headroom is real; the CPU build cost is the reason it is not on by default.
+  empty bins keep a chunk, and the elevation margin is about 1.7 degrees. Occluders use the lowest
+  terrain column top, candidates use `max(terrain top, water top)`, and trees are excluded from both.
+- In-engine captures on seeds 42 and 7 and on a strafe view match the horizon-off image. The feature
+  is on by default; `ENGINE_HORIZON_CULL=0` disables it.
 
 ### Windowed baseline
 

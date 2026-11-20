@@ -135,7 +135,7 @@ See [Coordinates](coordinates.md) for the full conventions, including chunk and 
 
 ## Current limitations
 
-- No occlusion culling; horizon culling is opt-in behind `ENGINE_HORIZON_CULL`.
+- No occlusion culling except the conservative horizon pass, which is on by default (`ENGINE_HORIZON_CULL=0` disables it).
 - No shadow maps or sorted transparency; water faces blend in mesh order.
 - One block palette; no inventory UI.
 
