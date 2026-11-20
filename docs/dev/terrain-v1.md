@@ -12,10 +12,10 @@ $env:ENGINE_STRESS_SCENE = "1"   # only needed when world/seed is absent
 cargo run --bin engine
 ```
 
-The demo opens a column-level streaming ring on top of the legacy scene. Every column within
-six columns of the player is resident (169 columns), fine-meshed inside two columns, and drawn
-as LOD1 beyond. Edits, saves, and repairs use `world/terrain-demo/`; the legacy `world/chunks/`
-path is untouched.
+The demo opens a column-level streaming ring on top of the legacy scene. Every column within the
+spec's 16-column view radius is resident (1,089 columns), fine-meshed inside two columns, and
+drawn as LOD1 beyond. Edits, saves, and repairs use `world/terrain-demo/`; the legacy
+`world/chunks/` path is untouched.
 
 | Input | Effect |
 |---|---|
@@ -50,18 +50,19 @@ Physics refuses movement while the player's column has no light.
 | `Terrain::new` + world hydrology solve | ~165 ms |
 | 12 worker threads, one `Terrain` each | < 1 ms |
 | First column (generation + light + mesh) | ~0.8 s |
-| Full 13x13 ring (169 columns) | **~8 s** |
-| Steady-state terrain heap (`terrain ring` log) | **~22 MB** |
-| Process peak working set (RTX 4060, release) | **~346 MB** |
+| Full 33x33 ring (1,089 columns) | **~45 s** |
+| Steady-state section bytes (`terrain ring` log) | **~126 MB** |
+| Process peak working set (RTX 4060, release) | **~590 MB** |
 
 Every worker owns its own `Terrain` because the pipeline caches behind `RefCell`. One
 `Arc<WorldHydro>` solve is shared by every worker, so a lake or river that crosses a column
 boundary has one level. Output is keyed and sorted, so worker order cannot change the ring.
 
-The radius is **6**, not the spec default 16: `(2*6+1)^2 = 169` columns, against 289 at radius 8
-and 1,369 (`(2*16+2+1)^2` with the unload margin) at radius 16. Section storage is paletted and
-bit-packed, not a flat `u16` array, so 169 columns stay around 22 MB of terrain heap. A radius-16
-ring would need a stronger compression or LOD residency story before it fits the ~600 MB target.
+The radius is the spec's **16** (`(2*16+1)^2 = 1,089` wanted columns; the two-column unload
+margin bounds the resident set at `(2*18+1)^2 = 1,369`). Section storage is paletted and
+bit-packed, and only the inner two columns are LOD0, so the measured steady state is ~126 MB of
+section bytes and ~590 MB peak working set, under the ~600 MB target. Nearest-first order keeps
+the centre playable in under a second while the full ring fills in ~45 s.
 
 ## Light
 
@@ -116,7 +117,7 @@ ring would need a stronger compression or LOD residency story before it fits the
   before streaming starts, so a column generated later already includes its edits.
 - Startup is non-blocking: the player is frozen on the centre column until its light lands, then
   moved to the measured surface. Movement is guarded by `TerrainDemo::aabb_ready`.
-- Measured: full 13x13 ring in ~8 s, ~22 MB terrain heap, ~346 MB peak process working set; the
+- Measured: full 33x33 ring in ~45 s, ~126 MB of section bytes, ~590 MB peak process working set; the
   per-second `terrain ring` info line reports resident/ready/fine/coarse counts and bytes.
 
 ## Persistence

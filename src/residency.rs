@@ -514,13 +514,15 @@ pub const fn teleport_budget() -> Budget {
     }
 }
 
-/// The demo's column-ring radius.
+/// The demo's column-ring radius: the spec's [`VIEW_RADIUS`].
 ///
-/// The spec default is [`VIEW_RADIUS`] (16, `1,369` resident columns), but the
-/// demo keeps a smaller ring so raw section storage stays under the ~600 MB
-/// working-set target: `(2 * 6 + 1)^2 = 169` columns, against 289 at radius 8
-/// and 1,369 at radius 16. LOD1 carries the view beyond the fine ring.
-pub const DEMO_VIEW_RADIUS: i32 = 6;
+/// `(2 * 16 + 1)^2 = 1,089` columns are wanted; the two-column unload margin
+/// bounds the resident set at 1,369. The ring is LOD1 beyond two columns, so
+/// the measured cost is ~126 MB of section bytes and ~590 MB peak working set
+/// on the reference machine, under the ~600 MB target. Nearest-first order
+/// makes the centre playable in under a second while the full ring fills in
+/// about 45 s.
+pub const DEMO_VIEW_RADIUS: i32 = 16;
 
 /// `K4.1`: the per-frame ring budget, in columns.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1240,14 +1242,13 @@ mod tests {
     }
 
     #[test]
-    fn demo_radius_fits_the_memory_target() {
-        assert_eq!(DEMO_VIEW_RADIUS, 6);
+    fn demo_radius_is_the_spec_view_radius() {
+        assert_eq!(DEMO_VIEW_RADIUS, VIEW_RADIUS);
         let side = 2 * DEMO_VIEW_RADIUS + 1;
-        assert_eq!(side, 13);
-        assert_eq!(side * side, 169, "13 x 13 columns");
-        // Radius 16 with the two-column unload margin is 1,369 columns; radius
-        // 8 would be 289.
+        assert_eq!(side, 33);
+        assert_eq!(side * side, 1_089, "33 x 33 columns");
+        // The two-column unload margin is what bounds the resident set.
+        assert_eq!(unload_radius(), 18);
         assert_eq!((2 * unload_radius() + 1) * (2 * unload_radius() + 1), 1_369);
-        assert_eq!((2 * 8 + 1) * (2 * 8 + 1), 289);
     }
 }
