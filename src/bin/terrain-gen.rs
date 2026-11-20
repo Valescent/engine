@@ -42,9 +42,10 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::thread;
 
+use engine::climate::smoothstep01;
 use engine::content;
 use engine::description::{
-    self, Description, HYDRO_TILE, MAX_TERRAIN_Y, SEA, SECTIONS_PER_COLUMN, TILE_BLOCKS,
+    self, Description, HYDRO_TILE, MACRO_CELL, MAX_TERRAIN_Y, SEA, SECTIONS_PER_COLUMN, TILE_BLOCKS,
 };
 use engine::error::{ErrorKind, Stage, TerrainError};
 use engine::hash::sha256;
@@ -98,6 +99,8 @@ commands:
   golden         check|update [--file <path>]
   seams          [--window <WxW>] [--seeds <n>]
   sweep          --tier pr|nightly [--seeds <n>]
+  counters       --tier pr|nightly [--seeds <n>] [--file <path>] [--update]
+  calibrate-blend --seeds <n> [--step <n>] [--from <x> <z>] [--size <n>]
   describe       --out <path>
   describe-diff  --file <path>
   verify         --world <dir> [--sections <x,y,z> ...] [--report <dir>]
@@ -129,6 +132,8 @@ fn run(args: &[String]) -> u8 {
         "golden" => cmd_golden(&rest, &options),
         "seams" => cmd_seams(&rest, &options),
         "sweep" => cmd_sweep(&rest, &options),
+        "counters" => cmd_counters(&rest, &options),
+        "calibrate-blend" => cmd_calibrate_blend(&rest, &options),
         "describe" => cmd_describe(&rest, &options),
         "describe-diff" => cmd_describe_diff(&rest, &options),
         "verify" => cmd_verify(&rest, &options),
@@ -1560,6 +1565,979 @@ fn print_sweep(outcome: &SweepOutcome, json: bool) {
             }
         }
         println!("summary: seeds={seeds} regions={regions} columns={columns} failures={failures}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// counters
+// ---------------------------------------------------------------------------
+
+/// Default path of the checked-in PR counter baseline.
+const COUNTER_BASELINE_PATH: &str = "tests/golden/terrain-counters.json";
+/// Relative drift, in percent, at which the counter comparison fails.
+const COUNTER_DRIFT_PERCENT: u64 = 5;
+/// Schema tag written to and required from a counter baseline.
+const COUNTER_SCHEMA: &str = "valescent/terrain-counters@1";
+/// Pinned `Q1.1` counters this workload can produce deterministically.
+///
+/// Excluded:
+///
+/// * every `_p50`/`_p95` latency and `upload_bytes_per_s` - they read the wall
+///   clock and move with thread count and scheduling;
+/// * `queue_depth`, `in_flight_jobs`, `panics_caught`, `stuck_threads`,
+///   `dropped_before_start`, `discarded_stale`, and `applied` - residency and
+///   worker-health state that the headless generator never records, so a
+///   baseline would pin zeros and catch nothing;
+/// * `upload_bytes`, `meshes`, `quads`, `light_repairs`, `lod1_columns`, and
+///   `lod2_columns` - written only by the render, mesh, light, and LOD paths
+///   that stop before this binary.
+///
+/// The four that remain are pure functions of the generated column set: the
+/// three tile-cache gauges published by `Terrain::publish_column_gauges`, and
+/// `lod0_columns`, which counts distinct LOD0 columns with a generated
+/// section (zero here because this workload stops at columns).
+const COUNTER_METRICS: &[&str] = &[
+    "lod0_columns",
+    "queued_columns",
+    "ready_columns",
+    "resident_columns",
+];
+
+/// One counter snapshot, keyed by counter name.
+type CounterValues = BTreeMap<String, u64>;
+
+/// Measured transect widths, bucketed by unordered biome pair.
+type PairWidths = BTreeMap<(u8, u8), Vec<f64>>;
+
+struct CounterDrift {
+    name: String,
+    baseline: u64,
+    current: u64,
+}
+
+struct CountersOutcome {
+    tier: &'static str,
+    seeds: usize,
+    action: &'static str,
+    counters: CounterValues,
+    drifts: Vec<CounterDrift>,
+}
+
+fn cmd_counters(args: &[String], options: &Options) -> u8 {
+    match counters_outcome(args, options) {
+        Ok(outcome) => {
+            print_counters(&outcome, options.json);
+            if outcome.drifts.is_empty() {
+                EXIT_OK
+            } else {
+                EXIT_INVARIANT
+            }
+        }
+        Err(failure) => report(&failure, options.json, "counters"),
+    }
+}
+
+fn counters_outcome(args: &[String], options: &Options) -> Result<CountersOutcome, CliFailure> {
+    let mut cursor = Cursor::new(args);
+    let mut tier = None;
+    let mut seed_count = None;
+    let mut file = None;
+    let mut update = false;
+    while let Some(argument) = cursor.arg() {
+        match argument {
+            "--tier" => tier = Some(Tier::parse(cursor.value("tier")?)?),
+            "--seeds" => seed_count = Some(number::<usize>(cursor.value("seeds")?, "seeds")?),
+            "--file" => file = Some(cursor.value("file")?.to_owned()),
+            "--update" => update = true,
+            other => {
+                return Err(CliFailure::Usage(format!(
+                    "unexpected argument {other:?} for counters"
+                )));
+            }
+        }
+    }
+    let tier =
+        tier.ok_or_else(|| CliFailure::Usage("counters needs --tier pr|nightly".to_owned()))?;
+    if file.is_none() && tier != Tier::Pr {
+        return Err(CliFailure::Usage(
+            "the checked-in baseline is the pr tier; pass --file <path> for nightly".to_owned(),
+        ));
+    }
+    let seed_count = seed_count.unwrap_or_else(|| tier.default_seeds());
+    if seed_count == 0 {
+        return Err(CliFailure::Usage("--seeds must be at least 1".to_owned()));
+    }
+    let path = file.as_deref().unwrap_or(COUNTER_BASELINE_PATH);
+
+    let regions = regions(tier);
+    let seeds: Vec<u64> = (1..=seed_count)
+        .map(|seed| u64::try_from(seed).unwrap_or(u64::MAX))
+        .collect();
+    let counters = counters_seeds(&seeds, &regions, options.threads, options.order)?;
+
+    if update {
+        write_counter_baseline(Path::new(path), tier, seed_count, &counters)?;
+        return Ok(CountersOutcome {
+            tier: tier.name(),
+            seeds: seed_count,
+            action: "update",
+            counters,
+            drifts: Vec::new(),
+        });
+    }
+
+    let baseline = read_counter_baseline(Path::new(path))?;
+    if baseline.tier != tier.name() || baseline.seeds != u64::try_from(seed_count).unwrap_or(0) {
+        return Err(CliFailure::Usage(format!(
+            "{path}: baseline records tier {} with {} seeds, but this run is tier {} with {seed_count}; use --update to replace it",
+            baseline.tier,
+            baseline.seeds,
+            tier.name()
+        )));
+    }
+    let drifts = compare_counters(&baseline.counters, &counters);
+    Ok(CountersOutcome {
+        tier: tier.name(),
+        seeds: seed_count,
+        action: "check",
+        counters,
+        drifts,
+    })
+}
+
+/// Generates every PR (or nightly) region once per seed and sums the
+/// deterministic counters. Results are assembled in canonical seed order, so
+/// `--threads` and `--order` cannot change them.
+fn counters_seeds(
+    seeds: &[u64],
+    regions: &[Region],
+    threads: usize,
+    order: Order,
+) -> Result<CounterValues, TerrainError> {
+    if seeds.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let shuffled_key = seeds.first().copied().unwrap_or(0);
+    let sequence = permutation(seeds.len(), order, shuffled_key);
+    let workers = threads.clamp(1, sequence.len());
+    let chunk = sequence.len().div_ceil(workers);
+    let mut slots: Vec<Option<CounterValues>> = (0..seeds.len()).map(|_| None).collect();
+
+    thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(workers);
+        for indices in sequence.chunks(chunk) {
+            handles.push(
+                scope.spawn(move || -> Result<Vec<CounterValues>, TerrainError> {
+                    let mut produced = Vec::with_capacity(indices.len());
+                    for &index in indices {
+                        produced.push(counters_seed(seeds[index], regions)?);
+                    }
+                    Ok(produced)
+                }),
+            );
+        }
+        for (indices, handle) in sequence.chunks(chunk).zip(handles) {
+            let produced = match handle.join() {
+                Ok(result) => result?,
+                Err(_) => return Err(internal("worker_panic")),
+            };
+            for (index, result) in indices.iter().zip(produced) {
+                slots[*index] = Some(result);
+            }
+        }
+        Ok(())
+    })?;
+
+    let mut totals = BTreeMap::new();
+    for slot in slots.into_iter().flatten() {
+        for (name, value) in slot {
+            let total = totals.entry(name).or_insert(0_u64);
+            *total = total.saturating_add(value);
+        }
+    }
+    Ok(totals)
+}
+
+fn counters_seed(seed: u64, regions: &[Region]) -> Result<CounterValues, TerrainError> {
+    let terrain = Terrain::new(seed)?;
+    let mut counts = Counts::default();
+    let mut columns = 0_u64;
+    for region in regions {
+        for row in 0..SWEEP_WINDOW {
+            for column in 0..SWEEP_WINDOW {
+                let blocks = terrain.column(region.origin.0 + column, region.origin.1 + row)?;
+                columns += 1;
+                for &id in &blocks {
+                    counts.add(id);
+                }
+            }
+        }
+    }
+
+    let mut out = BTreeMap::new();
+    out.insert("blocks_air".to_owned(), counts.air);
+    out.insert("blocks_solid".to_owned(), counts.solid);
+    out.insert("blocks_water".to_owned(), counts.water);
+    out.insert("columns".to_owned(), columns);
+    for name in COUNTER_METRICS {
+        out.insert(
+            (*name).to_owned(),
+            terrain.counters().get(name).unwrap_or(0),
+        );
+    }
+    Ok(out)
+}
+
+struct CounterBaseline {
+    tier: String,
+    seeds: u64,
+    counters: CounterValues,
+}
+
+fn read_counter_baseline(path: &Path) -> Result<CounterBaseline, CliFailure> {
+    let json = read_json(path)?;
+    let name = path.to_string_lossy();
+    let object = expect_object(&json, &name)?;
+    let schema = string_field(object, "schema", &name)?;
+    if schema != COUNTER_SCHEMA {
+        return Err(CliFailure::Usage(format!(
+            "{name}: schema must be {COUNTER_SCHEMA:?}, found {schema:?}"
+        )));
+    }
+    let tier = string_field(object, "tier", &name)?;
+    let seeds = integer_field::<u64>(object, "seeds", &name)?;
+    let values = object
+        .get("counters")
+        .and_then(Json::as_object)
+        .ok_or_else(|| CliFailure::Usage(format!("{name}: missing \"counters\" object")))?;
+    let mut counters = BTreeMap::new();
+    for (key, value) in values {
+        let Json::Number(raw) = value else {
+            return Err(CliFailure::Usage(format!(
+                "{name}: counter {key:?} must be an integer"
+            )));
+        };
+        let parsed = raw
+            .parse::<u64>()
+            .map_err(|_| CliFailure::Usage(format!("{name}: invalid counter {key:?} {raw:?}")))?;
+        counters.insert(key.clone(), parsed);
+    }
+    Ok(CounterBaseline {
+        tier,
+        seeds,
+        counters,
+    })
+}
+
+fn write_counter_baseline(
+    path: &Path,
+    tier: Tier,
+    seeds: usize,
+    counters: &CounterValues,
+) -> Result<(), CliFailure> {
+    let mut text = format!(
+        "{{\n  \"schema\": {},\n  \"tier\": {},\n  \"seeds\": {seeds},\n  \"counters\": {{\n",
+        json_str(COUNTER_SCHEMA),
+        json_str(tier.name())
+    );
+    for (index, (name, value)) in counters.iter().enumerate() {
+        let comma = if index + 1 < counters.len() { "," } else { "" };
+        let _ = writeln!(text, "    {}: {value}{comma}", json_str(name));
+    }
+    text.push_str("  }\n}\n");
+    fs::write(path, text)
+        .map_err(|error| CliFailure::Usage(format!("cannot write {}: {error}", path.display())))
+}
+
+/// Compares a baseline with a fresh snapshot. A counter may move by at most
+/// [`COUNTER_DRIFT_PERCENT`] percent; a baseline of zero must stay zero.
+fn compare_counters(baseline: &CounterValues, current: &CounterValues) -> Vec<CounterDrift> {
+    let mut names: Vec<&String> = baseline.keys().chain(current.keys()).collect();
+    names.sort();
+    names.dedup();
+    let mut drifts = Vec::new();
+    for name in names {
+        let before = baseline.get(name).copied().unwrap_or(0);
+        let now = current.get(name).copied().unwrap_or(0);
+        let drifted = if before == 0 {
+            now != 0
+        } else {
+            now.abs_diff(before).saturating_mul(100) > before.saturating_mul(COUNTER_DRIFT_PERCENT)
+        };
+        if drifted {
+            drifts.push(CounterDrift {
+                name: name.clone(),
+                baseline: before,
+                current: now,
+            });
+        }
+    }
+    drifts
+}
+
+fn print_counters(outcome: &CountersOutcome, json: bool) {
+    let CountersOutcome {
+        tier,
+        seeds,
+        action,
+        counters,
+        drifts,
+    } = outcome;
+    if json {
+        let mut out = format!(
+            "{{\"subcommand\":\"counters\",\"tier\":{},\"seeds\":{seeds},\"action\":{},\"counters\":[",
+            json_str(tier),
+            json_str(action)
+        );
+        for (index, (name, value)) in counters.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            let _ = write!(out, "{{\"name\":{},\"value\":{value}}}", json_str(name));
+        }
+        out.push(']');
+        if drifts.is_empty() {
+            out.push_str(",\"ok\":true}");
+        } else {
+            out.push_str(",\"ok\":false,\"drift\":[");
+            for (index, drift) in drifts.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                let _ = write!(
+                    out,
+                    "{{\"name\":{},\"baseline\":{},\"current\":{}}}",
+                    json_str(&drift.name),
+                    drift.baseline,
+                    drift.current
+                );
+            }
+            out.push_str("]}");
+        }
+        println!("{out}");
+    } else {
+        println!("tier {tier}");
+        println!("seeds {seeds}");
+        println!("action {action}");
+        for (name, value) in counters {
+            println!("{name} {value}");
+        }
+        if drifts.is_empty() {
+            println!("ok");
+        } else {
+            for drift in drifts {
+                println!(
+                    "drift {} baseline {} current {}",
+                    drift.name, drift.baseline, drift.current
+                );
+                eprintln!(
+                    "counter drift: {} baseline {} current {} exceeds {COUNTER_DRIFT_PERCENT}%",
+                    drift.name, drift.baseline, drift.current
+                );
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// calibrate-blend
+// ---------------------------------------------------------------------------
+
+/// Default anchor stride, in blocks. Must be a multiple of [`MACRO_CELL`].
+const DEFAULT_BLEND_STEP: i32 = 16;
+/// How far a transect marches from its anchor in either direction, in blocks.
+const BLEND_MARCH_BLOCKS: i32 = 256;
+/// The deep end of a measured transect: `w = 0.95` (`E3.6`).
+const BLEND_END_WEIGHT: f32 = 0.95;
+/// The largest sampled `w` still treated as the `w = 0.5` border.
+///
+/// `q` is quantised, so a bilinear sample only reaches exactly `0.5` where all
+/// four surrounding cells have `q = 0`. A local minimum at `w <= 0.51` (`q` up
+/// to about 17) cannot be more than one block from the true border.
+const BLEND_BORDER_WEIGHT: f32 = 0.51;
+/// Lower bound of the accepted per-pair median, in blocks.
+const BLEND_MEDIAN_MIN: f64 = 20.0;
+/// Upper bound of the accepted per-pair median, in blocks.
+const BLEND_MEDIAN_MAX: f64 = 28.0;
+/// Lower bound of the accepted per-pair p10, in blocks.
+const BLEND_P10_MIN: f64 = 8.0;
+/// Upper bound of the accepted per-pair p90, in blocks.
+const BLEND_P90_MAX: f64 = 64.0;
+/// Transects a pair needs before its acceptance is judged; fewer are reported
+/// only (`E3.6`).
+const BLEND_MIN_SAMPLES: usize = 20;
+/// Cells per field tile, `TILE_BLOCKS / MACRO_CELL` (`B4.2`).
+const CLIMATE_CELLS_PER_TILE: i32 = TILE_BLOCKS / MACRO_CELL;
+
+/// `w = 0.5 + 0.5 * smoothstep01(q / 255)`, the exact expression
+/// `ClimateTile::biome_pick` evaluates (`E3.3`, `E3.5`).
+fn blend_weight(q: f32) -> f32 {
+    0.5 + 0.5 * smoothstep01(q / 255.0)
+}
+
+#[derive(Clone, Debug)]
+struct PairSummary {
+    low: u8,
+    high: u8,
+    samples: usize,
+    median: f64,
+    p10: f64,
+    p90: f64,
+}
+
+impl PairSummary {
+    fn assessed(&self) -> bool {
+        self.samples >= BLEND_MIN_SAMPLES
+    }
+
+    fn accepted(&self) -> bool {
+        self.assessed()
+            && (BLEND_MEDIAN_MIN..=BLEND_MEDIAN_MAX).contains(&self.median)
+            && self.p10 >= BLEND_P10_MIN
+            && self.p90 <= BLEND_P90_MAX
+    }
+}
+
+struct BlendOutcome {
+    seeds: usize,
+    from: (i32, i32),
+    size: i32,
+    step: i32,
+    pairs: Vec<PairSummary>,
+}
+
+impl BlendOutcome {
+    fn accepted(&self) -> bool {
+        let assessed: Vec<&PairSummary> =
+            self.pairs.iter().filter(|pair| pair.assessed()).collect();
+        !assessed.is_empty() && assessed.iter().all(|pair| pair.accepted())
+    }
+}
+
+fn cmd_calibrate_blend(args: &[String], options: &Options) -> u8 {
+    match calibrate_outcome(args, options) {
+        Ok(outcome) => {
+            print_calibrate(&outcome, options.json);
+            if outcome.accepted() {
+                EXIT_OK
+            } else {
+                EXIT_INVARIANT
+            }
+        }
+        Err(failure) => report(&failure, options.json, "calibrate-blend"),
+    }
+}
+
+fn calibrate_outcome(args: &[String], options: &Options) -> Result<BlendOutcome, CliFailure> {
+    let mut cursor = Cursor::new(args);
+    let mut seeds = None;
+    let mut from = None;
+    let mut size = None;
+    let mut step = None;
+    while let Some(argument) = cursor.arg() {
+        match argument {
+            "--seeds" => seeds = Some(number::<usize>(cursor.value("seeds")?, "seeds")?),
+            "--from" => {
+                let x = number::<i32>(cursor.value("from x")?, "from x")?;
+                let z = number::<i32>(cursor.value("from z")?, "from z")?;
+                from = Some((x, z));
+            }
+            "--size" => size = Some(number::<i32>(cursor.value("size")?, "size")?),
+            "--step" => step = Some(number::<i32>(cursor.value("step")?, "step")?),
+            other => {
+                return Err(CliFailure::Usage(format!(
+                    "unexpected argument {other:?} for calibrate-blend"
+                )));
+            }
+        }
+    }
+    let seeds =
+        seeds.ok_or_else(|| CliFailure::Usage("calibrate-blend needs --seeds <n>".to_owned()))?;
+    if seeds == 0 {
+        return Err(CliFailure::Usage("--seeds must be at least 1".to_owned()));
+    }
+    let from = from.unwrap_or((
+        -description::default_v1().world_half_extent,
+        -description::default_v1().world_half_extent,
+    ));
+    let size = size.unwrap_or(description::default_v1().world_half_extent * 2);
+    if size <= 0 {
+        return Err(CliFailure::Usage(format!(
+            "--size must be at least 1, found {size}"
+        )));
+    }
+    let step = step.unwrap_or(DEFAULT_BLEND_STEP);
+    if step <= 0 || step % MACRO_CELL != 0 {
+        return Err(CliFailure::Usage(format!(
+            "--step must be a positive multiple of {MACRO_CELL}, found {step}"
+        )));
+    }
+    if step > size {
+        return Err(CliFailure::Usage(format!(
+            "--step {step} is larger than --size {size}"
+        )));
+    }
+    let half = i64::from(description::default_v1().world_half_extent);
+    let end_x = i64::from(from.0) + i64::from(size);
+    let end_z = i64::from(from.1) + i64::from(size);
+    if i64::from(from.0) < -half || i64::from(from.1) < -half || end_x > half || end_z > half {
+        return Err(CliFailure::Usage(format!(
+            "window {}..{} x {}..{} is outside the {}-block half extent",
+            from.0, end_x, from.1, end_z, half
+        )));
+    }
+
+    let seed_values: Vec<u64> = (1..=seeds)
+        .map(|seed| u64::try_from(seed).unwrap_or(u64::MAX))
+        .collect();
+    let widths = blend_seeds(
+        &seed_values,
+        from,
+        size,
+        step,
+        options.threads,
+        options.order,
+    )?;
+    Ok(BlendOutcome {
+        seeds,
+        from,
+        size,
+        step,
+        pairs: summarise_pairs(&widths),
+    })
+}
+
+/// Measures every seed, then merges the per-pair widths in canonical seed order.
+fn blend_seeds(
+    seeds: &[u64],
+    from: (i32, i32),
+    size: i32,
+    step: i32,
+    threads: usize,
+    order: Order,
+) -> Result<PairWidths, TerrainError> {
+    if seeds.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let shuffled_key = seeds.first().copied().unwrap_or(0);
+    let sequence = permutation(seeds.len(), order, shuffled_key);
+    let workers = threads.clamp(1, sequence.len());
+    let chunk = sequence.len().div_ceil(workers);
+    let mut slots: Vec<Option<PairWidths>> = (0..seeds.len()).map(|_| None).collect();
+
+    thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(workers);
+        for indices in sequence.chunks(chunk) {
+            handles.push(
+                scope.spawn(move || -> Result<Vec<PairWidths>, TerrainError> {
+                    let mut produced = Vec::with_capacity(indices.len());
+                    for &index in indices {
+                        produced.push(blend_seed(seeds[index], from, size, step)?);
+                    }
+                    Ok(produced)
+                }),
+            );
+        }
+        for (indices, handle) in sequence.chunks(chunk).zip(handles) {
+            let produced = match handle.join() {
+                Ok(result) => result?,
+                Err(_) => return Err(internal("worker_panic")),
+            };
+            for (index, result) in indices.iter().zip(produced) {
+                slots[*index] = Some(result);
+            }
+        }
+        Ok(())
+    })?;
+
+    let mut merged: PairWidths = BTreeMap::new();
+    for slot in slots.into_iter().flatten() {
+        for (pair, mut widths) in slot {
+            merged.entry(pair).or_default().append(&mut widths);
+        }
+    }
+    Ok(merged)
+}
+
+/// The anchor grid, in cells: every `step / MACRO_CELL` cells whose centre
+/// falls inside `[from, from + size)`.
+fn anchor_cells(from: (i32, i32), size: i32, step: i32) -> Vec<(i32, i32)> {
+    let stride = step / MACRO_CELL;
+    let min_x = ceil_div(from.0 - 2, MACRO_CELL);
+    let max_x = floor_div(from.0 + size - 3, MACRO_CELL);
+    let min_z = ceil_div(from.1 - 2, MACRO_CELL);
+    let max_z = floor_div(from.1 + size - 3, MACRO_CELL);
+    if min_x > max_x || min_z > max_z {
+        return Vec::new();
+    }
+    let first_x = min_x.div_euclid(stride) * stride;
+    let first_z = min_z.div_euclid(stride) * stride;
+    let mut cells = Vec::new();
+    let mut cell_z = first_z;
+    while cell_z <= max_z {
+        let mut cell_x = first_x;
+        while cell_x <= max_x {
+            cells.push((cell_x, cell_z));
+            cell_x += stride;
+        }
+        cell_z += stride;
+    }
+    cells
+}
+
+fn ceil_div(value: i32, divisor: i32) -> i32 {
+    -floor_div(-value, divisor)
+}
+
+fn blend_seed(
+    seed: u64,
+    from: (i32, i32),
+    size: i32,
+    step: i32,
+) -> Result<PairWidths, TerrainError> {
+    let terrain = Terrain::new(seed)?;
+    let half = description::default_v1().world_half_extent;
+    let mut pairs: PairWidths = BTreeMap::new();
+    for (cell_x, cell_z) in anchor_cells(from, size, step) {
+        let anchor_x = cell_x * MACRO_CELL + 2;
+        let anchor_z = cell_z * MACRO_CELL + 2;
+        // Keep every sample and the 5x5 gradient stencil inside the finite
+        // world. A transect that cannot reach 128 blocks from a border is not
+        // measured.
+        let reach = (half - 1 - anchor_x.abs()).min(half - 1 - anchor_z.abs());
+        let march = BLEND_MARCH_BLOCKS.min(reach);
+        if march < 128 {
+            continue;
+        }
+        let Some(sample) = anchor_sample(&terrain, cell_x, cell_z)? else {
+            continue;
+        };
+        let mut profile = Vec::with_capacity(usize::try_from(march * 2 + 1).unwrap_or(0));
+        for offset in -march..=march {
+            let cell_sample_x = f64::from(cell_x) + sample.direction.0 * f64::from(offset) / 4.0;
+            let cell_sample_z = f64::from(cell_z) + sample.direction.1 * f64::from(offset) / 4.0;
+            let q = bilinear_margin(&terrain, cell_sample_x, cell_sample_z)?;
+            let weight = blend_weight(q);
+            profile.push((f64::from(offset), weight));
+        }
+        if let Some(width) = transect_width(&profile) {
+            pairs
+                .entry((sample.low, sample.high))
+                .or_default()
+                .push(width);
+        }
+    }
+    Ok(pairs)
+}
+
+struct AnchorSample {
+    low: u8,
+    high: u8,
+    /// Unit direction of increasing margin, in block space.
+    direction: (f64, f64),
+}
+
+fn anchor_sample(
+    terrain: &Terrain,
+    cell_x: i32,
+    cell_z: i32,
+) -> Result<Option<AnchorSample>, TerrainError> {
+    let tile_x = floor_div(cell_x, CLIMATE_CELLS_PER_TILE);
+    let tile_z = floor_div(cell_z, CLIMATE_CELLS_PER_TILE);
+    let local_x = cell_x - tile_x * CLIMATE_CELLS_PER_TILE;
+    let local_z = cell_z - tile_z * CLIMATE_CELLS_PER_TILE;
+    if !(0..CLIMATE_CELLS_PER_TILE).contains(&local_x)
+        || !(0..CLIMATE_CELLS_PER_TILE).contains(&local_z)
+    {
+        return Ok(None);
+    }
+    let tile = terrain.tile(tile_x, tile_z)?;
+    let best = tile.climate.best(local_x, local_z);
+    let second = tile.climate.second(local_x, local_z);
+    if best == second {
+        return Ok(None);
+    }
+    let q = tile.climate.margin(local_x, local_z);
+    if blend_weight(f32::from(q)) >= BLEND_END_WEIGHT {
+        return Ok(None);
+    }
+
+    // A least-squares plane over a 5x5 cell window. Central differences of the
+    // quantised margin are too noisy near the border (where successive cells
+    // differ by one q step) and skew the transect direction.
+    let mut sum_x = 0.0_f32;
+    let mut sum_z = 0.0_f32;
+    let mut square_x = 0.0_f32;
+    let mut square_z = 0.0_f32;
+    for delta_z in -2..=2 {
+        for delta_x in -2..=2 {
+            let neighbour = f32::from(cell_margin(terrain, cell_x + delta_x, cell_z + delta_z)?);
+            let dx = f32::from(i8::try_from(delta_x).unwrap_or(0));
+            let dz = f32::from(i8::try_from(delta_z).unwrap_or(0));
+            sum_x += neighbour * dx;
+            sum_z += neighbour * dz;
+            square_x += dx * dx;
+            square_z += dz * dz;
+        }
+    }
+    let gradient_x = sum_x / square_x;
+    let gradient_z = sum_z / square_z;
+    let magnitude = (gradient_x * gradient_x + gradient_z * gradient_z).sqrt();
+    if magnitude == 0.0 || !magnitude.is_finite() {
+        return Ok(None);
+    }
+    Ok(Some(AnchorSample {
+        low: best.min(second),
+        high: best.max(second),
+        direction: (
+            f64::from(gradient_x / magnitude),
+            f64::from(gradient_z / magnitude),
+        ),
+    }))
+}
+
+/// Bilinear interpolation of the quantised margin over the cell lattice.
+///
+/// The cell centre for cell `c` is block `4c + 2`, so a block position `b`
+/// maps to continuous cell coordinate `(b - 2) / 4`.
+#[allow(clippy::cast_possible_truncation)]
+fn bilinear_margin(terrain: &Terrain, cell_x: f64, cell_z: f64) -> Result<f32, TerrainError> {
+    // Keep the four reads on cell centres inside the finite world: the last
+    // centre is block `half - 2`, so a transect near the rim never builds a tile
+    // outside it.
+    let half = description::default_v1().world_half_extent;
+    let min_cell = f64::from(ceil_div(-half + 1 - 2, MACRO_CELL));
+    let max_cell = f64::from(floor_div(half - 1 - 2, MACRO_CELL));
+    let cell_x = cell_x.clamp(min_cell, max_cell);
+    let cell_z = cell_z.clamp(min_cell, max_cell);
+    let x0 = cell_x.floor() as i32;
+    let z0 = cell_z.floor() as i32;
+    let x1 = (x0 + 1).min(max_cell as i32);
+    let z1 = (z0 + 1).min(max_cell as i32);
+    let fx = (cell_x - f64::from(x0)) as f32;
+    let fz = (cell_z - f64::from(z0)) as f32;
+    let q00 = f32::from(cell_margin(terrain, x0, z0)?);
+    let q10 = f32::from(cell_margin(terrain, x1, z0)?);
+    let q01 = f32::from(cell_margin(terrain, x0, z1)?);
+    let q11 = f32::from(cell_margin(terrain, x1, z1)?);
+    let top = q00 + (q10 - q00) * fx;
+    let bottom = q01 + (q11 - q01) * fx;
+    Ok(top + (bottom - top) * fz)
+}
+
+fn cell_margin(terrain: &Terrain, cell_x: i32, cell_z: i32) -> Result<u8, TerrainError> {
+    let tile_x = floor_div(cell_x, CLIMATE_CELLS_PER_TILE);
+    let tile_z = floor_div(cell_z, CLIMATE_CELLS_PER_TILE);
+    let tile = terrain.tile(tile_x, tile_z)?;
+    Ok(tile.climate.margin(
+        cell_x - tile_x * CLIMATE_CELLS_PER_TILE,
+        cell_z - tile_z * CLIMATE_CELLS_PER_TILE,
+    ))
+}
+
+/// The distance between the `w = 0.5` and `w = 0.95` crossings, doubled.
+///
+/// `profile` is `(block offset, w)`, sorted by offset, with offset `0` at the
+/// anchor. The anchor is inside the blend band (`w >= 0.5`, `w < 0.95`), so the
+/// rising crossing lies at a non-negative offset and the border crossing at a
+/// non-positive one. Returns `None` when either crossing is outside the
+/// sampled profile.
+///
+/// `q` is quantised, so `w = 0.5` is only reached exactly at `q = 0`; between
+/// cell centres the bilinear minimum can sit a fraction of a block above it.
+/// The border is therefore the first local minimum behind the anchor, accepted
+/// when it is within [`BLEND_BORDER_WEIGHT`], which bounds the error below one
+/// block.
+fn transect_width(profile: &[(f64, f32)]) -> Option<f64> {
+    let center = profile.iter().position(|(offset, _)| *offset == 0.0)?;
+
+    let mut previous: Option<(f64, f32)> = None;
+    let mut rising = None;
+    for &(offset, weight) in &profile[center..] {
+        if let Some((low_offset, low_weight)) = previous
+            && low_weight < BLEND_END_WEIGHT
+            && weight >= BLEND_END_WEIGHT
+        {
+            rising = Some(crossing(
+                (low_offset, low_weight),
+                (offset, weight),
+                BLEND_END_WEIGHT,
+            ));
+        }
+        if weight >= BLEND_END_WEIGHT {
+            break;
+        }
+        previous = Some((offset, weight));
+    }
+    let rising = rising?;
+
+    let (_, anchor_weight) = profile[center];
+    let mut border = (0.0_f64, anchor_weight);
+    let mut descended = false;
+    for &(offset, weight) in profile[..center].iter().rev() {
+        if weight < border.1 {
+            border = (offset, weight);
+            descended = true;
+        } else if descended && weight > border.1 {
+            break;
+        }
+    }
+    if border.1 > BLEND_BORDER_WEIGHT {
+        return None;
+    }
+
+    let width = (rising - border.0) * 2.0;
+    (width > 0.0 && width.is_finite()).then_some(width)
+}
+
+fn crossing(a: (f64, f32), b: (f64, f32), target: f32) -> f64 {
+    let span = b.1 - a.1;
+    let fraction = if span == 0.0 {
+        0.0
+    } else {
+        f64::from((target - a.1) / span).clamp(0.0, 1.0)
+    };
+    a.0 + (b.0 - a.0) * fraction
+}
+
+fn summarise_pairs(widths: &PairWidths) -> Vec<PairSummary> {
+    widths
+        .iter()
+        .map(|(&(first, second), values)| {
+            let mut sorted = values.clone();
+            sorted.sort_by(f64::total_cmp);
+            PairSummary {
+                low: first.min(second),
+                high: first.max(second),
+                samples: sorted.len(),
+                median: percentile(&sorted, 0.5),
+                p10: percentile(&sorted, 0.1),
+                p90: percentile(&sorted, 0.9),
+            }
+        })
+        .collect()
+}
+
+/// Linear interpolation between order statistics: `index = p * (n - 1)`.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+fn percentile(sorted: &[f64], fraction: f64) -> f64 {
+    let Some(last) = sorted.len().checked_sub(1) else {
+        return 0.0;
+    };
+    if last == 0 {
+        return sorted[0];
+    }
+    let position = fraction.clamp(0.0, 1.0) * last as f64;
+    let low = position.floor() as usize;
+    let high = position.ceil() as usize;
+    if low == high {
+        return sorted[low];
+    }
+    let blend = position - low as f64;
+    sorted[low] + (sorted[high] - sorted[low]) * blend
+}
+
+fn fixed2(value: f64) -> String {
+    let value = if value == 0.0 { 0.0 } else { value };
+    format!("{value:.2}")
+}
+
+fn calibrate_json(outcome: &BlendOutcome) -> String {
+    let BlendOutcome {
+        seeds,
+        from,
+        size,
+        step,
+        pairs,
+    } = outcome;
+    let mut out = format!(
+        "{{\"subcommand\":\"calibrate-blend\",\"seeds\":{seeds},\"from\":[{},{}],\"size\":{size},\"step\":{step},\"pairs\":[",
+        from.0, from.1
+    );
+    for (index, pair) in pairs.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        let _ = write!(
+            out,
+            "{{\"pair\":[{},{}],\"samples\":{},\"median_blocks\":{},\"p10_blocks\":{},\"p90_blocks\":{},\"assessed\":{},\"ok\":{}}}",
+            pair.low,
+            pair.high,
+            pair.samples,
+            fixed2(pair.median),
+            fixed2(pair.p10),
+            fixed2(pair.p90),
+            pair.assessed(),
+            pair.accepted()
+        );
+    }
+    let _ = write!(out, "],\"ok\":{}}}", outcome.accepted());
+    out
+}
+
+fn print_calibrate(outcome: &BlendOutcome, json: bool) {
+    let BlendOutcome {
+        seeds,
+        from,
+        size,
+        step,
+        pairs,
+    } = outcome;
+    let accepted = outcome.accepted();
+    if json {
+        println!("{}", calibrate_json(outcome));
+    } else {
+        println!(
+            "calibrate-blend seeds {seeds} from {},{} size {size} step {step}",
+            from.0, from.1
+        );
+        println!("pair samples median p10 p90 ok");
+        for pair in pairs {
+            println!(
+                "{}-{} {} {} {} {} {}",
+                pair.low,
+                pair.high,
+                pair.samples,
+                fixed2(pair.median),
+                fixed2(pair.p10),
+                fixed2(pair.p90),
+                if !pair.assessed() {
+                    "n/a"
+                } else if pair.accepted() {
+                    "yes"
+                } else {
+                    "no"
+                }
+            );
+        }
+        if accepted {
+            println!("ok");
+        } else {
+            if pairs.is_empty() {
+                eprintln!("calibrate-blend measured no biome-pair borders in this window");
+            }
+            for pair in pairs
+                .iter()
+                .filter(|pair| pair.assessed() && !pair.accepted())
+            {
+                eprintln!(
+                    "blend pair {}-{} out of acceptance: median {} p10 {} p90 {} (need median {}..={}, p10 >= {}, p90 <= {})",
+                    pair.low,
+                    pair.high,
+                    fixed2(pair.median),
+                    fixed2(pair.p10),
+                    fixed2(pair.p90),
+                    fixed2(BLEND_MEDIAN_MIN),
+                    fixed2(BLEND_MEDIAN_MAX),
+                    fixed2(BLEND_P10_MIN),
+                    fixed2(BLEND_P90_MAX)
+                );
+            }
+        }
     }
 }
 
@@ -3288,4 +4266,157 @@ fn hex_bytes(bytes: &[u8]) -> String {
         let _ = write!(out, "{byte:02x}");
     }
     out
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A synthetic transect: `w = 0.5` at and behind the border and a linear
+    /// rise to `w = 0.95` at 24 blocks in front of it.
+    #[allow(clippy::cast_possible_truncation)]
+    fn synthetic_profile(half_width: f64) -> Vec<(f64, f32)> {
+        (-64..=64)
+            .map(|offset| {
+                let distance = f64::from(offset);
+                let weight = if distance <= 0.0 {
+                    0.5
+                } else if distance >= half_width {
+                    0.95
+                } else {
+                    (0.5 + 0.45 * distance / half_width) as f32
+                };
+                (distance, weight)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn transect_width_doubles_the_half_width() {
+        let width = transect_width(&synthetic_profile(24.0)).expect("a complete transect measures");
+        assert!((width - 48.0).abs() < 1e-9, "measured {width}");
+
+        let width = transect_width(&synthetic_profile(12.0)).expect("a complete transect measures");
+        assert!((width - 24.0).abs() < 1e-9, "measured {width}");
+    }
+
+    #[test]
+    fn transect_width_accepts_a_quantised_border() {
+        // The bilinear minimum behind the anchor can sit just above 0.5. The
+        // border tolerance bounds that error below one block.
+        let mut profile = synthetic_profile(20.0);
+        for sample in &mut profile {
+            if sample.0 < 0.0 {
+                sample.1 = 0.5004;
+            }
+        }
+        let width = transect_width(&profile).expect("a near-border minimum measures");
+        assert!((width - 40.0).abs() < 1.0, "measured {width}");
+    }
+
+    #[test]
+    fn transect_width_rejects_a_saturated_profile() {
+        let flat = vec![(-8.0, 0.8_f32), (0.0, 0.85), (8.0, 0.9)];
+        assert_eq!(transect_width(&flat), None);
+    }
+
+    #[test]
+    fn percentiles_interpolate_between_order_statistics() {
+        let values: Vec<f64> = (0..=10).map(f64::from).collect();
+        assert!((percentile(&values, 0.5) - 5.0).abs() < 1e-12);
+        assert!((percentile(&values, 0.1) - 1.0).abs() < 1e-12);
+        assert!((percentile(&values, 0.9) - 9.0).abs() < 1e-12);
+        assert_eq!(percentile(&[], 0.5), 0.0);
+        assert_eq!(percentile(&[7.0], 0.9), 7.0);
+    }
+
+    #[test]
+    fn pair_summaries_keep_the_unordered_pair_and_its_acceptance() {
+        let mut widths = PairWidths::new();
+        widths.insert((3, 1), vec![24.0; 32]);
+        widths.insert((0, 2), vec![60.0; 8]);
+        let summaries = summarise_pairs(&widths);
+        assert_eq!(summaries.len(), 2, "one summary per unordered pair");
+        assert_eq!((summaries[0].low, summaries[0].high), (0, 2));
+        assert_eq!(summaries[0].samples, 8);
+        assert!(
+            !summaries[0].assessed(),
+            "eight transects are reported only"
+        );
+        assert_eq!((summaries[1].low, summaries[1].high), (1, 3));
+        assert!(summaries[1].accepted(), "a 24-block median is accepted");
+    }
+
+    #[test]
+    fn calibrate_json_is_sorted_and_fixed_precision() {
+        let outcome = BlendOutcome {
+            seeds: 3,
+            from: (0, 0),
+            size: 512,
+            step: 16,
+            pairs: vec![
+                PairSummary {
+                    low: 0,
+                    high: 1,
+                    samples: 25,
+                    median: 24.0,
+                    p10: 10.5,
+                    p90: 40.0,
+                },
+                PairSummary {
+                    low: 2,
+                    high: 3,
+                    samples: 3,
+                    median: 48.333,
+                    p10: 20.0,
+                    p90: 70.0,
+                },
+            ],
+        };
+        let json = calibrate_json(&outcome);
+        assert_eq!(
+            json,
+            "{\"subcommand\":\"calibrate-blend\",\"seeds\":3,\"from\":[0,0],\"size\":512,\"step\":16,\"pairs\":[\
+             {\"pair\":[0,1],\"samples\":25,\"median_blocks\":24.00,\"p10_blocks\":10.50,\"p90_blocks\":40.00,\"assessed\":true,\"ok\":true},\
+             {\"pair\":[2,3],\"samples\":3,\"median_blocks\":48.33,\"p10_blocks\":20.00,\"p90_blocks\":70.00,\"assessed\":false,\"ok\":false}],\"ok\":true}"
+        );
+    }
+
+    #[test]
+    fn anchor_cells_follow_the_global_stride() {
+        let cells = anchor_cells((0, 0), 64, 16);
+        assert_eq!(cells.len(), 16, "four anchors per axis");
+        assert!(cells.iter().all(|(x, z)| x % 4 == 0 && z % 4 == 0));
+        assert_eq!(anchor_cells((0, 0), 2, 16).len(), 0);
+    }
+
+    #[test]
+    fn counter_comparison_fails_above_five_percent() {
+        let baseline = BTreeMap::from([("a".to_owned(), 100_u64), ("b".to_owned(), 0)]);
+        assert!(compare_counters(&baseline, &BTreeMap::from([("a".to_owned(), 105)])).is_empty());
+        let drifts = compare_counters(&baseline, &BTreeMap::from([("a".to_owned(), 110)]));
+        assert_eq!(drifts.len(), 1);
+        assert_eq!(drifts[0].name, "a");
+        assert_eq!((drifts[0].baseline, drifts[0].current), (100, 110));
+        assert_eq!(
+            compare_counters(
+                &baseline,
+                &BTreeMap::from([("a".to_owned(), 100), ("b".to_owned(), 1)]),
+            )
+            .len(),
+            1,
+            "a zero baseline must stay zero"
+        );
+    }
+
+    #[test]
+    fn blend_weight_matches_the_generation_formula() {
+        assert_eq!(blend_weight(0.0), 0.5);
+        assert_eq!(blend_weight(255.0), 1.0);
+        let mut previous = blend_weight(0.0);
+        for q in 1..=255_u8 {
+            let weight = blend_weight(f32::from(q));
+            assert!(weight >= previous, "w fell at q {q}");
+            previous = weight;
+        }
+    }
 }

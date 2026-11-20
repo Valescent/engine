@@ -93,6 +93,9 @@ jobs:
       - name: Seed sweep
         run: cargo run --locked --quiet --no-default-features --bin terrain-gen -- sweep --tier pr
 
+      - name: Threshold counters
+        run: cargo run --locked --quiet --no-default-features --bin terrain-gen -- counters --tier pr
+
       - name: Thread and order invariance
         run: |
           set -euo pipefail
