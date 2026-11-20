@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A windowless fixed-step run (`ENGINE_HEADLESS=1`) reports frame work, generated columns, ready columns, and resident bytes, and a Perf workflow gates it on every main push.
 - Chunk vertices pack into 12 bytes (three cell bytes plus face, two UV bytes, layer, and light/AO) and quads use four vertices plus six indices (16-bit where a chunk fits, 32-bit otherwise), cutting vertex buffer memory by about 75 percent.
 - Back faces are culled for terrain and water; greedy quads wind counter-clockwise around their outward normal on all six faces.
+- The spec-driven v1 terrain stack ([`docs/specs/terrain.md`](docs/specs/terrain.md)): a hashed world description and header, region-graph generation, column light, greedy section meshing with skirts and LOD, section residency and revisions, and an edit journal.
+- Section persistence under a v2 world header: per-section files with one-generation backup rotation, an append-only journal replayed on open, prefix trimming after a save, a save worker on its own IO thread, `migrate` with a JSON report, and `repair` (`restore`, `quarantine`, `salvage`).
+- `terrain-gen`: `gen`, `golden check|update`, `seams`, `sweep`, `describe`, `describe-diff`, `verify --report`, `replay`, `map`, `repair`, and `migrate`, with pinned `--json` output.
+- `TERRAIN_DEMO=1`: a 128x128 tile with real column light, collision, asynchronous incremental light and mesh repair (~24 ms in release), distance LOD1, tile paging with prefetch, and saves under `world/terrain-demo/`.
+
+### Changed
+
+- `tracy` is a default feature, so a debug run captures to `reports/tracy/` unless `TRACY_CAPTURE_SECONDS=0`; CI builds every cargo command with `--no-default-features`.
 
 ### Fixed
 

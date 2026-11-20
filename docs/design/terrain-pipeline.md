@@ -581,7 +581,7 @@ contracts; the matching ADR and spec still own the details.
 | Mesh representation | Blocky greedy | The existing block, texture, collision, light, and save model stays the reference. Isosurface extraction is out of scope unless a later ADR reopens it. |
 | Versioning and persistence | Saved effective sections + audit log | A generated column is saved and never regenerated; the edit log provides undo and migration reporting; upgrade is pin, migrate, or fork, and migration transforms stored data rather than regenerating it. `VCHK` keeps loading v1–v3. |
 | LOD | Voxy SeedGen-style multi-level, seed-native hierarchy | LOD sections become first-class terrain generated at their own resolution and rendered through a node hierarchy. This replaces the per-chunk derived LOD as the long-range direction. |
-| Erosion and hydrology | Hybrid: 2.5D macro default, bounded volume-aware repair | The macro solver handles slopes, rivers, and surface lakes. The 3D detail pass emits interaction regions; only those regions run the volume-aware repair. Full volume-aware erosion stays out of scope. |
+| Erosion and hydrology | Hydrology in v1; erosion deferred to v2. Hybrid 2.5D macro default with bounded volume-aware repair remains the v2 direction. | Rivers, lakes, and carving ship in v1 without an erosion solver; `heightfield_post` is a reserved no-op and nothing downstream reads it. |
 
 ### Interview decisions
 
@@ -592,14 +592,16 @@ and specs that will implement it.
 
 | Decision | Choice |
 |---|---|
-| World height | Fixed at 128 blocks; vertical streaming is deferred. |
+| World height | 384 blocks (`0..=383`), sea level 128, flat bedrock at `y=0`, `MAX_TERRAIN_Y = 352` by construction. 12 sections of `32³` per column, all resident. |
 | First world scale | Roughly a 2,000-block radius. |
-| Macro grid | 4 blocks per cell. |
-| Hydrology | One global low-resolution map for the first world. When it grows, use 512×512-block tiles with a 64-block border. |
-| Climate | The rain-shadow march reuses the hydrology grid and heightfield. |
-| First vertical slice | Macro heightfield, 2.5D erosion, lakes, rivers, and rain shadow. |
-| First visual acceptance | Rivers reach the sea, lakes sit in basins, 3+ biomes show rain shadow, and strata show on cliffs. |
-| Next slice | 3D detail plus the water/cave hybrid repair. |
+| Macro grid | 4 blocks per cell, global lattice at `4k+0.5`, bilinear to blocks. |
+| Height | `height = SEA + base(continentalness) + relief(roughness) * shape(peaks) * coast_mask`, `f32` throughout, quantised once by `top_solid_y = floor(h)` in a derived 130×130 `HeightTile`. |
+| Hydrology | 512×512-block tiles with a 64-block border, D8 on the macro grid, priority-flood with `EPS = 1/64`, per-basin lake levels from the outlet. |
+| Climate | Fixed `+x` wind march over the macro height; rain shadow and maritime coast terms feed humidity. |
+| Erosion | **Not in v1.** `heightfield_post` is a reserved no-op; rivers and carving never read erosion output. |
+| First vertical slice | Macro heightfield, rivers, lakes, rain shadow, biomes, strata, caves, and the 3D detail band. |
+| First visual acceptance | Rivers reach the sea, lakes sit in basins, 3+ biomes show rain shadow, strata show on cliffs, overhangs appear on steep rough ground, caves open at masked mouths. |
+| Next slice | Erosion solver behind `heightfield_post`, volume-aware repair, further LOD levels. |
 
 #### Hybrid repair
 
@@ -613,13 +615,13 @@ and specs that will implement it.
 
 | Decision | Choice |
 |---|---|
-| First slice | One first-class `64³` level-1 section generated directly from the seed, compared with eight current LOD1 meshes. |
-| Lighting | Coarse light computed from level-1 blocks, not mipped from level 0. |
-| Water | A separate coarse water mesh from level-1 water cells. |
-| Consistency | Direct coarse sampling with a conservative any-solid rule; accept and measure small pops. |
-| Edit invalidation | Immediate to level 2; lazy beyond. |
-| Performance gate | 64-chunk radius at 60 FPS before GPU traversal is justified. |
-| Far terrain | The five-level hierarchy is enough for now; no separate far pass. |
+| Ladder | Three levels in v1: `1`, `2`, `4` blocks per cell, `32³` cells each. LOD1 derives from LOD0 by most-frequent-solid downsample; nothing is generated directly at a coarse level. |
+| Lighting | No coarse light field and no BFS. Per-face sky approximation at mesh time, block light 0, AO 0, with a shader curve easing the LOD0/LOD1 step. |
+| Water | Coarse water from the same downsample rule; water/air faces only. |
+| Consistency | Most-frequent-solid wins (ties: lowest id), not conservative any-solid. Seams are covered by `SKIRT_DEPTH = 2` cell skirts. |
+| Edit invalidation | LOD1/LOD2 rebuild lazily as class 4 work; LOD is never authority. |
+| Performance gate | `VIEW_RADIUS = 16` at 60 FPS on the reference machine, LOD2 at the horizon, no frame over 20 ms. |
+| Far terrain | LOD2 at radius 64 covers the ~2,000-block world; no separate far pass. |
 
 #### Identity and streaming
 

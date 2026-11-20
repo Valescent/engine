@@ -24,7 +24,8 @@
 
 # Specs
 
-- [v0.0.3 — Chunks and Meshes](specs/v0.0.3.md)
+- [Terrain](specs/terrain.md)
+- [v0.0.3 - Chunks and Meshes](specs/v0.0.3.md)
 - [v0.0.4 — Playable](specs/v0.0.4.md)
 - [v0.0.5 — Scale and Performance](specs/v0.0.5.md)
 - [v0.0.6 — Atmosphere](specs/v0.0.6.md)
@@ -36,18 +37,22 @@
 - [Lighting pipeline](design/lighting-pipeline.md)
 - [Terrain pipeline](design/terrain-pipeline.md)
 - [Terrain interview notes](design/terrain-interview.md)
+- [Terrain build plan](design/terrain-build-plan.md)
+- [Terrain build prompt](prompt/terrain-build-prompt.md)
 - [Seed-native LOD hierarchy](design/lod-hierarchy.md)
 - [Terrain reference notes](design/terrain-lessons.md)
 
 # Development
 
 - [Architecture overview](dev/architecture.md)
+- [Terrain v1 runtime](dev/terrain-v1.md)
 - [Shader authoring](dev/shaders.md)
 - [Texture and asset pipeline](dev/textures.md)
 - [Coordinates](dev/coordinates.md)
 - [Controls](dev/controls.md)
 - [Configuration](dev/configuration.md)
 - [World management](dev/world-management.md)
+- [Save format](dev/save-format.md)
 - [Debugging](dev/debugging.md)
 - [Profiling](dev/profiling.md)
 - [Benchmark results](dev/benchmarks.md)

@@ -14,6 +14,7 @@ is the methodology; this page is the run log.
 | Worker-pool decision | [ADR-0009](../decisions/0009-micropool-for-chunk-workers.md) |
 | Engine run (v0.0.5) | Historical baseline; see [Engine run](#engine-run-v005-release) |
 | Engine run (v0.0.8) | Current; see [Engine run](#engine-run-v008-release) |
+| Terrain v1 demo | Current; see [Terrain v1 demo](#terrain-v1-demo-2026-11-20) |
 | Headless run (v0.0.8) | Current; gated by the `Perf` workflow |
 
 ## Run it
@@ -376,7 +377,35 @@ behaviour, not steady-state frame rate.
 **Verdict:** no meaningful difference on the real workload. micropool stays the default under
 ADR-0009; the rayon path exists only for A/B runs.
 
-## Run log
+## Terrain v1 demo (2026-11-20)
+
+Release build, 12 logical cores, `TERRAIN_DEMO=1`, 128x128 one-tile patch. Measured by
+`demo_build_phase_split`, `demo_rebuild_cost_split`, and the startup log.
+
+| Phase | Time |
+|---|---:|
+| `Terrain::new` | ~0 ms |
+| Field tile | 18 ms |
+| Column generation (12 workers) | 815 ms |
+| Column light | 31 ms |
+| Fine meshing | 31 ms |
+| Coarse LOD meshing | 45 ms |
+| **Startup build** | **~0.89 s** |
+
+| Edit rebuild (surface break) | Before | After |
+|---|---:|---:|
+| Sections remeshed | 27 | **1** |
+| Light | 49–56 ms | **22.1 ms** |
+| Mesh | 26–37 ms | **1.8 ms** |
+| **Total** | ~55 ms | **~24 ms** |
+
+- Spawn active set: 29 sections / 66,293 quads; far corner drawn at LOD1, 64 blocks away.
+- Working set: 350 MB with the demo vs 295 MB for the legacy stress scene; tile streaming (active
+  + three cached tiles) adds ~55 MB.
+- Startup before the tile alignment and worker fan-out was 5.14 s; generation was 3.54 s serial.
+- `stream` prefetch builds one tile (~0.9 s) at a time while the frame loop stays at ~60 FPS.
+
+
 
 | Date | Commit | Machine | Rust | Command | Workers | Result |
 |---|---|---|---|---|---|---|

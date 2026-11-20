@@ -134,6 +134,22 @@ checked by `CI`, `Commits`, and `Docs`; the changelog gate ignores `chore` commi
 Workflows reference actions by version tags such as `@v7`, `@v2`, and `@v1.52.2`, not by commit
 SHA. Dependabot updates those tags.
 
+## Terrain gates
+
+The `Terrain gates` job runs the headless generator on `ubuntu-latest` after the test job. It is
+the only job that treats generated block output as an assertion:
+
+```console
+cargo run --locked --quiet --bin terrain-gen -- golden check
+cargo run --locked --quiet --bin terrain-gen -- seams --window 5x5 --seeds 3
+cargo run --locked --quiet --bin terrain-gen -- sweep --tier pr
+```
+
+It also runs `gen --threads 1 --order forward` against `--threads 4 --order shuffled` and fails
+when the two digests differ. Goldens change only through `golden update`, which is deliberate and
+must be accompanied by a generator version bump; a pull request that moves a golden without one
+fails review, not CI.
+
 ## Local equivalents
 
 Run the same checks locally:
@@ -172,8 +188,8 @@ test, rustdoc, typos, and mdBook checks before a release.
   for `Release`, and Pages permissions for `Docs`.
 - Cancel superseded `CI`, `Commits`, and `Perf` runs. Do not cancel `Docs` deployments or
   `Release` runs.
-- Use `--locked` for Clippy and tests. Do not switch these to `--all-features`: the optional
-  `tracy` feature builds a C++ client and stays local (ADR-0006).
+- Use `--locked` for Clippy and tests. Pass `--no-default-features`: `tracy` is a default
+  feature but builds a C++ client and stays local (ADR-0006).
 - Reference actions by version tags and let Dependabot update them.
 - Do not add `pool_sim` to CI. It is a local decision aid. Record local runs in
   [Benchmark results](benchmarks.md).
