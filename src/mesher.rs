@@ -302,11 +302,12 @@ impl MeshQueue {
     pub(crate) fn invalidate(&mut self, dirty: &DirtyChunks) {
         for chunk in dirty {
             *self.revisions.entry(*chunk).or_insert(0) += 1;
-            self.pending.retain(|(pending, _, _), _| pending != chunk);
-            self.built.retain(|(built, _, _), _| built != chunk);
             self.light_pending.remove(chunk);
             self.light_built.remove(chunk);
         }
+        self.pending
+            .retain(|(chunk, _, _), _| !dirty.contains(chunk));
+        self.built.retain(|(chunk, _, _), _| !dirty.contains(chunk));
     }
 
     /// Forgets the pending work for a chunk that left the world.
@@ -419,6 +420,11 @@ impl MeshQueue {
     /// Columns with a generation job queued or running.
     pub(crate) fn generation_pending_len(&self) -> usize {
         self.gen_pending.len()
+    }
+
+    /// Returns whether generation is queued or running for the column.
+    pub(crate) fn generation_pending(&self, column: IVec2) -> bool {
+        self.gen_pending.contains(&column)
     }
 
     /// Returns whether a light job is queued or running for the chunk.

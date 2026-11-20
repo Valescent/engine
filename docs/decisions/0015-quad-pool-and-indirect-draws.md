@@ -97,12 +97,13 @@ light buffer, and it saves 8 MB against a 40 MB target that 12 bytes already mee
 
 ### 2.3 Chunk table
 
-A storage buffer of 32-byte records: `origin: [f32; 4]` (chunk minimum corner plus LOD scale),
-`opaque_first`, `opaque_quads`, `water_first`, and `water_quads`. The vertex shader indexes it by the
-draw's `first_instance` (or by `@builtin(instance_index)` when `first_instance` is unavailable). The
-range fields index the flat quad array; a chunk's range is contiguous and page-aligned. The camera
-subtracts its own position on the CPU before the origin enters the table, which keeps the shader in
-small f32 values.
+A storage buffer of 48-byte records: `origin: [f32; 4]` (chunk minimum corner plus LOD scale),
+`water_origin: [f32; 4]`, `opaque_first`, `opaque_quads`, `water_first`, and `water_quads`. The
+vertex shader indexes it by the draw's `first_instance` (or by `@builtin(instance_index)` when
+`first_instance` is unavailable). The range fields index the flat quad array; a chunk's range is
+contiguous and page-aligned. Origins are absolute chunk coordinates today; the camera does not
+subtract its position. Camera-relative origins remain a possible future change and are not
+implemented in this slice.
 
 ### 2.4 Submission
 

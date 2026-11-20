@@ -11,7 +11,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use glam::{IVec3, Vec3};
+use glam::{IVec2, IVec3, Vec3};
 use thiserror::Error;
 
 use crate::block::Block;
@@ -101,20 +101,23 @@ impl PartialOrd for ChunkCoord {
 /// state and lives in [`World`] as a separate field.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Chunk {
-    cells: Box<[u8]>,
+    cells: Arc<Vec<u8>>,
     filled: usize,
     water: usize,
     /// Highest solid block's local y, or `-1` when the chunk has none.
     top: i32,
+    /// Highest water block's local y, or `-1` when the chunk has none.
+    water_top: i32,
 }
 
 impl Default for Chunk {
     fn default() -> Self {
         Self {
-            cells: vec![0; CHUNK_STORAGE_BYTES].into_boxed_slice(),
+            cells: Arc::new(vec![0; CHUNK_STORAGE_BYTES]),
             filled: 0,
             water: 0,
             top: -1,
+            water_top: -1,
         }
     }
 }
@@ -137,6 +140,11 @@ impl Chunk {
     /// Highest solid block's local y, or `-1` when the chunk has none.
     pub(crate) fn top(&self) -> i32 {
         self.top
+    }
+
+    /// Highest water block's local y, or `-1` when the chunk has none.
+    pub(crate) fn water_top(&self) -> i32 {
+        self.water_top
     }
 
     /// Returns the block at a local coordinate, or `Air` outside the chunk.
@@ -164,7 +172,8 @@ impl Chunk {
             _ => {}
         }
         let packed = block.id();
-        let byte = &mut self.cells[index / 2];
+        let cells = Arc::make_mut(&mut self.cells);
+        let byte = &mut cells[index / 2];
         if index.is_multiple_of(2) {
             *byte = (*byte & 0xF0) | (packed & 0x0F);
         } else {
@@ -175,6 +184,12 @@ impl Chunk {
             self.top = local.y;
         } else if previous.is_solid() && !block.is_solid() && local.y == self.top {
             self.recompute_top();
+        }
+
+        if block == Block::Water && local.y > self.water_top {
+            self.water_top = local.y;
+        } else if previous == Block::Water && block != Block::Water && local.y == self.water_top {
+            self.recompute_water_top();
         }
     }
 
@@ -194,9 +209,25 @@ impl Chunk {
         self.top = -1;
     }
 
-    /// Packed four-bit block storage, two cells per byte.
-    pub(crate) fn storage(&self) -> &[u8] {
-        &self.cells
+    /// Recomputes the highest water cell after the top water is cleared.
+    fn recompute_water_top(&mut self) {
+        for y in (0..CHUNK_SIZE).rev() {
+            for x in 0..CHUNK_SIZE {
+                for z in 0..CHUNK_SIZE {
+                    let index = local_index(IVec3::new(x, y, z)).expect("in-chunk cell");
+                    if packed_block(&self.cells, index) == Block::Water {
+                        self.water_top = y;
+                        return;
+                    }
+                }
+            }
+        }
+        self.water_top = -1;
+    }
+
+    /// Shared packed storage, cloned for a worker snapshot.
+    pub(crate) fn shared_storage(&self) -> Arc<Vec<u8>> {
+        Arc::clone(&self.cells)
     }
 
     /// Non-air blocks in local `(x, y, z)` order.
@@ -360,6 +391,29 @@ impl World {
         result
     }
 
+    /// Every stored chunk in the eight columns around `column`.
+    ///
+    /// Column loads and unloads change the sky view of their neighbours, so
+    /// those neighbours need a fresh light field even though their own blocks
+    /// did not change.
+    pub(crate) fn neighbour_column_chunks(&self, column: IVec2) -> DirtyChunks {
+        let mut chunks = DirtyChunks::new();
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                if dx == 0 && dz == 0 {
+                    continue;
+                }
+                for y in 0..CHUNK_COLUMN {
+                    let chunk = ChunkCoord::new(column.x + dx, y, column.y + dz);
+                    if self.chunks.contains_key(&chunk) {
+                        chunks.insert(chunk);
+                    }
+                }
+            }
+        }
+        chunks
+    }
+
     /// Stores an accepted light field for a chunk.
     pub(crate) fn set_light_field(&mut self, chunk: ChunkCoord, field: LightField) {
         self.light.insert(chunk, Arc::new(field));
@@ -490,13 +544,15 @@ impl World {
     }
 
     /// Writes one modified chunk and clears its marker.
+    ///
+    /// Returns whether a file was written.
     pub(crate) fn save_chunk(
         &mut self,
         directory: &Path,
         chunk: ChunkCoord,
-    ) -> Result<(), SaveError> {
+    ) -> Result<bool, SaveError> {
         if !self.modified.contains(&chunk) {
-            return Ok(());
+            return Ok(false);
         }
         fs::create_dir_all(directory).map_err(|error| SaveError::from_path(&error, directory))?;
         let bytes = match self.chunks.get(&chunk) {
@@ -506,7 +562,41 @@ impl World {
         let path = chunk_file_path(directory, chunk);
         fs::write(&path, bytes).map_err(|error| SaveError::from_path(&error, &path))?;
         self.modified.remove(&chunk);
-        Ok(())
+        Ok(true)
+    }
+
+    /// Coordinates with saved chunk files in `directory`.
+    ///
+    /// Listing the directory once replaces a failed `fs::read` for every
+    /// generated chunk. Files whose names do not parse are ignored here; the
+    /// per-chunk loader still reports them if they are requested.
+    pub(crate) fn saved_chunk_index(directory: &Path) -> Result<HashSet<ChunkCoord>, SaveError> {
+        let entries = match fs::read_dir(directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(HashSet::new()),
+            Err(error) => return Err(SaveError::from_path(&error, directory)),
+        };
+        let mut chunks = HashSet::new();
+        for entry in entries {
+            let entry = entry.map_err(|error| SaveError::from_path(&error, directory))?;
+            let path = entry.path();
+            if !path.is_file() || path.extension().is_none_or(|extension| extension != "vchk") {
+                continue;
+            }
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if let Some(chunk) = parse_chunk_file_name(&name) {
+                chunks.insert(chunk);
+            }
+        }
+        Ok(chunks)
+    }
+
+    /// Coordinates with unsaved edits.
+    pub(crate) fn modified_chunks(&self) -> impl Iterator<Item = ChunkCoord> + '_ {
+        self.modified.iter().copied()
     }
 
     /// Reads one saved chunk, if a file exists.
@@ -531,14 +621,26 @@ impl World {
     }
 
     /// Marks a loaded chunk as modified.
+    #[cfg(test)]
     pub(crate) fn mark_modified(&mut self, chunk: ChunkCoord) {
         self.modified.insert(chunk);
+    }
+
+    /// Clears every unsaved-edit marker after a successful save.
+    pub(crate) fn clear_modified(&mut self) {
+        self.modified.clear();
     }
 
     /// Whether a chunk has unsaved edits.
     #[cfg(test)]
     pub(crate) fn is_modified(&self, chunk: ChunkCoord) -> bool {
         self.modified.contains(&chunk)
+    }
+
+    /// Number of chunks with unsaved edits.
+    #[cfg(test)]
+    pub(crate) fn modified_count(&self) -> usize {
+        self.modified.len()
     }
 }
 
@@ -612,7 +714,6 @@ fn chunk_file_path(directory: &Path, chunk: ChunkCoord) -> PathBuf {
     ))
 }
 
-#[cfg(test)]
 fn parse_chunk_file_name(name: &str) -> Option<ChunkCoord> {
     let stem = name
         .strip_prefix(CHUNK_FILE_PREFIX)?
@@ -1048,6 +1149,38 @@ mod tests {
     }
 
     #[test]
+    fn neighbour_column_chunks_covers_only_stored_surrounding_columns() {
+        let mut world = World::default();
+        for (coordinate, block) in [
+            (IVec3::new(1, 0, 1), Block::Stone),
+            (IVec3::new(1, 64, 1), Block::Stone),
+            (IVec3::new(64, 32, 64), Block::Stone),
+            (IVec3::new(33, 96, 1), Block::Stone),
+            // Excluded: the column itself, a non-adjacent column, and a chunk
+            // above the loaded column height.
+            (IVec3::new(33, 0, 33), Block::Stone),
+            (IVec3::new(96, 0, 33), Block::Stone),
+            (IVec3::new(1, 128, 1), Block::Stone),
+        ] {
+            world.set_block(coordinate, block);
+        }
+
+        let chunks = world.neighbour_column_chunks(IVec2::new(1, 1));
+        let expected: DirtyChunks = [
+            ChunkCoord::new(0, 0, 0),
+            ChunkCoord::new(0, 2, 0),
+            ChunkCoord::new(2, 1, 2),
+            ChunkCoord::new(1, 3, 0),
+        ]
+        .into_iter()
+        .collect();
+
+        assert_eq!(chunks, expected);
+        assert!(!chunks.contains(&ChunkCoord::new(0, 1, 0)));
+        assert!(!chunks.contains(&ChunkCoord::new(1, 0, 1)));
+    }
+
+    #[test]
     fn solid_blocks_in_matches_the_requested_box_across_chunks() {
         let mut world = World::default();
         let solids = [
@@ -1120,6 +1253,35 @@ mod tests {
     }
 
     #[test]
+    fn water_top_tracks_the_highest_water_block() {
+        let mut chunk = Chunk::default();
+        assert_eq!(chunk.water_top(), -1);
+
+        chunk.set_block(IVec3::new(1, 3, 1), Block::Water);
+        assert_eq!(chunk.water_top(), 3);
+
+        chunk.set_block(IVec3::new(2, 7, 2), Block::Stone);
+        assert_eq!(chunk.water_top(), 3, "solid blocks are not water");
+
+        chunk.set_block(IVec3::new(2, 9, 2), Block::Water);
+        assert_eq!(chunk.water_top(), 9);
+
+        chunk.set_block(IVec3::new(3, 9, 3), Block::Water);
+        chunk.set_block(IVec3::new(2, 9, 2), Block::Air);
+        assert_eq!(
+            chunk.water_top(),
+            9,
+            "another water at the same height survives"
+        );
+
+        chunk.set_block(IVec3::new(3, 9, 3), Block::Stone);
+        assert_eq!(chunk.water_top(), 3, "replacing the top water recomputes");
+
+        chunk.set_block(IVec3::new(1, 3, 1), Block::Air);
+        assert_eq!(chunk.water_top(), -1);
+    }
+
+    #[test]
     fn stored_chunks_never_contain_air() {
         let mut world = World::default();
         world.set_block(IVec3::new(5, 5, 5), Block::Stone);
@@ -1134,7 +1296,7 @@ mod tests {
     #[test]
     fn chunk_storage_is_four_bits_per_cell() {
         let mut chunk = Chunk::default();
-        assert_eq!(chunk.storage().len(), CHUNK_STORAGE_BYTES);
+        assert_eq!(chunk.shared_storage().len(), CHUNK_STORAGE_BYTES);
         assert_eq!(CHUNK_STORAGE_BYTES, CHUNK_CELLS / 2);
 
         let blocks = [
@@ -1281,6 +1443,25 @@ mod tests {
     }
 
     #[test]
+    fn clearing_the_modified_set_makes_the_next_save_write_nothing() {
+        let directory = temp_dir("second-save");
+        let second = temp_dir("second-save-empty");
+        let mut world = World::default();
+        world.set_block(IVec3::new(5, 0, 5), Block::Stone);
+        world.save_chunks(&directory).unwrap();
+        assert_eq!(world.modified_count(), 1);
+
+        world.clear_modified();
+        assert_eq!(world.modified_count(), 0);
+
+        world.save_chunks(&second).unwrap();
+
+        assert_eq!(fs::read_dir(&second).unwrap().count(), 0);
+        fs::remove_dir_all(directory).unwrap();
+        fs::remove_dir_all(second).unwrap();
+    }
+
+    #[test]
     fn an_emptied_chunk_round_trips_as_an_empty_v3_file() {
         let directory = temp_dir("emptied");
         let mut world = World::default();
@@ -1298,6 +1479,28 @@ mod tests {
         assert_eq!(loaded.block(coordinate), Block::Air);
         assert!(loaded.iter_chunks().next().is_none());
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn saved_chunk_index_lists_only_parseable_chunk_files() {
+        let directory = temp_dir("saved-index");
+        let mut world = World::default();
+        world.set_block(IVec3::new(5, 0, 5), Block::Stone);
+        world.save_chunks(&directory).unwrap();
+        fs::write(directory.join("notes.txt"), []).unwrap();
+        fs::write(directory.join("chunk_bad.vchk"), []).unwrap();
+
+        let index = World::saved_chunk_index(&directory).unwrap();
+
+        assert_eq!(index, HashSet::from([chunk_at(IVec3::new(5, 0, 5))]));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn saved_chunk_index_is_empty_for_a_missing_directory() {
+        let directory = temp_dir("saved-index-missing").join("nested");
+
+        assert!(World::saved_chunk_index(&directory).unwrap().is_empty());
     }
 
     #[test]
@@ -1551,17 +1754,52 @@ mod tests {
     }
 
     #[test]
-    fn version_2_round_trips_lamp_and_water() {
-        let directory = temp_dir("v2-round-trip");
+    fn version_2_fixture_loads_and_resaves_as_v3() {
+        let directory = temp_dir("v2-fixture");
+        let chunk = chunk_at(IVec3::ZERO);
+        let records = [
+            (IVec3::new(0, 0, 0), Block::Stone),
+            (IVec3::new(1, 0, 0), Block::Dirt),
+            (IVec3::new(2, 0, 0), Block::Grass),
+            (IVec3::new(3, 0, 0), Block::Wood),
+            (IVec3::new(4, 0, 0), Block::Leaves),
+            (IVec3::new(5, 0, 0), Block::Lamp),
+            (IVec3::new(6, 0, 0), Block::Water),
+        ];
+
+        let mut bytes = header(chunk, u32::try_from(records.len()).unwrap());
+        bytes[4..6].copy_from_slice(&2_u16.to_le_bytes());
+        for (local, block) in records {
+            bytes.extend_from_slice(&[
+                u8::try_from(local.x).unwrap(),
+                u8::try_from(local.y).unwrap(),
+                u8::try_from(local.z).unwrap(),
+                block.id(),
+            ]);
+        }
+
+        let (header_chunk, parsed) = parse_chunk(&bytes).unwrap();
+        assert_eq!(header_chunk, chunk);
+        assert_eq!(parsed.len(), records.len());
+        for (local, block) in records {
+            assert_eq!(parsed.block(local), block, "{local}");
+        }
+
+        write_raw(&directory, "chunk_0_0_0.vchk", &bytes);
         let mut world = World::default();
-        world.set_block(IVec3::new(1, 0, 0), Block::Lamp);
-        world.set_block(IVec3::new(2, 0, 0), Block::Water);
+        world.insert_chunk(chunk, parsed);
+        world.mark_modified(chunk);
         world.save_chunks(&directory).unwrap();
 
+        let saved = fs::read(directory.join("chunk_0_0_0.vchk")).unwrap();
+        assert_eq!(
+            u16::from_le_bytes(saved[4..6].try_into().unwrap()),
+            FORMAT_VERSION
+        );
         let loaded = World::load_chunks(&directory).unwrap();
-
-        assert_eq!(loaded.block(IVec3::new(1, 0, 0)), Block::Lamp);
-        assert_eq!(loaded.block(IVec3::new(2, 0, 0)), Block::Water);
+        for (local, block) in records {
+            assert_eq!(loaded.block(local), block, "{local}");
+        }
         fs::remove_dir_all(directory).unwrap();
     }
 

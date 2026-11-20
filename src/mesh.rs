@@ -5,6 +5,7 @@
 //! block, LOD1 on `16` cells of `2 × 2 × 2` blocks.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use glam::IVec3;
 
@@ -99,7 +100,7 @@ pub(crate) fn select_lod(current: Option<Lod>, distance: f32) -> Lod {
 /// Immutable full-resolution copy of one chunk's blocks.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ChunkSnapshot {
-    cells: Box<[u8]>,
+    cells: Arc<Vec<u8>>,
     water: bool,
 }
 
@@ -108,8 +109,8 @@ impl ChunkSnapshot {
     pub(crate) fn new(world: &World, chunk: ChunkCoord) -> Self {
         let chunk_data = world.chunk(chunk);
         let cells = chunk_data.map_or_else(
-            || vec![0; CHUNK_STORAGE_BYTES].into_boxed_slice(),
-            |data| data.storage().to_vec().into_boxed_slice(),
+            || Arc::new(vec![0; CHUNK_STORAGE_BYTES]),
+            Chunk::shared_storage,
         );
         Self {
             cells,
@@ -140,7 +141,7 @@ pub(crate) struct BorderBlocks {
 }
 
 impl BorderBlocks {
-    /// Copies the solid border cells of the six neighbouring chunks.
+    /// Copies the non-air border cells of the six neighbouring chunks.
     pub(crate) fn new(world: &World, chunk: ChunkCoord) -> Self {
         let mut blocks = HashMap::new();
         for normal in FACE_NORMALS {
@@ -151,7 +152,7 @@ impl BorderBlocks {
                 for v in 0..CHUNK_SIZE {
                     let local = face_local(normal, u, v);
                     let block = data.block(local);
-                    if block.is_solid() {
+                    if block != Block::Air {
                         blocks.insert(local + normal * CHUNK_SIZE, block);
                     }
                 }
@@ -425,34 +426,79 @@ fn corner_values(
     anchor: IVec3,
     face: usize,
 ) -> [u32; 4] {
-    let outside = anchor + FACE_NORMALS[face];
-    let (u_axis, v_axis) = face_axes(face);
+    let ring = FaceNeighbourhood::new(block_at, light, anchor, face);
     [(-1, -1), (-1, 1), (1, 1), (1, -1)].map(|(su, sv)| {
-        let side_a = outside + u_axis * su;
-        let side_b = outside + v_axis * sv;
-        let diagonal = side_a + v_axis * sv;
-        let solid_a = block_at(side_a).is_solid();
-        let solid_b = block_at(side_b).is_solid();
-        let solid_diagonal = block_at(diagonal).is_solid();
+        let (sky, block, ao) = ring.corner(su, sv);
+        pack_light_ao(sky, block, ao)
+    })
+}
+
+/// Solidity and light of the nine cells around a face's outside cell.
+///
+/// Every corner of a face samples this 3x3 ring, so gathering it once avoids
+/// re-reading the same cells for each corner.
+struct FaceNeighbourhood {
+    solid: [[bool; 3]; 3],
+    sky: [[u8; 3]; 3],
+    block: [[u8; 3]; 3],
+}
+
+impl FaceNeighbourhood {
+    fn new(
+        block_at: &impl Fn(IVec3) -> Block,
+        light: Option<&LightField>,
+        anchor: IVec3,
+        face: usize,
+    ) -> Self {
+        let outside = anchor + FACE_NORMALS[face];
+        let (u_axis, v_axis) = face_axes(face);
+        let mut neighbourhood = Self {
+            solid: [[false; 3]; 3],
+            sky: [[0; 3]; 3],
+            block: [[0; 3]; 3],
+        };
+        for su in -1..=1 {
+            for sv in -1..=1 {
+                let i = ring_index(su);
+                let j = ring_index(sv);
+                let cell = outside + u_axis * su + v_axis * sv;
+                let solid = block_at(cell).is_solid();
+                neighbourhood.solid[i][j] = solid;
+                if !solid && let Some(light) = light {
+                    neighbourhood.sky[i][j] = light.sky(cell);
+                    neighbourhood.block[i][j] = light.block(cell);
+                }
+            }
+        }
+        neighbourhood
+    }
+
+    /// Sky, block, and AO for the corner in direction `(su, sv)`.
+    fn corner(&self, su: i32, sv: i32) -> (u8, u8, u8) {
+        let i = ring_index(su);
+        let j = ring_index(sv);
+        let solid_a = self.solid[i][1];
+        let solid_b = self.solid[1][j];
+        let solid_diagonal = self.solid[i][j];
         let ao = if solid_a && solid_b {
             0
         } else {
             3 - (u8::from(solid_a) + u8::from(solid_b) + u8::from(solid_diagonal))
         };
+        let sky = self.sky[i][1]
+            .max(self.sky[1][j])
+            .max(self.sky[i][j])
+            .max(self.sky[1][1]);
+        let block = self.block[i][1]
+            .max(self.block[1][j])
+            .max(self.block[i][j])
+            .max(self.block[1][1]);
+        (sky, block, ao)
+    }
+}
 
-        let mut sky = 0;
-        let mut block = 0;
-        if let Some(light) = light {
-            for candidate in [outside, side_a, side_b, diagonal] {
-                if block_at(candidate).is_solid() {
-                    continue;
-                }
-                sky = sky.max(light.sky(candidate));
-                block = block.max(light.block(candidate));
-            }
-        }
-        pack_light_ao(sky, block, ao)
-    })
+fn ring_index(delta: i32) -> usize {
+    usize::try_from(delta + 1).expect("ring index fits")
 }
 
 /// Packs sky light, block light, and AO into the vertex field.
@@ -468,22 +514,11 @@ fn water_corners(
     anchor: IVec3,
     face: usize,
 ) -> [u32; 4] {
-    let outside = anchor + FACE_NORMALS[face];
-    let (u_axis, v_axis) = face_axes(face);
+    let ring = FaceNeighbourhood::new(block_at, None, anchor, face);
     let (sky, block) = light.map_or((0, 0), |light| (light.sky(anchor), light.block(anchor)));
 
     [(-1, -1), (-1, 1), (1, 1), (1, -1)].map(|(su, sv)| {
-        let side_a = outside + u_axis * su;
-        let side_b = outside + v_axis * sv;
-        let diagonal = side_a + v_axis * sv;
-        let solid_a = block_at(side_a).is_solid();
-        let solid_b = block_at(side_b).is_solid();
-        let solid_diagonal = block_at(diagonal).is_solid();
-        let ao = if solid_a && solid_b {
-            0
-        } else {
-            3 - (u8::from(solid_a) + u8::from(solid_b) + u8::from(solid_diagonal))
-        };
+        let (_, _, ao) = ring.corner(su, sv);
         pack_light_ao(sky, block, ao)
     })
 }
@@ -1158,6 +1193,41 @@ mod tests {
 
         assert_eq!(vertices.len(), 24);
         assert!(vertices.iter().all(|vertex| vertex.layer() == 9));
+    }
+
+    #[test]
+    fn water_at_a_chunk_border_suppresses_the_shared_face() {
+        let chunk = chunk_at(IVec3::new(31, 5, 0));
+        let border_water = world_with(&[
+            (IVec3::new(31, 5, 0), Block::Water),
+            (IVec3::new(32, 5, 0), Block::Water),
+        ]);
+        let shared = build_water_mesh(
+            &ChunkSnapshot::new(&border_water, chunk),
+            &BorderBlocks::new(&border_water, chunk),
+            None,
+        );
+        assert!(
+            !shared
+                .quads
+                .iter()
+                .any(|quad| quad.position() == IVec3::new(31, 5, 0) && quad.face() == 0),
+            "the +X face of (31, 5, 0) is shared with the neighbour's water"
+        );
+
+        let lone = world_with(&[(IVec3::new(31, 5, 0), Block::Water)]);
+        let alone = build_water_mesh(
+            &ChunkSnapshot::new(&lone, chunk),
+            &BorderBlocks::new(&lone, chunk),
+            None,
+        );
+        assert!(
+            alone
+                .quads
+                .iter()
+                .any(|quad| quad.position() == IVec3::new(31, 5, 0) && quad.face() == 0),
+            "a lone water cell still emits its +X face"
+        );
     }
 
     #[test]

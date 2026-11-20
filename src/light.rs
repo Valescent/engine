@@ -161,6 +161,11 @@ pub(crate) fn compute(snapshot: &LightSnapshot, chunk: ChunkCoord) -> LightField
     let column_stride = usize::try_from(GRID).expect("grid size fits");
     // Highest solid world y per grid column; `i32::MIN` means open to the sky.
     let mut ceiling = vec![i32::MIN; columns];
+    let mut sky = vec![0_u8; cells];
+    let mut block_light: Option<Vec<u8>> = None;
+    let mut sky_queue = VecDeque::new();
+    let mut block_queue = VecDeque::new();
+
     for (coordinate, data) in &snapshot.cells {
         let origin = coordinate.world_origin();
         let offset = origin - base;
@@ -177,54 +182,45 @@ pub(crate) fn compute(snapshot: &LightSnapshot, chunk: ChunkCoord) -> LightField
                 let top = &mut ceiling[x * column_stride + z];
                 *top = (*top).max(world.y);
             }
-            if in_grid(grid_cell) {
-                blocks[grid_index(grid_cell)] = block;
+            if !in_grid(grid_cell) {
+                continue;
+            }
+            let index = grid_index(grid_cell);
+            blocks[index] = block;
+            if block == Block::Lamp {
+                block_light.get_or_insert_with(|| vec![0_u8; cells])[index] = LAMP_LIGHT;
+                block_queue.push_back((grid_cell, LAMP_LIGHT));
             }
         }
     }
 
-    let mut sky = vec![0_u8; cells];
-    let mut block_light: Option<Vec<u8>> = None;
-    let mut sky_queue = VecDeque::new();
-    let mut block_queue = VecDeque::new();
-
+    // Every cell above its column ceiling is open sky. Enqueue the ones that
+    // touch a shadowed non-solid cell in the same pass; the old code scanned
+    // the full grid again just to find them.
     for x in 0..GRID {
         for z in 0..GRID {
             let x_index = usize::try_from(x).expect("in-grid coordinate fits");
             let z_index = usize::try_from(z).expect("in-grid coordinate fits");
             let ceiling_y = ceiling[x_index * column_stride + z_index];
-            for y in 0..GRID {
+            let start = if ceiling_y == i32::MIN {
+                0
+            } else {
+                (ceiling_y - base.y + 1).clamp(0, GRID)
+            };
+            for y in start..GRID {
                 let cell = IVec3::new(x, y, z);
-                let index = grid_index(cell);
-                let block = blocks[index];
-                if block.is_solid() {
-                    if block == Block::Lamp {
-                        block_light.get_or_insert_with(|| vec![0_u8; cells])[index] = LAMP_LIGHT;
-                        block_queue.push_back((cell, LAMP_LIGHT));
-                    }
-                    continue;
-                }
-                let world_y = base.y + y;
-                if world_y > ceiling_y {
-                    sky[index] = MAX_LIGHT;
-                }
-            }
-        }
-    }
-
-    for x in 0..GRID {
-        for y in 0..GRID {
-            for z in 0..GRID {
-                let cell = IVec3::new(x, y, z);
-                if sky[grid_index(cell)] != MAX_LIGHT {
-                    continue;
-                }
-                if NEIGHBOURS.iter().any(|offset| {
+                sky[grid_index(cell)] = MAX_LIGHT;
+                let boundary = NEIGHBOURS.iter().any(|offset| {
                     let neighbour = cell + *offset;
-                    in_grid(neighbour)
-                        && !blocks[grid_index(neighbour)].is_solid()
-                        && sky[grid_index(neighbour)] != MAX_LIGHT
-                }) {
+                    if !in_grid(neighbour) || blocks[grid_index(neighbour)].is_solid() {
+                        return false;
+                    }
+                    let nx = usize::try_from(neighbour.x).expect("in-grid coordinate fits");
+                    let nz = usize::try_from(neighbour.z).expect("in-grid coordinate fits");
+                    let neighbour_ceiling = ceiling[nx * column_stride + nz];
+                    neighbour_ceiling != i32::MIN && base.y + neighbour.y <= neighbour_ceiling
+                });
+                if boundary {
                     sky_queue.push_back((cell, MAX_LIGHT));
                 }
             }

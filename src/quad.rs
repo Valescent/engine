@@ -195,10 +195,11 @@ impl QuadRecord {
     }
 }
 
-/// Per-chunk entry in the pool's chunk table (32 bytes).
+/// Per-chunk entry in the pool's chunk table (48 bytes).
 ///
 /// `origin` is the chunk's minimum corner in metres plus the LOD scale in `w`.
-/// `*_first` indexes the flat quad array; the draw count comes from `*_quads`.
+/// `water_origin` is the same corner for the water batch. `*_first` indexes the
+/// flat quad array; the draw count comes from `*_quads`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
 pub(crate) struct ChunkInfo {

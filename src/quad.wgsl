@@ -107,7 +107,7 @@ fn corner_light(quad: Quad, corner: u32) -> vec3<f32> {
     return vec3<f32>(f32(sky) / 15.0, f32(block) / 15.0, f32(ao));
 }
 
-fn shade(quad: Quad, origin: vec4<f32>, vertex_index: u32) -> VertexOut {
+fn shade(quad: Quad, origin: vec4<f32>, corner: u32) -> VertexOut {
     let w0 = quad.w0;
     let face = (w0 >> 25u) & 0x7u;
     let width = f32(((w0 >> 15u) & 0x1Fu) + 1u);
@@ -119,7 +119,6 @@ fn shade(quad: Quad, origin: vec4<f32>, vertex_index: u32) -> VertexOut {
     );
     let normal = face_normal(face);
     let axes = face_axes(face);
-    let corner = QUAD_CORNERS[vertex_index % 6u];
     let pair = (CORNER_UV[face] >> (corner * 2u)) & 0x3u;
     let u_bit = f32(pair & 0x1u);
     let v_bit = f32((pair >> 1u) & 0x1u);
@@ -156,7 +155,17 @@ fn vs_quad(
 ) -> VertexOut {
     let info = chunk_info[instance_index];
     let quad = quads[info.opaque_first + vertex_index / 6u];
-    return shade(quad, info.origin, vertex_index);
+    return shade(quad, info.origin, QUAD_CORNERS[vertex_index % 6u]);
+}
+
+@vertex
+fn vs_quad_indexed(
+    @builtin(vertex_index) vertex_index: u32,
+    @builtin(instance_index) instance_index: u32,
+) -> VertexOut {
+    let info = chunk_info[instance_index];
+    let quad = quads[vertex_index / 4u];
+    return shade(quad, info.origin, vertex_index % 4u);
 }
 
 @vertex
@@ -166,7 +175,17 @@ fn vs_water_quad(
 ) -> VertexOut {
     let info = chunk_info[instance_index];
     let quad = quads[info.water_first + vertex_index / 6u];
-    return shade(quad, info.water_origin, vertex_index);
+    return shade(quad, info.water_origin, QUAD_CORNERS[vertex_index % 6u]);
+}
+
+@vertex
+fn vs_water_quad_indexed(
+    @builtin(vertex_index) vertex_index: u32,
+    @builtin(instance_index) instance_index: u32,
+) -> VertexOut {
+    let info = chunk_info[instance_index];
+    let quad = quads[vertex_index / 4u];
+    return shade(quad, info.water_origin, vertex_index % 4u);
 }
 
 @fragment

@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::mem::size_of;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
@@ -30,6 +31,10 @@ const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     b: 0.90,
     a: 1.0,
 };
+
+/// At most one pool-full warning per second; the rest are counted and folded
+/// into the next warning.
+const POOL_WARNING_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Per-frame uniform: camera, sky colours, sun, and fog settings.
 #[repr(C)]
@@ -155,6 +160,12 @@ pub(crate) struct FrameStats {
     pub(crate) geometry_bytes: u64,
     /// Vertex and index bytes reached by this frame's draws.
     pub(crate) visible_bytes: u64,
+    /// Quad-pool records currently reserved, including page rounding.
+    pub(crate) allocated_bytes: u64,
+    /// Session high-water mark of `allocated_bytes`.
+    pub(crate) peak_allocated_bytes: u64,
+    /// Latest resolved GPU time for the scene pass, in milliseconds.
+    pub(crate) gpu_ms: f64,
 }
 
 pub(crate) struct Renderer {
@@ -180,6 +191,10 @@ pub(crate) struct Renderer {
     /// The ADR-0015 quad-pool path, when the adapter supports it.
     quad: Option<QuadRenderer>,
     frame_index: u64,
+    /// Last time a pool-full warning was emitted.
+    last_pool_warning: Option<Instant>,
+    /// Pool-full messages folded into the next warning.
+    suppressed_pool_warnings: u32,
     present_modes: Vec<wgpu::PresentMode>,
     vsync: bool,
     _block_texture: wgpu::Texture,
@@ -193,8 +208,8 @@ pub(crate) struct Renderer {
     overlay_count: u32,
     depth_texture: wgpu::Texture,
     depth_view: wgpu::TextureView,
-    #[cfg(feature = "tracy")]
     profiler: Option<wgpu_profiler::GpuProfiler>,
+    gpu_ms: f64,
 }
 
 impl Renderer {
@@ -265,22 +280,28 @@ impl Renderer {
             })
             .await?;
 
-        #[cfg(feature = "tracy")]
         let profiler = if timer_features(&adapter).contains(wgpu::Features::TIMESTAMP_QUERY) {
-            match wgpu_profiler::GpuProfiler::new_with_tracy_client(
+            #[cfg(feature = "tracy")]
+            let created = wgpu_profiler::GpuProfiler::new_with_tracy_client(
                 wgpu_profiler::GpuProfilerSettings::default(),
                 adapter.get_info().backend,
                 &device,
                 &queue,
-            ) {
+            );
+            #[cfg(not(feature = "tracy"))]
+            let created = wgpu_profiler::GpuProfiler::new(
+                &device,
+                wgpu_profiler::GpuProfilerSettings::default(),
+            );
+            match created {
                 Ok(profiler) => Some(profiler),
                 Err(error) => {
-                    warn!(%error, "GPU profiling disabled");
+                    warn!(%error, "GPU timing disabled");
                     None
                 }
             }
         } else {
-            warn!("no timestamp-query support; profiling the CPU only");
+            warn!("no timestamp-query support; GPU timing disabled");
             None
         };
 
@@ -315,6 +336,7 @@ impl Renderer {
         let quad = if quad_supported {
             QuadRenderer::new(
                 &device,
+                &queue,
                 &config,
                 &camera_bind_group_layout,
                 &texture_bind_group_layout,
@@ -375,6 +397,8 @@ impl Renderer {
             geometry_bytes: shared_index_bytes,
             quad,
             frame_index: 0,
+            last_pool_warning: None,
+            suppressed_pool_warnings: 0,
             present_modes,
             vsync: true,
             _block_texture: block_texture,
@@ -388,8 +412,8 @@ impl Renderer {
             overlay_count: 0,
             depth_texture,
             depth_view,
-            #[cfg(feature = "tracy")]
             profiler,
+            gpu_ms: 0.0,
         };
 
         info!(
@@ -452,6 +476,43 @@ impl Renderer {
             .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&self.frame));
     }
 
+    /// Emits at most one pool-full warning per second.
+    ///
+    /// Every suppressed message is counted and reported with the next warning.
+    fn warn_pool_full(&mut self, chunk: ChunkCoord, quads: usize, water: bool) {
+        let now = Instant::now();
+        if self
+            .last_pool_warning
+            .is_some_and(|last| now.saturating_duration_since(last) < POOL_WARNING_INTERVAL)
+        {
+            self.suppressed_pool_warnings = self.suppressed_pool_warnings.saturating_add(1);
+            return;
+        }
+        let suppressed = std::mem::take(&mut self.suppressed_pool_warnings);
+        self.last_pool_warning = Some(now);
+        warn!(?chunk, quads, water, suppressed, "quad pool full; retrying");
+    }
+
+    /// The LOD the renderer currently draws for a chunk, if any.
+    pub(crate) fn active_lod(&self, chunk: ChunkCoord) -> Option<Lod> {
+        if let Some(quad) = &self.quad {
+            return quad.active_lod(chunk);
+        }
+        self.chunks
+            .get(&chunk)
+            .and_then(|gpu_chunk| gpu_chunk.active)
+    }
+
+    /// Whether the renderer has the given LOD resident for a chunk.
+    pub(crate) fn has_lod(&self, chunk: ChunkCoord, lod: Lod) -> bool {
+        if let Some(quad) = &self.quad {
+            return quad.has_lod(chunk, lod);
+        }
+        self.chunks
+            .get(&chunk)
+            .is_some_and(|gpu_chunk| gpu_chunk.mesh(lod).is_some())
+    }
+
     pub(crate) fn upload_chunk(
         &mut self,
         chunk: ChunkCoord,
@@ -459,13 +520,16 @@ impl Renderer {
         revision: u64,
         mesh: &MeshData,
     ) -> bool {
-        if let Some(quad) = self.quad.as_mut() {
-            let frame = self.frame_index;
-            if !quad.upload(&self.queue, chunk, lod, mesh, frame) {
-                warn!(?chunk, quads = mesh.quads.len(), "quad pool full; retrying");
-                return false;
+        let frame = self.frame_index;
+        let uploaded = self
+            .quad
+            .as_mut()
+            .map(|quad| quad.upload(&self.queue, chunk, lod, mesh, frame));
+        if let Some(uploaded) = uploaded {
+            if !uploaded {
+                self.warn_pool_full(chunk, mesh.quads.len(), false);
             }
-            return true;
+            return uploaded;
         }
 
         if mesh.is_empty() {
@@ -562,17 +626,16 @@ impl Renderer {
         revision: u64,
         mesh: &MeshData,
     ) -> bool {
-        if let Some(quad) = self.quad.as_mut() {
-            let frame = self.frame_index;
-            if !quad.upload_water(&self.queue, chunk, mesh, frame) {
-                warn!(
-                    ?chunk,
-                    quads = mesh.quads.len(),
-                    "quad pool full; retrying water"
-                );
-                return false;
+        let frame = self.frame_index;
+        let uploaded = self
+            .quad
+            .as_mut()
+            .map(|quad| quad.upload_water(&self.queue, chunk, mesh, frame));
+        if let Some(uploaded) = uploaded {
+            if !uploaded {
+                self.warn_pool_full(chunk, mesh.quads.len(), true);
             }
-            return true;
+            return uploaded;
         }
         if mesh.is_empty() {
             let mut removed = 0;
@@ -615,6 +678,9 @@ impl Renderer {
     }
 
     pub(crate) fn total_vertices(&self) -> u64 {
+        if let Some(quad) = &self.quad {
+            return quad.total_vertices();
+        }
         self.chunks
             .values()
             .filter_map(GpuChunk::active_mesh)
@@ -666,7 +732,10 @@ impl Renderer {
         if let Some(quad) = self.quad.as_mut() {
             quad.begin_frame(self.frame_index);
         }
-        let mut stats = FrameStats::default();
+        let mut stats = FrameStats {
+            gpu_ms: self.gpu_ms,
+            ..FrameStats::default()
+        };
         let frame = {
             profiling::scope!("acquire");
             match self.surface.get_current_texture() {
@@ -720,7 +789,6 @@ impl Renderer {
             let mut quad = self.quad.take();
             let descriptor = self.scene_pass_descriptor(&attachments);
 
-            #[cfg(feature = "tracy")]
             if let Some(profiler) = &self.profiler {
                 let mut scope = profiler.scope("world", &mut encoder);
                 let mut pass = scope.scoped_render_pass("terrain", descriptor);
@@ -731,15 +799,8 @@ impl Renderer {
                 self.draw_scene(quad.as_mut(), &mut pass, frustum, horizon, &mut stats);
             }
 
-            #[cfg(not(feature = "tracy"))]
-            {
-                let mut pass = encoder.begin_render_pass(&descriptor);
-                self.draw_scene(quad.as_mut(), &mut pass, frustum, horizon, &mut stats);
-            }
-
             self.quad = quad;
 
-            #[cfg(feature = "tracy")]
             if let Some(profiler) = self.profiler.as_mut() {
                 profiler.resolve_queries(&mut encoder);
             }
@@ -755,23 +816,21 @@ impl Renderer {
             self.queue.present(frame);
         }
 
-        #[cfg(feature = "tracy")]
-        {
-            profiling::scope!("profiler end");
-            if let Some(profiler) = self.profiler.as_mut() {
-                if let Err(error) = profiler.end_frame() {
-                    warn!(%error, "GPU profiler frame was not resolved");
-                }
-                let period = self.queue.get_timestamp_period();
-                if let Some(queries) = profiler.process_finished_frame(period) {
-                    let gpu_ms = queries
-                        .iter()
-                        .filter_map(|query| query.time.as_ref())
-                        .map(|time| time.end - time.start)
-                        .sum::<f64>()
-                        * 1000.0;
-                    crate::metrics::gpu_ms(gpu_ms);
-                }
+        profiling::scope!("profiler end");
+        if let Some(profiler) = self.profiler.as_mut() {
+            if let Err(error) = profiler.end_frame() {
+                warn!(%error, "GPU profiler frame was not resolved");
+            }
+            let period = self.queue.get_timestamp_period();
+            if let Some(queries) = profiler.process_finished_frame(period) {
+                let gpu_ms = queries
+                    .iter()
+                    .filter_map(|query| query.time.as_ref())
+                    .map(|time| time.end - time.start)
+                    .sum::<f64>()
+                    * 1000.0;
+                self.gpu_ms = gpu_ms;
+                crate::metrics::gpu_ms(gpu_ms);
             }
         }
 
@@ -912,7 +971,6 @@ impl Renderer {
 }
 
 /// Features the GPU profiler needs, intersected with what the adapter supports.
-#[cfg(feature = "tracy")]
 fn timer_features(adapter: &wgpu::Adapter) -> wgpu::Features {
     let requested = wgpu_profiler::GpuProfiler::ALL_WGPU_TIMER_FEATURES & adapter.features();
     if requested.contains(wgpu::Features::TIMESTAMP_QUERY) {
@@ -920,11 +978,6 @@ fn timer_features(adapter: &wgpu::Adapter) -> wgpu::Features {
     } else {
         wgpu::Features::empty()
     }
-}
-
-#[cfg(not(feature = "tracy"))]
-fn timer_features(_adapter: &wgpu::Adapter) -> wgpu::Features {
-    wgpu::Features::empty()
 }
 
 fn preferred_present_mode(vsync: bool, supported: &[wgpu::PresentMode]) -> wgpu::PresentMode {

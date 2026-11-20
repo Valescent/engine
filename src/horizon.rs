@@ -46,11 +46,12 @@ impl Horizon {
         let mut bins: Vec<Vec<(f32, f32)>> = (0..BINS).map(|_| Vec::new()).collect();
         let mut tops = HashMap::new();
         for (chunk, data) in world.iter_chunks() {
-            if data.top() < 0 {
+            let highest = data.top().max(data.water_top());
+            if highest < 0 {
                 continue;
             }
             let origin = chunk.origin();
-            let top = origin.y + data.top() as f32 + 1.0;
+            let top = origin.y + highest as f32 + 1.0;
             tops.insert(chunk, top);
             let Some((distance, azimuth)) = sample(camera, origin) else {
                 continue;
@@ -180,6 +181,22 @@ mod tests {
         let horizon = Horizon::build(Vec3::new(0.0, 10.0, 0.0), &world);
 
         assert!(!horizon.occludes(ChunkCoord::new(3, 0, 0)));
+    }
+
+    #[test]
+    fn water_keeps_a_chunk_visible_above_a_hill_that_hides_its_floor() {
+        let camera = Vec3::new(0.0, 10.0, 0.0);
+        let target = ChunkCoord::new(10, 0, 0);
+        let mut hidden = World::default();
+        for z in -2..=2 {
+            hidden.set_block(IVec3::new(64, 10, z * 32), Block::Stone);
+        }
+        hidden.set_block(IVec3::new(320, 2, 0), Block::Stone);
+        assert!(Horizon::build(camera, &hidden).occludes(target));
+
+        let mut visible = hidden;
+        visible.set_block(IVec3::new(320, 30, 0), Block::Water);
+        assert!(!Horizon::build(camera, &visible).occludes(target));
     }
 
     #[test]

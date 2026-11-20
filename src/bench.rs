@@ -19,6 +19,7 @@ use glam::{IVec2, IVec3, Vec3};
 
 use crate::block::Block;
 use crate::generation::Generator;
+use crate::light::{self, LightSnapshot};
 use crate::mesh::{BorderBlocks, ChunkSnapshot, Lod, MeshData, build_mesh, build_water_mesh};
 use crate::streaming::Streaming;
 use crate::world::{CHUNK_COLUMN, CHUNK_SIZE, Chunk, ChunkCoord, World};
@@ -241,6 +242,64 @@ fn chunk_for(fixture: Fixture) -> Chunk {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "benchmark; run with cargo test --release --lib bench_light -- --ignored --nocapture"]
+    fn bench_light() {
+        let (world, surface, ground) = generated_world();
+        for (name, chunk) in [("surface", surface), ("ground", ground)] {
+            let snapshot = LightSnapshot::new(&world, chunk);
+            for _ in 0..2 {
+                std::hint::black_box(light::compute(&snapshot, chunk));
+            }
+            let mut times = Vec::new();
+            for _ in 0..20 {
+                let started = Instant::now();
+                std::hint::black_box(light::compute(&snapshot, chunk));
+                times.push(started.elapsed().as_secs_f64() * 1e6);
+            }
+            times.sort_by(f64::total_cmp);
+            let mean = times.iter().sum::<f64>() / times.len() as f64;
+
+            let mut snapshot_times = Vec::new();
+            for _ in 0..20 {
+                let started = Instant::now();
+                std::hint::black_box(LightSnapshot::new(&world, chunk));
+                snapshot_times.push(started.elapsed().as_secs_f64() * 1e6);
+            }
+            snapshot_times.sort_by(f64::total_cmp);
+            let snapshot_mean = snapshot_times.iter().sum::<f64>() / snapshot_times.len() as f64;
+
+            // The old snapshot copied every stored chunk's packed storage.
+            let mut copy_times = Vec::new();
+            for _ in 0..20 {
+                let started = Instant::now();
+                let mut copied = 0;
+                for dx in -1..=1 {
+                    for dz in -1..=1 {
+                        for dy in -1..CHUNK_COLUMN {
+                            let coordinate = chunk.offset(IVec3::new(dx, dy, dz));
+                            if let Some(data) = world.chunk(coordinate) {
+                                let copy = data.shared_storage().to_vec();
+                                std::hint::black_box(&copy);
+                                copied += copy.len();
+                            }
+                        }
+                    }
+                }
+                std::hint::black_box(copied);
+                copy_times.push(started.elapsed().as_secs_f64() * 1e6);
+            }
+            copy_times.sort_by(f64::total_cmp);
+            let copy_mean = copy_times.iter().sum::<f64>() / copy_times.len() as f64;
+
+            eprintln!(
+                "LIGHT chunk={name} samples={} mean_us={mean:.1} p95_us={:.1} snapshot_us={snapshot_mean:.1} copy_us={copy_mean:.1}",
+                times.len(),
+                percentile(&times, 0.95),
+            );
+        }
+    }
 
     #[test]
     #[ignore = "benchmark; run with cargo test --release --lib bench_mesh_build -- --ignored --nocapture"]
