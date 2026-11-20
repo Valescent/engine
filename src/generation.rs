@@ -186,6 +186,7 @@ impl Generator {
             self.plant_tree(&mut blocks, chunk, IVec3::new(local_x, 0, local_z), trunk);
         }
 
+        blocks.recompute_terrain_min();
         blocks
     }
 

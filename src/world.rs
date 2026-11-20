@@ -110,6 +110,8 @@ pub(crate) struct Chunk {
     water_top: i32,
     /// Highest non-tree solid block's local y, or `-1` when the chunk has none.
     terrain_top: i32,
+    /// Lowest column top of terrain/water, or `-1` when any column is open.
+    terrain_min: i32,
 }
 
 impl Default for Chunk {
@@ -121,6 +123,7 @@ impl Default for Chunk {
             top: -1,
             water_top: -1,
             terrain_top: -1,
+            terrain_min: i32::MAX,
         }
     }
 }
@@ -154,6 +157,47 @@ impl Chunk {
     /// Highest non-tree solid block's local y, or `-1` when the chunk has none.
     pub(crate) fn terrain_top(&self) -> i32 {
         self.terrain_top
+    }
+
+    /// Lowest column top of terrain/water, or `-1` when any column is open.
+    pub(crate) fn terrain_min(&self) -> i32 {
+        if self.terrain_min == i32::MIN || self.terrain_min == i32::MAX {
+            -1
+        } else {
+            self.terrain_min
+        }
+    }
+
+    /// Whether the cached minimum needs a recompute after an edit.
+    pub(crate) fn terrain_min_stale(&self) -> bool {
+        self.terrain_min == i32::MIN || self.terrain_min == i32::MAX
+    }
+
+    /// Recomputes the lowest column top after a bulk fill or an edit.
+    ///
+    /// Every column contributes its highest terrain or water cell. A column with
+    /// neither makes the chunk unsuitable as a horizon occluder.
+    pub(crate) fn recompute_terrain_min(&mut self) {
+        let mut minimum = i32::MAX;
+        for x in 0..CHUNK_SIZE {
+            for z in 0..CHUNK_SIZE {
+                let mut top = -1;
+                for y in (0..CHUNK_SIZE).rev() {
+                    let index = local_index(IVec3::new(x, y, z)).expect("in-chunk cell");
+                    let block = packed_block(&self.cells, index);
+                    if block.is_terrain() || block == Block::Water {
+                        top = y;
+                        break;
+                    }
+                }
+                if top < 0 {
+                    self.terrain_min = -1;
+                    return;
+                }
+                minimum = minimum.min(top);
+            }
+        }
+        self.terrain_min = if minimum == i32::MAX { -1 } else { minimum };
     }
 
     /// Returns the block at a local coordinate, or `Air` outside the chunk.
@@ -205,6 +249,14 @@ impl Chunk {
             self.terrain_top = local.y;
         } else if previous.is_terrain() && !block.is_terrain() && local.y == self.terrain_top {
             self.recompute_terrain_top();
+        }
+
+        if block.is_terrain()
+            || block == Block::Water
+            || previous.is_terrain()
+            || previous == Block::Water
+        {
+            self.terrain_min = i32::MIN;
         }
     }
 
@@ -459,6 +511,15 @@ impl World {
     ///
     /// Light is derived state, so this runs after loading and whenever a world
     /// is built in memory.
+    /// Recomputes cached horizon minima for chunks edited since the last build.
+    pub(crate) fn refresh_terrain_min(&mut self) {
+        for chunk in self.chunks.values_mut() {
+            if chunk.terrain_min_stale() {
+                chunk.recompute_terrain_min();
+            }
+        }
+    }
+
     pub(crate) fn relight(&mut self) {
         let fields: Vec<(ChunkCoord, Arc<LightField>)> = self
             .chunks
@@ -835,6 +896,7 @@ fn parse_chunk(bytes: &[u8]) -> Result<(ChunkCoord, Chunk), SaveError> {
         chunk.set_block(local, block);
     }
 
+    chunk.recompute_terrain_min();
     Ok((header_chunk, chunk))
 }
 

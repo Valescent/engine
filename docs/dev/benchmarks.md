@@ -742,16 +742,19 @@ and the argument lists are reused. The frame log now reports `stream_ms`, `level
 surface to a readback buffer and write a 24-bit BMP once. It does not need window focus, so it is the
 repeatable visual gate for horizon and hierarchy work.
 
-The horizon A/B at the spawn view is conclusive:
+The horizon A/B at the spawn view:
 
-- **Off:** the full ridge and its trees are visible to the horizon.
-- **On:** the far part of the ridge beyond the near crest is removed, leaving a vertical cut at a
-  chunk boundary.
-- Excluding trees from the horizon tops (`Chunk::terrain_top`) did not remove the cut. The remaining
-  over-cull is the per-chunk maximum top splatted across the chunk's whole azimuth span; the next
-  horizon fix is a per-bin or minimum-column occluder height.
-- Horizon therefore remains opt-in. The capture tool is kept for the next horizon attempt and for
-  the hierarchy's section seam.
+- **Off:** the full ridge and its trees are visible.
+- **On, before the fix:** the far part of the ridge beyond the near crest was removed, leaving a
+  vertical cut at a chunk boundary.
+- **On, after the fix:** the capture matches the off view. Occluders now use the chunk's **minimum**
+  column top (`Chunk::terrain_min`) instead of its maximum, so a crest cannot act as a wall across a
+  slope; the occluder span also uses the chunk's 16 m half-width rather than 24 m. Trees are excluded
+  from both tops.
+- The conservative occluder reduces the cull: 819 visible chunks instead of 166, 1.84 M vertices,
+  and a 0.139 ms GPU scene against 0.245-0.253 ms with horizon off.
+- A second, moving-camera capture is still the remaining check before defaulting it on. The capture
+  tool is kept for that and for the hierarchy's section seam.
 
 ### Section foundation (level 1)
 

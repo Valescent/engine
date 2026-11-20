@@ -1053,7 +1053,7 @@ impl App {
             renderer.set_sky(&self.sky.sample(), self.unlit);
             renderer.set_overlay(overlay.as_deref());
             if self.horizon_cull && self.horizon_at.elapsed() >= Duration::from_millis(250) {
-                self.horizon = horizon::Horizon::build(self.camera.position(), &self.world);
+                self.horizon = horizon::Horizon::build(self.camera.position(), &mut self.world);
                 self.horizon_at = Instant::now();
             }
             self.stats.totals = renderer.render(&frustum, &self.horizon);

@@ -42,23 +42,30 @@ impl Horizon {
     }
 
     /// Builds the horizon for one camera position.
-    pub(crate) fn build(camera: Vec3, world: &World) -> Self {
+    pub(crate) fn build(camera: Vec3, world: &mut World) -> Self {
+        world.refresh_terrain_min();
         let mut bins: Vec<Vec<(f32, f32)>> = (0..BINS).map(|_| Vec::new()).collect();
         let mut tops = HashMap::new();
         for (chunk, data) in world.iter_chunks() {
-            let highest = data.terrain_top().max(data.water_top());
-            if highest < 0 {
+            let visible = data.terrain_top().max(data.water_top());
+            if visible < 0 {
                 continue;
             }
             let origin = chunk.origin();
-            let top = origin.y + highest as f32 + 1.0;
+            let top = origin.y + visible as f32 + 1.0;
             tops.insert(chunk, top);
+
+            let occluder = data.terrain_min();
+            if occluder < 0 {
+                continue;
+            }
+            let occluder_top = origin.y + occluder as f32 + 1.0;
             let Some((distance, azimuth)) = sample(camera, origin) else {
                 continue;
             };
-            let elevation = (top - camera.y).atan2(distance.max(1.0));
+            let elevation = (occluder_top - camera.y).atan2(distance.max(1.0));
             let center = bin_of(azimuth);
-            let half_angle = (f32::from(CHUNK_SIZE as u16) * 0.75).atan2(distance.max(1.0));
+            let half_angle = (f32::from(CHUNK_SIZE as u16) * 0.5).atan2(distance.max(1.0));
             let span = (half_angle / TAU * BINS as f32).ceil() as isize;
             if span >= BINS as isize / 2 {
                 for bin in &mut bins {
@@ -149,8 +156,10 @@ mod tests {
     use glam::IVec3;
 
     fn wall(world: &mut World) {
-        for z in -2..=2 {
-            world.set_block(IVec3::new(64, 40, z * 32), Block::Stone);
+        for x in 64..96 {
+            for z in 0..32 {
+                world.set_block(IVec3::new(x, 40, z), Block::Stone);
+            }
         }
     }
 
@@ -159,7 +168,7 @@ mod tests {
         let mut world = World::default();
         wall(&mut world);
         world.set_block(IVec3::new(320, 2, 0), Block::Stone);
-        let horizon = Horizon::build(Vec3::new(0.0, 10.0, 0.0), &world);
+        let horizon = Horizon::build(Vec3::new(0.0, 10.0, 0.0), &mut world);
 
         assert!(horizon.occludes(ChunkCoord::new(10, 0, 0)));
     }
@@ -168,7 +177,7 @@ mod tests {
     fn an_empty_direction_keeps_the_chunk() {
         let mut world = World::default();
         world.set_block(IVec3::new(320, 2, 0), Block::Stone);
-        let horizon = Horizon::build(Vec3::new(0.0, 10.0, 0.0), &world);
+        let horizon = Horizon::build(Vec3::new(0.0, 10.0, 0.0), &mut world);
 
         assert!(!horizon.occludes(ChunkCoord::new(10, 0, 0)));
     }
@@ -178,7 +187,7 @@ mod tests {
         let mut world = World::default();
         world.set_block(IVec3::new(0, 40, 0), Block::Stone);
         world.set_block(IVec3::new(96, 2, 0), Block::Stone);
-        let horizon = Horizon::build(Vec3::new(0.0, 10.0, 0.0), &world);
+        let horizon = Horizon::build(Vec3::new(0.0, 10.0, 0.0), &mut world);
 
         assert!(!horizon.occludes(ChunkCoord::new(3, 0, 0)));
     }
@@ -188,15 +197,36 @@ mod tests {
         let camera = Vec3::new(0.0, 10.0, 0.0);
         let target = ChunkCoord::new(10, 0, 0);
         let mut hidden = World::default();
-        for z in -2..=2 {
-            hidden.set_block(IVec3::new(64, 10, z * 32), Block::Stone);
+        for x in 64..96 {
+            for z in 0..32 {
+                hidden.set_block(IVec3::new(x, 10, z), Block::Stone);
+            }
         }
         hidden.set_block(IVec3::new(320, 2, 0), Block::Stone);
-        assert!(Horizon::build(camera, &hidden).occludes(target));
+        assert!(Horizon::build(camera, &mut hidden).occludes(target));
 
         let mut visible = hidden;
         visible.set_block(IVec3::new(320, 30, 0), Block::Water);
-        assert!(!Horizon::build(camera, &visible).occludes(target));
+        assert!(!Horizon::build(camera, &mut visible).occludes(target));
+    }
+
+    #[test]
+    fn a_low_column_keeps_the_occluder_conservative() {
+        let mut world = World::default();
+        for x in 64..96 {
+            for z in 0..32 {
+                world.set_block(IVec3::new(x, 40, z), Block::Stone);
+            }
+        }
+        for y in 0..=10 {
+            world.set_block(IVec3::new(70, y, 10), Block::Stone);
+        }
+        world.set_block(IVec3::new(70, 40, 10), Block::Air);
+        world.set_block(IVec3::new(320, 30, 0), Block::Stone);
+
+        let horizon = Horizon::build(Vec3::new(0.0, 10.0, 0.0), &mut world);
+
+        assert!(!horizon.occludes(ChunkCoord::new(10, 0, 0)));
     }
 
     #[test]
@@ -205,7 +235,7 @@ mod tests {
         world.set_block(IVec3::new(64, 40, 0), Block::Wood);
         world.set_block(IVec3::new(64, 41, 0), Block::Leaves);
         world.set_block(IVec3::new(320, 2, 0), Block::Stone);
-        let horizon = Horizon::build(Vec3::new(0.0, 10.0, 0.0), &world);
+        let horizon = Horizon::build(Vec3::new(0.0, 10.0, 0.0), &mut world);
 
         assert!(!horizon.occludes(ChunkCoord::new(10, 0, 0)));
     }
