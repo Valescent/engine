@@ -41,6 +41,7 @@
 - [Terrain build prompt](prompt/terrain-build-prompt.md)
 - [Seed-native LOD hierarchy](design/lod-hierarchy.md)
 - [Terrain reference notes](design/terrain-lessons.md)
+- [Modular structure](design/modular-structure.md)
 
 # Development
 
