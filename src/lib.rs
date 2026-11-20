@@ -2032,6 +2032,8 @@ struct GeneratedColumn {
     stack: [section::Section; COLUMN_SECTIONS],
     applied: Vec<(section::SectionKey, [u8; 32])>,
     read_only: bool,
+    /// Wall time spent generating this column, for the fill breakdown.
+    generate_ms: f64,
 }
 
 /// A finished light/mesh pass.
@@ -2134,6 +2136,7 @@ fn generate_column(
     terrain: Option<&pipeline::Terrain>,
     job: &GenerateJob,
 ) -> Result<GeneratedColumn, error::TerrainError> {
+    let started = Instant::now();
     let Some(terrain) = terrain else {
         return Err(error::TerrainError::new(
             error::Stage::Height,
@@ -2186,6 +2189,7 @@ fn generate_column(
         stack,
         applied,
         read_only,
+        generate_ms: started.elapsed().as_secs_f64() * 1000.0,
     })
 }
 
@@ -2215,6 +2219,19 @@ fn build_column(job: BuildJob) -> BuiltColumn {
             }
         }
         for &target in &targets {
+            // A neighbour was already lit without this column, so its own
+            // blocks and sky seed are unchanged: only the band its new border
+            // can reach has to be repaired. The centre (and any neighbour
+            // without previous light) still needs a full pass.
+            if target != centre
+                && let Some(previous) = job.previous_light.get(&target)
+            {
+                light.insert(
+                    target,
+                    relight_border(previous, &job.columns, target, centre, &job.light_table),
+                );
+                continue;
+            }
             let stack = &job.columns[&target];
             let mut borders: [Option<&[section::Section; COLUMN_SECTIONS]>; 8] = [None; 8];
             for (slot, (dx, dz)) in COLUMN_NEIGHBOURS.into_iter().enumerate() {
@@ -2291,6 +2308,103 @@ fn build_column(job: BuildJob) -> BuiltColumn {
         light_ms,
         mesh_ms,
     }
+}
+
+/// Relights only the part of `target` that the new `centre` column can change.
+///
+/// `previous` was computed with `centre` absent, so the missing border mirrored
+/// `target`'s own edge. Once the column exists, only cells whose border blocks
+/// have different light properties can move light. The repair starts at `y = 0`
+/// because skylight that arrives at the border can descend losslessly through a
+/// shaft below it; it stops [`light2::RELIGHT_RADIUS`] above the highest
+/// differing cell, which is as far as lateral light can climb.
+fn relight_border(
+    previous: &light2::ColumnLight,
+    columns: &ColumnMap,
+    target: (i32, i32),
+    centre: (i32, i32),
+    table: &light2::LightTable,
+) -> light2::ColumnLight {
+    let Some(high) = border_light_top(
+        &columns[&target],
+        &columns[&centre],
+        (centre.0 - target.0, centre.1 - target.1),
+        table,
+    ) else {
+        return previous.clone();
+    };
+    let mut borders: [Option<&[section::Section; COLUMN_SECTIONS]>; 8] = [None; 8];
+    for (slot, (dx, dz)) in COLUMN_NEIGHBOURS.into_iter().enumerate() {
+        borders[slot] = columns
+            .get(&(target.0 + dx, target.1 + dz))
+            .map(|stack| &**stack);
+    }
+    let view = light2::ColumnView::new(&columns[&target], borders);
+    let mut light = previous.clone();
+    light.relight_span_view(&view, table, 0, high + light2::RELIGHT_RADIUS);
+    light
+}
+
+/// The highest `y` where a new `centre` column changes `neighbour`'s border.
+///
+/// The neighbour was lit with the centre missing, which mirrors the neighbour's
+/// own edge across that border. A cell only matters when the real border block
+/// has different light properties or emission, so ids that light identically
+/// (stone, dirt, ores, ...) do not widen the repair.
+fn border_light_top(
+    neighbour: &[section::Section; COLUMN_SECTIONS],
+    centre: &[section::Section; COLUMN_SECTIONS],
+    delta: (i32, i32),
+    table: &light2::LightTable,
+) -> Option<i32> {
+    let diagonal = delta.0 != 0 && delta.1 != 0;
+    let (neighbour_x, centre_x) = if delta.0 > 0 { (31, 0) } else { (0, 31) };
+    let (neighbour_z, centre_z) = if delta.1 > 0 { (31, 0) } else { (0, 31) };
+    let mut high = None;
+    for (section_index, (neighbour_section, centre_section)) in
+        neighbour.iter().zip(centre.iter()).enumerate()
+    {
+        let base = i32::try_from(section_index * 32).unwrap_or(0);
+        for local_y in 0..32_u32 {
+            let y = base + i32::try_from(local_y).unwrap_or(0);
+            let differs = if diagonal {
+                light_cell_differs(
+                    neighbour_section.get(neighbour_x, local_y, neighbour_z),
+                    centre_section.get(centre_x, local_y, centre_z),
+                    table,
+                )
+            } else if delta.0 != 0 {
+                (0..32_u32).any(|u| {
+                    light_cell_differs(
+                        neighbour_section.get(neighbour_x, local_y, u),
+                        centre_section.get(centre_x, local_y, u),
+                        table,
+                    )
+                })
+            } else {
+                (0..32_u32).any(|u| {
+                    light_cell_differs(
+                        neighbour_section.get(u, local_y, neighbour_z),
+                        centre_section.get(u, local_y, centre_z),
+                        table,
+                    )
+                })
+            };
+            if differs {
+                high = Some(y);
+            }
+        }
+    }
+    high
+}
+
+/// Whether two block ids can affect light differently.
+fn light_cell_differs(
+    a: section::BlockId,
+    b: section::BlockId,
+    table: &light2::LightTable,
+) -> bool {
+    table.props(a) != table.props(b) || table.emission(a) != table.emission(b)
 }
 
 /// Builds the coarse LOD sets for the whole resident ring.
@@ -3584,6 +3698,11 @@ impl App {
                 }
                 match *result {
                     Ok(generated) => {
+                        debug!(
+                            column = ?generated.column,
+                            generate_ms = generated.generate_ms,
+                            "terrain column generated"
+                        );
                         if let Some(demo) = &mut self.terrain_demo {
                             let radius = demo.view_radius + residency::UNLOAD_MARGIN;
                             let ring_position = (generated.column.0 - player_column.0)
@@ -4889,6 +5008,90 @@ mod tests {
             built.replace.contains_key(&(1, 0)),
             "the new column is meshed at LOD0"
         );
+    }
+
+    #[test]
+    fn narrow_border_relight_matches_a_full_relight() {
+        let seed = 0x5EED;
+        let hydro = pipeline::Terrain::new(seed)
+            .expect("the v1 description compiles")
+            .solve_world_hydro()
+            .expect("the hydrology solves");
+        let columns: ColumnMap = demo_columns_extent(seed, -1, 1, -1, 1, &hydro)
+            .expect("the tile generates")
+            .into_iter()
+            .map(|(key, stack)| (key, Arc::new(stack)))
+            .collect();
+        let table = demo_light_table();
+        let materials = demo_materials();
+        let centre = (0, 0);
+
+        // Before the centre is generated, every neighbour sees its own edge
+        // mirrored across that border. That is the state a build job starts
+        // from, and the one the narrow repair must match.
+        let mut previous = BTreeMap::new();
+        for (&key, stack) in &columns {
+            if key == centre {
+                continue;
+            }
+            let mut borders: [Option<&[section::Section; COLUMN_SECTIONS]>; 8] = [None; 8];
+            for (slot, (dx, dz)) in COLUMN_NEIGHBOURS.into_iter().enumerate() {
+                let border = (key.0 + dx, key.1 + dz);
+                if border == centre {
+                    continue;
+                }
+                borders[slot] = columns.get(&border).map(|stack| &**stack);
+            }
+            let blocks = light2::ColumnBlocks::new((**stack).clone(), &borders);
+            previous.insert(key, light2::compute_column(&blocks, &table));
+        }
+
+        let mut narrow = previous.clone();
+        let mut full = previous.clone();
+        let mut centre_borders: [Option<&[section::Section; COLUMN_SECTIONS]>; 8] = [None; 8];
+        for (slot, (dx, dz)) in COLUMN_NEIGHBOURS.into_iter().enumerate() {
+            centre_borders[slot] = columns
+                .get(&(centre.0 + dx, centre.1 + dz))
+                .map(|stack| &**stack);
+        }
+        let centre_blocks =
+            light2::ColumnBlocks::new((**columns.get(&centre).unwrap()).clone(), &centre_borders);
+        let centre_light = light2::compute_column(&centre_blocks, &table);
+        narrow.insert(centre, centre_light.clone());
+        full.insert(centre, centre_light);
+
+        for (dx, dz) in COLUMN_NEIGHBOURS {
+            let key = (centre.0 + dx, centre.1 + dz);
+            narrow.insert(
+                key,
+                relight_border(&previous[&key], &columns, key, centre, &table),
+            );
+            let mut borders: [Option<&[section::Section; COLUMN_SECTIONS]>; 8] = [None; 8];
+            for (slot, (nx, nz)) in COLUMN_NEIGHBOURS.into_iter().enumerate() {
+                borders[slot] = columns.get(&(key.0 + nx, key.1 + nz)).map(|stack| &**stack);
+            }
+            let blocks =
+                light2::ColumnBlocks::new((**columns.get(&key).unwrap()).clone(), &borders);
+            full.insert(key, light2::compute_column(&blocks, &table));
+        }
+
+        for (dx, dz) in COLUMN_NEIGHBOURS {
+            let key = (centre.0 + dx, centre.1 + dz);
+            assert_eq!(
+                narrow[&key], full[&key],
+                "neighbour {dx},{dz} matches a full relight"
+            );
+            for sy in 0..COLUMN_SECTIONS {
+                let narrow_mesh = demo_section(&columns, &narrow, &materials, key.0, key.1, sy)
+                    .map(|section| section.mesh);
+                let full_mesh = demo_section(&columns, &full, &materials, key.0, key.1, sy)
+                    .map(|section| section.mesh);
+                assert_eq!(
+                    narrow_mesh, full_mesh,
+                    "neighbour {dx},{dz} section {sy} mesh matches"
+                );
+            }
+        }
     }
 
     #[test]
