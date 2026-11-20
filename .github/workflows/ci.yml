@@ -37,19 +37,19 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: cargo fmt --all -- --check
 
-      # The tracy profiling feature builds a C++ client and stays local (ADR-0006);
-      # do not switch these back to --all-features.
+      # `tracy` is a default feature but builds a C++ client and stays local
+      # (ADR-0006); every CI cargo command disables default features.
       - name: Clippy
-        run: cargo clippy --all-targets --locked -- -D warnings
+        run: cargo clippy --all-targets --locked --no-default-features -- -D warnings
 
       - name: Test
-        run: cargo test --locked
+        run: cargo test --locked --no-default-features
 
       - name: Documentation
         if: matrix.os == 'ubuntu-latest'
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --no-deps
+        run: cargo doc --no-deps --no-default-features
 
   dependencies:
     name: Dependencies
@@ -70,3 +70,32 @@ jobs:
 
       - name: Check spelling
         uses: crate-ci/typos@v1.52.2
+
+  terrain:
+    name: Terrain gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Show toolchain
+        run: rustup show
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Golden hashes
+        run: cargo run --locked --quiet --no-default-features --bin terrain-gen -- golden check
+
+      - name: Seams
+        run: cargo run --locked --quiet --no-default-features --bin terrain-gen -- seams --window 5x5 --seeds 3
+
+      - name: Seed sweep
+        run: cargo run --locked --quiet --no-default-features --bin terrain-gen -- sweep --tier pr
+
+      - name: Thread and order invariance
+        run: |
+          set -euo pipefail
+          one=$(cargo run --locked --quiet --no-default-features --bin terrain-gen -- gen --seed 7 --from 0 0 --size 8 --threads 1 --order forward)
+          many=$(cargo run --locked --quiet --no-default-features --bin terrain-gen -- gen --seed 7 --from 0 0 --size 8 --threads 4 --order shuffled)
+          test "$one" = "$many"
