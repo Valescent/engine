@@ -342,8 +342,10 @@ cargo run --locked --quiet --no-default-features --bin terrain-gen -- calibrate-
 
 The command exits `1`. The measured medians are about twice the `20-28` target, which is
 consistent with `blend_width = 0.05` being the documented **starting point**, not a measured
-value: halving `W_blocks` needs roughly `blend_width = 0.1`. The p90 spread is wider than the
-`<= 64` gate even after that scale change. The interview's `E3.6` answer records the intended
+value. Halving the width to `0.025` lowers the medians to 26-39 (measured: pair 0-1 31.17,
+0-2 28.26, 0-3 39.44, 1-3 26.37) but not p90 (117-161), so the scale alone does not close the
+gap. The p90 spread stays wider than the `<= 64` gate even after that change. The interview's
+`E3.6` answer records the intended
 follow-up: fix the data (biome centres and weights) first, and add the gradient-normalising term
 in a later version bump. Changing `blend_width` or the biome table changes generated blocks, so
 it is a separate, generator-versioned change with fresh goldens, sweeps, and counter baselines.

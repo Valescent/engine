@@ -1447,7 +1447,8 @@ contradict a MUST elsewhere in this document.
   layers, collision, edits, per-edit saves, distance LOD1, and prefetched tile paging. LOD2 and
   residency-driven ring streaming remain; the world model behind it is the shipped one.
 - **`terrain-gen map` is ASCII-only** for now: `--seed --from --size --cell` prints a height/water grid and `--json` rows. PNG modes, `tEXt` metadata, legends, and `--ndjson` are deferred.
-- **The full tooling bundle is deferred.** `verify --report <dir>` writes a manifest plus JSON/text; the zip bundle, `calibrate-blend`, and the PR counter gate are not implemented.
+- **The full tooling bundle is deferred.** `verify --report <dir>` writes a manifest plus JSON/text; the zip bundle is not implemented. `calibrate-blend` and the PR counter gate are implemented.
+- **Biome blend calibration is measured, not met.** `terrain-gen calibrate-blend` reports medians 43-72 blocks at `blend_width = 0.05` (target 20-28) and p90 117-278 (target <=64); `0.025` gives medians 26-39 but p90 117-161. Closing the gap needs tuned biome centres/weights and the gradient-normalising term, which is a generator version bump. The command is diagnostic and is not a CI gate.
 - **Section-record migration has no older format.** Version 2 records are canonicalised and headers upgrade v1 to v2; there is no normative v1 section record to decode or migrate.
 - **Camera-relative rendering is specified but not applied** (§14.3). The camera is still world-space;
   the terrain draw path deliberately matches the existing convention so the two agree.

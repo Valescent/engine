@@ -110,7 +110,7 @@ still unimplemented, in dependency order. Nothing here blocks the terrain engine
 | 5 | Demo integration: real light, texture refs, collision, streaming, LOD | `TERRAIN_DEMO` uses real column light, collision, edits, per-edit saves, and distance LOD1; tiles stream with prefetched neighbours; per-face texture references resolve to procedural layers (`ADR-0015`) | An asset pipeline to replace the placeholder layers |
 | 6 | World-mode hydrology wiring | `Terrain::hydro_tile` returns a view of one `WorldHydro` solve, shared by every worker; generator version 2 | None |
 | 7 | Camera-relative rendering (§14.3) | Specified; camera is world-space | Camera-wide change; the draw path already matches the current convention |
-| 8 | `terrain-gen map`, report bundle, `calibrate-blend`, PR counter gate | `map --seed --from --size --cell` (ASCII surface map, `--json`); `verify --report <dir>` writes `manifest.json`, `verify.json`, and `verify.txt` | Add `calibrate-blend`, then the PR counter gate |
+| 8 | `terrain-gen map`, report bundle, `calibrate-blend`, PR counter gate | `map --seed --from --size --cell` (ASCII surface map, `--json`); `verify --report <dir>` writes `manifest.json`, `verify.json`, and `verify.txt`; `calibrate-blend` measures W_blocks per biome pair; `counters --tier pr` gates a deterministic baseline in CI | Tune the biome centres/weights so the measured medians reach 20-28 and p90 reaches <=64 |
 | 9 | Split `terrain-core` from `engine` | Deferred; `terrain-gen` links `wgpu` today | Enables the `Q1.9` crate-graph check |
 
 Ordering rationale: persistence first because it is the only thing that can lose player work; the rest
@@ -173,7 +173,10 @@ Queued next:
 2. **Texture art.** Per-face references and the mesher wiring are done (`ADR-0015`);
    `demo_texture_layer` still maps names onto eleven procedural placeholder layers.
 3. **Persistence follow-ups:** a decoder for an older section record format, and a richer world-repair dialog.
-4. `terrain-gen calibrate-blend`; then the PR counter gate (R1.8).
+4. **Blend calibration data.** The `calibrate-blend` tool and the PR counter gate are done.
+   Measured medians at `blend_width = 0.05` are 43-72 blocks against the 20-28 target, and p90 is
+   117-278 against <=64; halving the width lowers the median to ~31 but not p90. Tuning the biome
+   centres and weights is a generation change (version bump + goldens).
 
 Verification at the 2026-11-19 merge point: `fmt`, `clippy --all-targets`,
 `cargo test` (629 lib, 2 ignored, 3 light_preview, 24 integration), `golden check`, `sweep --tier pr`, and

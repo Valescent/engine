@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `terrain-gen calibrate-blend` measures the biome blend width `W_blocks` per biome pair over the sweep seeds (w 0.5 to 0.95 along transects perpendicular to each border, doubled) and checks the spec bounds; the definition is in [Terrain tools](docs/dev/terrain-tools.md). Measured medians are 43-72 blocks against the 20-28 target, so the command reports the gap rather than passing, and it is not a CI gate.
+- `terrain-gen counters --tier pr|nightly` pins the deterministic counters for the PR seeds, and a CI step fails when any baseline drifts by more than 5%.
+
 - LOD2, a 4x4x4 downsample for chunks beyond 16 chunk units, and `render_distance_chunks` up to `32`; LOD2 emits every chunk-boundary face like LOD1.
 - Light fields store one nibble per cell, halving resident light memory, and a light snapshot is built from 27 direct chunk lookups instead of a world scan.
 - Chunk level work is tracked in a set fed by generated columns, edits, and player-chunk changes, so the steady-state frame no longer scans every chunk. The queue checks pool admission before building a snapshot.
