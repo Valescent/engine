@@ -118,7 +118,7 @@ fn write_header(directory: &Path, seed: u64) {
         .expect("the v1 description hashes");
     let header = Header {
         format_version: HEADER_FORMAT_VERSION,
-        generator_version: 1,
+        generator_version: 2,
         description_hash: digest,
         hash_algorithm: HASH_ALGORITHM.to_owned(),
         seed,
@@ -236,7 +236,7 @@ fn write_bundle(
     let recorded_section = section_override.unwrap_or(&section_hash);
 
     let manifest = format!(
-        "{{\n  \"generator_version\": 1,\n  \"seed\": {seed},\n  \
+        "{{\n  \"generator_version\": 2,\n  \"seed\": {seed},\n  \
          \"description_hash\": \"{}\",\n  \"platform_tag\": \"test-triple\",\n  \
          \"failure\": {{ \"column\": [{}, {}], \"stage\": \"column\" }}\n}}\n",
         hex(&digest),
@@ -799,7 +799,7 @@ fn replay_refuses_an_unknown_generator_version() {
     let manifest = fs::read_to_string(&path).expect("the manifest is readable");
     fs::write(
         &path,
-        manifest.replace("\"generator_version\": 1", "\"generator_version\": 999"),
+        manifest.replace("\"generator_version\": 2", "\"generator_version\": 999"),
     )
     .expect("the edited manifest is written");
 
