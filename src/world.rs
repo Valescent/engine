@@ -200,6 +200,11 @@ impl Chunk {
         self.terrain_min = if minimum == i32::MAX { -1 } else { minimum };
     }
 
+    /// Stores a minimum computed by the generator's column pass.
+    pub(crate) fn set_terrain_min(&mut self, minimum: i32) {
+        self.terrain_min = if minimum < 0 { -1 } else { minimum };
+    }
+
     /// Returns the block at a local coordinate, or `Air` outside the chunk.
     pub(crate) fn block(&self, local: IVec3) -> Block {
         local_index(local).map_or(Block::Air, |index| packed_block(&self.cells, index))

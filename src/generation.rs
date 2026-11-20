@@ -134,6 +134,7 @@ impl Generator {
     pub(crate) fn generate_chunk(&self, chunk: ChunkCoord) -> Chunk {
         let origin = chunk.world_origin();
         let mut blocks = Chunk::default();
+        let mut column_tops = [u8::MAX; (CHUNK_SIZE * CHUNK_SIZE) as usize];
         let first = origin.y.max(0);
         let last = (origin.y + CHUNK_SIZE - 1).min(WORLD_HEIGHT - 1);
         if first > last {
@@ -161,6 +162,12 @@ impl Generator {
                         Block::Air
                     };
 
+                    if block.is_terrain() || block == Block::Water {
+                        let local_y = u8::try_from(world_y - origin.y).expect("local y fits in u8");
+                        let index = usize::try_from(lx * CHUNK_SIZE + lz)
+                            .expect("column index fits in usize");
+                        column_tops[index] = local_y;
+                    }
                     blocks.set_block(IVec3::new(lx, world_y - origin.y, lz), block);
                 }
             }
@@ -186,7 +193,15 @@ impl Generator {
             self.plant_tree(&mut blocks, chunk, IVec3::new(local_x, 0, local_z), trunk);
         }
 
-        blocks.recompute_terrain_min();
+        let mut minimum = i32::MAX;
+        for top in column_tops {
+            if top == u8::MAX {
+                minimum = -1;
+                break;
+            }
+            minimum = minimum.min(i32::from(top));
+        }
+        blocks.set_terrain_min(minimum);
         blocks
     }
 
