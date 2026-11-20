@@ -21,6 +21,7 @@ use crate::horizon::Horizon;
 use crate::mesh::{Lod, MeshData};
 use crate::overlay::{OverlayVertex, build_overlay_mesh};
 use crate::quad_renderer::{POOL_BYTES, QuadRenderer};
+use crate::section::SectionKey;
 use crate::sky::SkySample;
 use crate::voxel::{HighlightVertex, Vertex};
 use crate::world::{CHUNK_SIZE, ChunkCoord};
@@ -738,6 +739,20 @@ impl Renderer {
         }
         if let Some(gpu_chunk) = self.chunks.remove(&chunk) {
             self.geometry_bytes -= gpu_chunk.meshes().map(|mesh| mesh.bytes).sum::<u64>();
+        }
+    }
+
+    pub(crate) fn upload_section(&mut self, section: SectionKey, mesh: &MeshData) -> bool {
+        let frame = self.frame_index;
+        self.quad
+            .as_mut()
+            .is_some_and(|quad| quad.upload_section(&self.queue, section, mesh, frame))
+    }
+
+    #[allow(dead_code)] // Streaming uses this when section eviction lands.
+    pub(crate) fn remove_section(&mut self, section: SectionKey) {
+        if let Some(quad) = self.quad.as_mut() {
+            quad.remove_section(section, self.frame_index);
         }
     }
 

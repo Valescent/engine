@@ -16,7 +16,32 @@ use crate::mesh::{Lod, MeshData};
 use crate::pool::{QuadPool, QuadRange};
 use crate::quad::{ChunkInfo, QuadRecord};
 use crate::renderer::FrameStats;
+use crate::section::SectionKey;
 use crate::world::{CHUNK_SIZE, ChunkCoord};
+
+/// A pool slot is either an L0 chunk or a coarse section.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum NodeKey {
+    Chunk(ChunkCoord),
+    Section(SectionKey),
+}
+
+impl NodeKey {
+    fn origin(self) -> Vec3 {
+        match self {
+            Self::Chunk(chunk) => chunk.origin(),
+            Self::Section(section) => section.origin().as_vec3(),
+        }
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    fn extent(self) -> f32 {
+        match self {
+            Self::Chunk(_) => CHUNK_SIZE as f32,
+            Self::Section(section) => section.extent() as f32,
+        }
+    }
+}
 
 /// Pool budget: 3.2M quads at 12 bytes each, 38.4 MB.
 pub(crate) const CAPACITY_QUADS: u32 = 3_200_000;
@@ -65,7 +90,7 @@ struct DrawArgs {
 
 struct Slot {
     index: u32,
-    chunk: ChunkCoord,
+    key: NodeKey,
     info: ChunkInfo,
     opaque: [Option<QuadRange>; 3],
     opaque_indexed: [bool; 3],
@@ -120,9 +145,9 @@ pub(crate) struct QuadRenderer {
     opaque_indexed_pipeline: wgpu::RenderPipeline,
     water_indexed_pipeline: wgpu::RenderPipeline,
     pool: QuadPool,
-    /// Active slots in draw order; `slot_positions` maps a chunk to its index.
+    /// Active slots in draw order; `slot_positions` maps a node to its index.
     slots: Vec<Slot>,
-    slot_positions: HashMap<ChunkCoord, usize>,
+    slot_positions: HashMap<NodeKey, usize>,
     free_slots: Vec<u32>,
     next_slot: u32,
     deferred_slots: Vec<(u64, u32)>,
@@ -327,7 +352,7 @@ impl QuadRenderer {
         let Some(range) = self.pool.allocate(quads) else {
             return false;
         };
-        let Some(slot_index) = self.slot_for(chunk) else {
+        let Some(slot_index) = self.slot_for(NodeKey::Chunk(chunk)) else {
             self.pool.free(range, frame);
             return false;
         };
@@ -338,7 +363,10 @@ impl QuadRenderer {
         );
 
         let origin = chunk.origin();
-        let position = *self.slot_positions.get(&chunk).expect("slot exists");
+        let position = *self
+            .slot_positions
+            .get(&NodeKey::Chunk(chunk))
+            .expect("slot exists");
         let slot = &mut self.slots[position];
         let index = lod_index(lod);
         if let Some(old) = slot.opaque[index].replace(range) {
@@ -366,7 +394,7 @@ impl QuadRenderer {
         lod: Lod,
         frame: u64,
     ) {
-        let Some(&position) = self.slot_positions.get(&chunk) else {
+        let Some(&position) = self.slot_positions.get(&NodeKey::Chunk(chunk)) else {
             return;
         };
         let slot = &mut self.slots[position];
@@ -410,7 +438,7 @@ impl QuadRenderer {
         let Some(range) = self.pool.allocate(quads) else {
             return false;
         };
-        let Some(slot_index) = self.slot_for(chunk) else {
+        let Some(slot_index) = self.slot_for(NodeKey::Chunk(chunk)) else {
             self.pool.free(range, frame);
             return false;
         };
@@ -421,7 +449,10 @@ impl QuadRenderer {
         );
 
         let origin = chunk.origin();
-        let position = *self.slot_positions.get(&chunk).expect("slot exists");
+        let position = *self
+            .slot_positions
+            .get(&NodeKey::Chunk(chunk))
+            .expect("slot exists");
         let slot = &mut self.slots[position];
         if let Some(old) = slot.water.replace(range) {
             self.pool.free(old, frame);
@@ -435,14 +466,61 @@ impl QuadRenderer {
         true
     }
 
+    /// Uploads a coarse section mesh. Returns false when allocation fails.
+    #[allow(clippy::cast_precision_loss)]
+    pub(crate) fn upload_section(
+        &mut self,
+        queue: &wgpu::Queue,
+        section: SectionKey,
+        mesh: &MeshData,
+        frame: u64,
+    ) -> bool {
+        if mesh.quads.is_empty() {
+            self.remove_section(section, frame);
+            return true;
+        }
+        let Ok(quads) = u32::try_from(mesh.quads.len()) else {
+            return false;
+        };
+        let Some(range) = self.pool.allocate(quads) else {
+            return false;
+        };
+        let key = NodeKey::Section(section);
+        let Some(slot_index) = self.slot_for(key) else {
+            self.pool.free(range, frame);
+            return false;
+        };
+        queue.write_buffer(
+            &self.pool_buffer,
+            u64::from(range.first_quad) * size_of::<QuadRecord>() as u64,
+            bytemuck::cast_slice(&mesh.quads),
+        );
+
+        let origin = section.origin().as_vec3();
+        let position = *self.slot_positions.get(&key).expect("slot exists");
+        let slot = &mut self.slots[position];
+        if let Some(old) = slot.opaque[0].replace(range) {
+            self.pool.free(old, frame);
+        }
+        slot.opaque_indexed[0] = quads <= MAX_INDEXED_QUADS;
+        slot.active = Some(Lod::Lod0);
+        slot.info.origin = [origin.x, origin.y, origin.z, section.scale() as f32];
+        slot.info.opaque_first = range.first_quad;
+        slot.info.opaque_quads = range.quads;
+        let info = slot.info;
+        self.write_info(queue, slot_index, &info);
+        true
+    }
+
     /// The LOD currently drawn for a chunk, if any.
     pub(crate) fn active_lod(&self, chunk: ChunkCoord) -> Option<Lod> {
-        self.slot(chunk).and_then(|slot| slot.active)
+        self.slot(NodeKey::Chunk(chunk))
+            .and_then(|slot| slot.active)
     }
 
     /// Whether a chunk has the given LOD resident in the pool.
     pub(crate) fn has_lod(&self, chunk: ChunkCoord, lod: Lod) -> bool {
-        self.slot(chunk)
+        self.slot(NodeKey::Chunk(chunk))
             .is_some_and(|slot| slot.opaque[lod_index(lod)].is_some())
     }
 
@@ -453,13 +531,22 @@ impl QuadRenderer {
 
     /// Releases a chunk's ranges and slot after it leaves the world.
     pub(crate) fn remove(&mut self, chunk: ChunkCoord, frame: u64) {
-        let Some(position) = self.slot_positions.remove(&chunk) else {
+        self.remove_node(NodeKey::Chunk(chunk), frame);
+    }
+
+    /// Releases a section's ranges and slot when it unloads.
+    pub(crate) fn remove_section(&mut self, section: SectionKey, frame: u64) {
+        self.remove_node(NodeKey::Section(section), frame);
+    }
+
+    fn remove_node(&mut self, key: NodeKey, frame: u64) {
+        let Some(position) = self.slot_positions.remove(&key) else {
             return;
         };
         let mut slot = self.slots.swap_remove(position);
         if position < self.slots.len() {
             self.slot_positions
-                .insert(self.slots[position].chunk, position);
+                .insert(self.slots[position].key, position);
         }
         for range in slot.opaque.iter_mut().filter_map(Option::take) {
             self.pool.free(range, frame);
@@ -508,12 +595,15 @@ impl QuadRenderer {
         let mut visible_chunks = 0_u32;
 
         for slot in &self.slots {
-            let chunk = slot.chunk;
-            let min = chunk.origin();
-            if !frustum.intersects_aabb(min, min + Vec3::splat(CHUNK_SIZE as f32)) {
+            let key = slot.key;
+            let min = key.origin();
+            let extent = key.extent();
+            if !frustum.intersects_aabb(min, min + Vec3::splat(extent)) {
                 continue;
             }
-            if horizon.occludes(chunk) {
+            if let NodeKey::Chunk(chunk) = key
+                && horizon.occludes(chunk)
+            {
                 continue;
             }
             let mut visible = false;
@@ -674,14 +764,14 @@ impl QuadRenderer {
     }
 
     /// Looks up an active slot.
-    fn slot(&self, chunk: ChunkCoord) -> Option<&Slot> {
+    fn slot(&self, key: NodeKey) -> Option<&Slot> {
         self.slot_positions
-            .get(&chunk)
+            .get(&key)
             .map(|&position| &self.slots[position])
     }
 
-    fn slot_for(&mut self, chunk: ChunkCoord) -> Option<u32> {
-        if let Some(&position) = self.slot_positions.get(&chunk) {
+    fn slot_for(&mut self, key: NodeKey) -> Option<u32> {
+        if let Some(&position) = self.slot_positions.get(&key) {
             return Some(self.slots[position].index);
         }
         let index = if let Some(index) = self.free_slots.pop() {
@@ -694,10 +784,10 @@ impl QuadRenderer {
             self.next_slot += 1;
             index
         };
-        self.slot_positions.insert(chunk, self.slots.len());
+        self.slot_positions.insert(key, self.slots.len());
         self.slots.push(Slot {
             index,
-            chunk,
+            key,
             info: ChunkInfo::default(),
             opaque: [None; 3],
             opaque_indexed: [false; 3],
@@ -717,7 +807,7 @@ impl QuadRenderer {
     }
 
     fn clear_opaque(&mut self, queue: &wgpu::Queue, chunk: ChunkCoord, lod: Lod, frame: u64) {
-        let Some(&position) = self.slot_positions.get(&chunk) else {
+        let Some(&position) = self.slot_positions.get(&NodeKey::Chunk(chunk)) else {
             return;
         };
         let slot = &mut self.slots[position];
@@ -748,7 +838,7 @@ impl QuadRenderer {
     }
 
     fn clear_water(&mut self, queue: &wgpu::Queue, chunk: ChunkCoord, frame: u64) {
-        let Some(&position) = self.slot_positions.get(&chunk) else {
+        let Some(&position) = self.slot_positions.get(&NodeKey::Chunk(chunk)) else {
             return;
         };
         let slot = &mut self.slots[position];
@@ -827,6 +917,13 @@ mod tests {
     use crate::world::CHUNK_COLUMN;
 
     #[test]
+    fn section_nodes_use_their_own_origin_and_extent() {
+        let key = NodeKey::Section(SectionKey::new(1, glam::IVec3::new(1, 0, -1)));
+        assert_eq!(key.extent(), 64.0);
+        assert_eq!(key.origin(), Vec3::new(64.0, 0.0, -64.0));
+    }
+
+    #[test]
     fn index_pattern_replays_the_quad_corner_order() {
         let corners = [0_u16, 1, 2, 0, 2, 3];
         for quad in 0..MAX_INDEXED_QUADS {
@@ -862,7 +959,7 @@ mod tests {
     fn slots_count_only_resident_geometry() {
         let empty = Slot {
             index: 0,
-            chunk: ChunkCoord::new(0, 0, 0),
+            key: NodeKey::Chunk(ChunkCoord::new(0, 0, 0)),
             info: ChunkInfo::default(),
             opaque: [None; 3],
             opaque_indexed: [false; 3],

@@ -122,6 +122,9 @@ Landed on the `lod-hierarchy` branch:
 - `bench_section`: one level-1 section generates in 629 µs, meshes in 1,053 µs, and uses 32,768 B of
   samples + 19,652 B of light for 2,193 quads; the eight LOD1 chunks covering the same volume mesh
   in 2,360 µs for 3,613 quads and use 288 KiB of samples + light.
+- The quad pool keys slots by `NodeKey::{Chunk, Section}`. `ENGINE_HIERARCHY=1` uploads one level-1
+  section 1,200 m ahead: +1 slot, 1,179 quads, 2 draws unchanged. It is depth-occluded at the spawn
+  view, so the next step is boundary placement/selection rather than a fixed point ahead.
 
 Still blocking the visual gate:
 

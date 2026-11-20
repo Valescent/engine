@@ -756,6 +756,27 @@ The horizon A/B at the spawn view:
 - Horizon is now **on by default**; `ENGINE_HORIZON_CULL=0` disables it. `ENGINE_AUTO_STRAFE=1` is
   the dev hook used for the moving capture.
 
+### Hierarchy section demo
+
+`ENGINE_HIERARCHY=1` uploads one level-1 section 1,200 m ahead through the same quad pool. The pool
+now keys slots by `NodeKey::{Chunk, Section}`; both use the same page allocator, chunk-info buffer,
+indirect argument lists, and four-vertex indexed path. A section's chunk-info origin carries the
+section origin and its `2^level` scale, and the draw AABB uses the section extent.
+
+| Distance-32 settled | L0 only | With the demo section |
+|---|---:|---:|
+| Visible chunks | 819 | 820 |
+| Visible vertices | 1,836,432 | 1,843,494 |
+| Draw calls | 2 | 2 |
+| Allocated quads | 28.32 MB | 28.33 MB |
+
+- The demo section adds 1,179 quads (7,062 vertices) and one slot; the draw count is unchanged.
+- At the seed-42 spawn the section sits directly behind the near ridge and is depth-occluded, so the
+  screenshot does not change. The next step is placing/selecting sections at the L0 boundary rather
+  than a fixed point ahead.
+- It is a first-slice demo, not streaming: one section is generated and meshed on the main thread
+  once, with no LOD selection, parent retention, or edit invalidation yet.
+
 ### Section foundation (level 1)
 
 The first hierarchy slice adds `src/section.rs`: `SectionKey` math, a level-1 coarse generator using

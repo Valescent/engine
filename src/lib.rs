@@ -58,6 +58,7 @@ use player::{Player, PlayerInput};
 use raycast::{RaycastHit, raycast};
 pub use renderer::RendererError;
 use renderer::{FrameStats, Renderer};
+use section::{SectionEdits, SectionKey, generate_section};
 use sky::Sky;
 use streaming::Streaming;
 use voxel::build_highlight_mesh;
@@ -434,6 +435,8 @@ struct App {
     horizon_cull: bool,
     auto_walk: bool,
     auto_strafe: bool,
+    hierarchy: bool,
+    section_uploaded: bool,
     horizon: horizon::Horizon,
     horizon_at: Instant,
     overlay_fps: f64,
@@ -534,6 +537,8 @@ impl App {
             horizon_cull: !std::env::var("ENGINE_HORIZON_CULL").is_ok_and(|value| value == "0"),
             auto_walk: std::env::var("ENGINE_AUTO_WALK").is_ok_and(|value| value == "1"),
             auto_strafe: std::env::var("ENGINE_AUTO_STRAFE").is_ok_and(|value| value == "1"),
+            hierarchy: std::env::var("ENGINE_HIERARCHY").is_ok_and(|value| value == "1"),
+            section_uploaded: false,
             horizon: horizon::Horizon::disabled(),
             horizon_at: Instant::now(),
             overlay_fps: 0.0,
@@ -1054,6 +1059,10 @@ impl App {
             }
         }
 
+        if self.hierarchy {
+            self.ensure_section_demo();
+        }
+
         let overlay = self.show_overlay.then(|| {
             format!(
                 "FPS {:.0}  {:.2} MS",
@@ -1217,8 +1226,53 @@ impl App {
     #[allow(clippy::cast_precision_loss)]
     fn apply_render_distance(&mut self) {
         let distance = self.config.render_distance_chunks as f32 * 32.0;
-        self.camera.set_far_plane(distance + 64.0);
-        self.camera.set_fog_end(distance);
+        if self.hierarchy {
+            self.camera.set_far_plane(2048.0);
+            self.camera.set_fog_end(2048.0);
+        } else {
+            self.camera.set_far_plane(distance + 64.0);
+            self.camera.set_fog_end(distance);
+        }
+    }
+
+    /// Generates and uploads one far-level section for the first-slice demo.
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+    fn ensure_section_demo(&mut self) {
+        if !self.hierarchy || self.section_uploaded {
+            return;
+        }
+        let Some(seed) = self.seed else {
+            return;
+        };
+        let forward = self.camera.forward();
+        let direction = Vec2::new(forward.x, forward.z).normalize_or_zero();
+        if direction == Vec2::ZERO {
+            return;
+        }
+        let target = self.player.position.truncate() + direction * 1200.0;
+        let generator = Generator::new(seed);
+        let x = target.x.floor() as i32;
+        let z = target.y.floor() as i32;
+        let surface = generator.height(x, z);
+        let level = 1_u8;
+        let extent = 32 * (1 << level);
+        let key = SectionKey::new(
+            level,
+            IVec3::new(
+                x.div_euclid(extent),
+                surface.div_euclid(extent),
+                z.div_euclid(extent),
+            ),
+        );
+        let section = generate_section(&generator, key, &SectionEdits::new());
+        let light = section.light();
+        let mesh = section.mesh(Some(&light));
+        let uploaded = self
+            .renderer
+            .as_mut()
+            .is_some_and(|renderer| renderer.upload_section(key, &mesh));
+        info!(?key, quads = mesh.quads.len(), uploaded, "section demo");
+        self.section_uploaded = uploaded || mesh.quads.is_empty();
     }
 
     /// Whether all four chunks of a column are lit and meshed.
