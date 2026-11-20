@@ -377,9 +377,13 @@ a column whose nearest centre is desert, and sand one block away. The golden `eq
 hash moved from `08ecf2b38fc52eb3` to `dd09269e8fc5b39c`; the PR counters are unchanged because
 a topsoil swap does not change solid, air, or water counts. Across the whole finite world the
 dithered coverage for seed `0x5EED` is plains 39.4%, forest 35.9%, desert 6.3%, tundra 18.4% of
-land (seeds 1 and 2 are similar), so all four biomes stay above the 5% floor.
+land. The PR coverage test now samples all 16 `sweep --tier pr` seeds; every seed keeps all four
+biomes, and the thinnest is desert on seed 9 at 5.09% of land against the 5% floor. The per-seed
+table is in [Terrain tools](terrain-tools.md#current-margins-16-seeds).
 
-The tool remains a local diagnostic and is not part of the `Terrain gates` job.
+The tool remains a measurement, not a PR gate: `Perf` runs it nightly because the pair 2-3 margin
+(p90 63.32 against 64) is too thin to attribute a platform float difference safely on every pull
+request. See [CI](ci.md#perf-workflow).
 
 ## Terrain PR counters (2026-11-20)
 

@@ -19,6 +19,31 @@ use terrain_core::pipeline::{AIR, Terrain, WATER};
 
 const SEED: u64 = 0x5EED;
 
+/// The seed set `terrain-gen sweep --tier pr` covers (`PR_SEEDS`): `1..=16`.
+/// The coverage floor is per seed, so the test samples every seed the PR sweep
+/// claims, not a subset.
+const PR_SEEDS: u64 = 16;
+/// World half extent in blocks; the finite world is `[-1024, 1024)` on both
+/// axes, which is the whole world `calibrate-blend` measures by default.
+const WORLD_HALF_EXTENT: i32 = 1024;
+/// Coverage sample stride. The floor is an area share, so a coarse stride is
+/// enough; 8 blocks is the stride the coverage test has always used and it
+/// keeps the thinnest seed (9, desert) clear of sampling noise. Building the
+/// field tiles, not the sampling loop, dominates the wall time, so a coarser
+/// stride does not pay.
+const COVERAGE_STEP: i32 = 8;
+/// Enough land samples that the 5% floor needs at least 1,000 hits at stride 8.
+const MIN_LAND_SAMPLES: u64 = 20_000;
+/// At most eight seeds generate at once. Each seed caches the whole finite
+/// world, so this bounds the test at roughly 200 MB of tiles while still
+/// using a typical developer machine; slower runners just use fewer workers.
+const COVERAGE_WORKERS: usize = 8;
+/// `docs/specs/terrain.md` section 8.3: each climate biome present on a seed
+/// must cover at least 5% of land (`E3.1`, `E3.2`).
+const COVERAGE_FLOOR_PERCENT: f64 = 5.0;
+/// The v1 climate biomes in stable id order (`E3.2`).
+const BIOME_NAMES: [&str; 4] = ["plains", "forest", "desert", "tundra"];
+
 fn tile_and_local(x: i32, z: i32) -> (i32, i32, i32, i32) {
     let tile_x = x.div_euclid(TILE_BLOCKS);
     let tile_z = z.div_euclid(TILE_BLOCKS);
@@ -207,36 +232,122 @@ fn second_pick_fraction_falls_off_with_distance() {
     }
 }
 
-#[test]
-fn biome_coverage_holds_for_pr_seeds() {
-    for seed in [1_u64, 2, SEED] {
-        let terrain = Terrain::new(seed).expect("the v1 description compiles");
-        let mut land = 0_u64;
-        let mut counts = [0_u64; 4];
-        for z in (-1024..1024).step_by(8) {
-            for x in (-1024..1024).step_by(8) {
-                let (tile_x, tile_z, local_x, local_z) = tile_and_local(x, z);
-                let tile = terrain.tile(tile_x, tile_z).expect("a world tile");
-                if tile.height.top(local_x, local_z) <= SEA {
-                    continue;
-                }
-                land += 1;
-                counts[usize::from(pick(&terrain, x, z))] += 1;
-            }
-        }
+/// One seed's land sample and dithered biome counts over the finite world.
+struct SeedCoverage {
+    seed: u64,
+    land: u64,
+    counts: [u64; 4],
+}
 
-        assert!(land > 20_000, "seed {seed} sampled too little land");
-        let present = counts.iter().filter(|&&count| count > 0).count();
-        assert!(present >= 3, "seed {seed} has only {present} biomes");
-        for (id, count) in counts.iter().enumerate() {
-            if *count == 0 {
+fn seed_coverage(seed: u64) -> SeedCoverage {
+    let terrain = Terrain::new(seed).expect("the v1 description compiles");
+    let step = usize::try_from(COVERAGE_STEP).expect("a positive stride");
+    let mut land = 0_u64;
+    let mut counts = [0_u64; 4];
+    for z in (-WORLD_HALF_EXTENT..WORLD_HALF_EXTENT).step_by(step) {
+        for x in (-WORLD_HALF_EXTENT..WORLD_HALF_EXTENT).step_by(step) {
+            let (tile_x, tile_z, local_x, local_z) = tile_and_local(x, z);
+            let tile = terrain.tile(tile_x, tile_z).expect("a world tile");
+            if tile.height.top(local_x, local_z) <= SEA {
                 continue;
             }
+            land += 1;
+            counts[usize::from(pick(&terrain, x, z))] += 1;
+        }
+    }
+    SeedCoverage { seed, land, counts }
+}
+
+#[test]
+fn biome_coverage_holds_for_pr_seeds() {
+    let started = std::time::Instant::now();
+    let mut observed = [false; 4];
+    let seeds: Vec<u64> = (1..=PR_SEEDS).collect();
+
+    // Tile generation dominates, so generate a few seeds at a time. Coverage
+    // counts are integers and each worker owns its seed, so the result is
+    // independent of the worker count.
+    let workers = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZero::get)
+        .min(COVERAGE_WORKERS);
+    let mut reports = Vec::with_capacity(usize::try_from(PR_SEEDS).expect("a small seed set"));
+    for batch in seeds.chunks(workers) {
+        let batch_reports: Vec<SeedCoverage> = std::thread::scope(|scope| {
+            let handles: Vec<_> = batch
+                .iter()
+                .map(|&seed| scope.spawn(move || seed_coverage(seed)))
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("a coverage worker panicked"))
+                .collect()
+        });
+        reports.extend(batch_reports);
+    }
+
+    for report in &reports {
+        let seed = report.seed;
+        let land = report.land;
+        let counts = report.counts;
+        // A stride of 8 over the finite world gives roughly 26k land samples
+        // per seed; the 5% floor then needs at least 1,300 hits, so sampling
+        // noise cannot move a biome across it on its own.
+        assert!(
+            land > MIN_LAND_SAMPLES,
+            "seed {seed} sampled only {land} land blocks; \
+             expected more than {MIN_LAND_SAMPLES} at stride {COVERAGE_STEP}"
+        );
+
+        let percentages: Vec<f64> = counts
+            .iter()
+            .map(|&count| 100.0 * count as f64 / land as f64)
+            .collect();
+        let present: Vec<usize> = (0..4).filter(|&id| counts[id] > 0).collect();
+        eprintln!("seed {seed}: land={land} {percentages:.2?}");
+
+        assert!(
+            present.len() >= 3,
+            "seed {seed} has only {} of the four climate biomes; \
+             coverage is plains {:.2}%, forest {:.2}%, desert {:.2}%, tundra {:.2}% \
+             (spec requires at least 3 present)",
+            present.len(),
+            percentages[0],
+            percentages[1],
+            percentages[2],
+            percentages[3],
+        );
+
+        for (id, &count) in counts.iter().enumerate() {
+            if count == 0 {
+                continue;
+            }
+            observed[id] = true;
             assert!(
-                *count * 20 >= land,
-                "seed {seed} biome {id} covers {:.2}% of land",
-                100.0 * *count as f64 / land as f64
+                percentages[id] >= COVERAGE_FLOOR_PERCENT,
+                "seed {seed} biome {id} ({}) covers {:.3}% of land \
+                 ({count}/{land} samples); floor is {:.2}%",
+                BIOME_NAMES[id],
+                percentages[id],
+                COVERAGE_FLOOR_PERCENT,
             );
         }
     }
+
+    // The spec requires at least three per seed; v1 defines four, so the PR
+    // seed set must still exercise every one of them at least once.
+    let missing: Vec<&str> = (0..4)
+        .filter(|&id| !observed[id])
+        .map(|id| BIOME_NAMES[id])
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "the PR seed set never covers {}; each v1 climate biome must appear on at least one seed",
+        missing.join(", "),
+    );
+
+    eprintln!(
+        "coverage swept {} seeds at stride {COVERAGE_STEP} in {:.1}s on {workers} workers",
+        PR_SEEDS,
+        started.elapsed().as_secs_f64(),
+    );
 }

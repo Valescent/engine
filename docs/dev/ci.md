@@ -10,7 +10,7 @@ them.
 | `Docs` workflow | Current |
 | `Commits` workflow | Current |
 | `Release` workflow | Current |
-| `Perf` workflow | Current; headless runs on `main` |
+| `Perf` workflow | Current; headless and blend calibration run on `main` and nightly |
 | Dependabot | Current |
 | Release binaries | Not built |
 | Coverage, GPU tests, pool benchmark, link checks | Not covered |
@@ -23,11 +23,12 @@ them.
 | `Docs` | `.github/workflows/docs.yml` | Push to `main`, pull request, manual dispatch | mdBook build, GitHub Pages deploy |
 | `Commits` | `.github/workflows/commits.yml` | Push to `main`, pull request | Conventional Commits, changelog gate |
 | `Release` | `.github/workflows/release.yml` | `v*` tag push, manual dispatch | Version bump, GitHub release |
-| `Perf` | `.github/workflows/perf.yml` | Push to `main`, manual dispatch | Headless static and walking runs, budget gate |
+| `Perf` | `.github/workflows/perf.yml` | Push to `main`, nightly schedule, manual dispatch | Headless static and walking runs, budget gate, blend calibration |
 | Dependabot | `.github/dependabot.yml` | Weekly schedule | Grouped Cargo and Actions updates |
 
 `Docs` builds on pull requests but deploys only on non-pull-request events. `Release` does not
-run on pull requests. `Perf` does not run on pull requests.
+run on pull requests. `Perf` does not run on pull requests; it runs on `main` pushes and on a
+nightly schedule (03:17 UTC).
 
 ## CI workflow
 
@@ -112,9 +113,10 @@ changelog notes only. See [Versioning](versioning.md) for the version and tag po
 ## Perf workflow
 
 `Perf` declares `contents: read`, cancels superseded runs in the same ref group, and runs on
-`ubuntu-latest` with a 20-minute timeout. It builds with `cargo build --release --locked`, then
-runs the headless harness twice with `ENGINE_HEADLESS=1`, `ENGINE_HEADLESS_FRAMES=600`, and
-`ENGINE_SEED=42`:
+`ubuntu-latest` with a 20-minute timeout. It runs on `main` pushes, a nightly `17 3 * * *`
+schedule, and manual dispatch; it never runs on pull requests. It builds with
+`cargo build --release --locked`, then runs the headless harness twice with `ENGINE_HEADLESS=1`,
+`ENGINE_HEADLESS_FRAMES=600`, and `ENGINE_SEED=42`:
 
 - a static camera at distance 12 (`ENGINE_HEADLESS_SPEED=0`);
 - a walk at 32 m/s (`ENGINE_HEADLESS_SPEED=32`).
@@ -124,6 +126,14 @@ ready columns, mean frame work under 20 ms, p95 under 50 ms, and resident blocks
 200 MB. Both raw outputs are uploaded as the `headless-results` artifact. The budgets are
 deliberately generous because GitHub runners are shared; they catch order-of-magnitude
 regressions, not small drift. See [Benchmark results](benchmarks.md#headless-run-v008).
+
+The job also runs `terrain-gen calibrate-blend --seeds 16`, appends the table to the job summary,
+and uploads it with the headless outputs. It is deliberately **not** in the PR `Terrain gates`
+job: the measured medians sit near the `20..=28` window and pair 2-3 has 36 transects with p90
+63.32 against the 64-block ceiling, so a platform-level floating-point difference could fail a
+pull request that did not change the blend. Running it nightly on one known Linux runner keeps
+the data-change signal without adding PR noise. The per-PR coverage floor is still enforced by
+`biome_coverage_holds_for_pr_seeds` over the same 16 seeds.
 
 ## Dependency updates
 
@@ -165,10 +175,13 @@ than 5%; a baseline of zero must stay zero. The checked-in baseline is rewritten
 wall-clock counters, and the comparison rule are defined in
 [Terrain tools](terrain-tools.md#counters).
 
-`calibrate-blend` is a calibration tool, not a CI gate. It passes at 16 seeds against the
-shipped generator version 3; see
-[Benchmark results](benchmarks.md#terrain-blend-calibration-2026-11-20). Run it locally after any
-change to climate fields, `BLEND_W`, or biome centres:
+`calibrate-blend` is not part of this PR job: it passes at 16 seeds against the shipped generator
+version 3, but the pair 2-3 margin is too thin to gate every pull request (p90 63.32 against 64,
+36 transects). The `Perf` workflow runs it nightly instead; the per-PR guard is the
+`biome_coverage_holds_for_pr_seeds` test, which samples all 16 PR seeds. See
+[Terrain tools](terrain-tools.md#current-margins-16-seeds) and
+[Benchmark results](benchmarks.md#terrain-blend-calibration-2026-11-20). Run the calibration
+locally after any change to climate fields, `BLEND_W`, or biome centres:
 
 ```console
 cargo run --locked --quiet --no-default-features --bin terrain-gen -- calibrate-blend --seeds 16
