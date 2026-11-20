@@ -637,6 +637,24 @@ Settled distance 32, seed 42, after the quad path replaced the per-chunk vertex 
   against 1 call in 0.22 ms for the pool; the small scene hides the submission win that distance 32
   shows.
 
+### Binary greedy attempt (reverted)
+
+A bitmask greedy mesher with the strict light merge key was implemented and measured against the
+current mesher. Output matched exactly (248 tests), but it was slower:
+
+| Fixture | Current | Bitmask |
+|---|---:|---:|
+| Spawn surface LOD0 | 1.03 ms | 1.02 ms |
+| Spawn ground LOD0 | 1.51 ms | 1.53 ms |
+| Flat slab LOD0 | 0.98 ms | 1.08 ms |
+| All air LOD0 | 0.37 ms | 0.48 ms |
+| Water, surface | 0.44 ms | 0.64 ms |
+| Water, ground | 0.46 ms | 0.68 ms |
+
+The bitmask build evaluates passability for every padded cell; the current scan short-circuits the
+exposure test for non-matching cells, and the per-cell corner/light key dominates the merge. Reverted.
+The next experiment is the relaxed merge key described in [Meshing research](research/meshing.md).
+
 ### Horizon culling (opt-in)
 
 `ENGINE_HORIZON_CULL=1` enables conservative chunk-top horizon culling. It builds a 128-bin horizon

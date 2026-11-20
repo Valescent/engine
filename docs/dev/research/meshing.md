@@ -92,6 +92,28 @@ variants:
 Expected: 2-3x on opaque worker time with the relaxed key, less with the strict key. Risk is medium
 because it replaces the algorithm; the existing mesher stays as the test oracle either way.
 
+**Measured attempt (strict key).** A bitmask version was implemented and benchmarked: occupancy and
+passability columns for the three axes, padded by one cell, with face extraction as a shift and a
+mask. The output matched the oracle exactly (248 tests), but it was **slower** on this build:
+
+| Fixture | Current | Bitmask | Change |
+|---|---:|---:|---:|
+| Spawn surface LOD0 | 1.03 ms | 1.02 ms | flat |
+| Spawn ground LOD0 | 1.51 ms | 1.53 ms | flat |
+| Flat slab LOD0 | 0.98 ms | 1.08 ms | +10% |
+| All air LOD0 | 0.37 ms | 0.48 ms | +30% |
+| Water, surface | 0.44 ms | 0.64 ms | +45% |
+| Water, ground | 0.46 ms | 0.68 ms | +48% |
+
+The build evaluates passability for every padded cell, while the current scan short-circuits the
+exposure test when a cell does not match. The per-cell corner/light key and the merge dominate, so
+the bitmask face scan does not pay for itself with the strict key. The change was reverted; the
+existing mesher remains the baseline.
+
+The conclusion is the one the section already predicted: bitmask extraction only pays when the merge
+key is cheap. The next experiment is the **relaxed key** (merge on material and AO, sample light at
+the merged quad corners), with an oracle diff and a look check, before retrying bitmasks.
+
 ### 4. One shared index buffer
 
 Every quad uses the same four-vertex, six-index pattern, so a single static index buffer repeated to
@@ -130,10 +152,10 @@ or CI. Measure before and after; the mesher is branch-heavy, so the win may be s
 
 1. **Done in v0.0.9:** reusable scratch and the dry-water early-out.
 2. Add slice/column skipping next; it is small, safe, and helps every chunk.
-3. Prototype binary greedy with u64 columns behind a flag, keeping the light key first. Compare
-   worker time and quad counts against the existing mesher on the same fixtures.
-4. If the strict key limits the win, measure the relaxed key on the same chunks and decide whether
-   cross-face light interpolation is acceptable. Record the decision before changing the oracle.
+3. Decide the merge key before retrying bitmasks: the strict-key version measured slower, so the
+   next step is the relaxed key described in option 3, with an oracle diff and a look check.
+4. If the relaxed key is accepted, retry binary greedy with u64 columns and compare worker time and
+   quad counts on the same fixtures.
 5. Do the shared index buffer with the quad pool, not separately.
 
 Validate with `bench_mesh_build`, the headless settle run, and a quad-by-quad comparison for the
