@@ -13,9 +13,9 @@ cargo run --bin engine
 ```
 
 The demo opens a column-level streaming ring on top of the legacy scene. Every column within the
-spec's 16-column view radius is resident (1,089 columns), fine-meshed inside two columns, and
-drawn as LOD1 beyond. Edits, saves, and repairs use `world/terrain-demo/`; the legacy
-`world/chunks/` path is untouched.
+spec's 16-column view radius is resident (1,089 columns), fine-meshed inside two columns, drawn
+as LOD1 through the middle band, and drawn as LOD2 in the far band. Edits, saves, and repairs use
+`world/terrain-demo/`; the legacy `world/chunks/` path is untouched.
 
 | Input | Effect |
 |---|---|
@@ -53,9 +53,10 @@ Physics refuses movement while the player's column has no light.
 | `Terrain::new` + world hydrology solve | ~165 ms |
 | 12 worker threads, one `Terrain` each | < 1 ms |
 | First column (generation + light + mesh) | ~0.8 s |
-| Full 33x33 ring (1,089 columns) | **~45 s** |
-| Steady-state section bytes (`terrain ring` log) | **~126 MB** |
-| Process peak working set (RTX 4060, release) | **~590 MB** |
+| Full 33x33 ring (1,089 columns) | **~56 s** (LOD1-only ~70 s on the same machine) |
+| Steady-state ring footprint (`terrain ring` log) | **~118 MB** (LOD1-only ~126 MB) |
+| `terrain ring` quads | **~862,000** (LOD1-only ~1,955,000) |
+| Process peak working set (RTX 4060, release) | **~570 MB** |
 
 Every worker owns its own `Terrain` because the pipeline caches behind `RefCell`. One
 `Arc<WorldHydro>` solve is shared by every worker, so a lake or river that crosses a column
@@ -63,9 +64,10 @@ boundary has one level. Output is keyed and sorted, so worker order cannot chang
 
 The radius is the spec's **16** (`(2*16+1)^2 = 1,089` wanted columns; the two-column unload
 margin bounds the resident set at `(2*18+1)^2 = 1,369`). Section storage is paletted and
-bit-packed, and only the inner two columns are LOD0, so the measured steady state is ~126 MB of
-section bytes and ~590 MB peak working set, under the ~600 MB target. Nearest-first order keeps
-the centre playable in under a second while the full ring fills in ~45 s.
+bit-packed, and only the inner two columns are LOD0, so the measured steady state is ~118 MB of
+ring footprint (down from ~126 MB with LOD1 only) and ~570 MB peak working set, near the
+~600 MB target. Nearest-first order keeps the centre playable in under a second while the full
+ring fills in ~56 s (`ENGINE_NO_VSYNC=1`).
 
 ## Light
 
@@ -90,14 +92,22 @@ the centre playable in under a second while the full ring fills in ~45 s.
 ## Meshing and LOD
 
 - Fine sections are greedy-meshed with `MeshLod::Lod0` inside a two-column radius, with one extra
-  ring of fine meshes kept as a transition buffer.
+  ring of fine meshes kept as a transition buffer. A coarse region is split at the same cutoff:
+  LOD1 owns complete `2x2` column squares from radius 4 outward, and LOD2 owns complete `4x4`
+  column squares entirely beyond radius 7. The LOD1 band is therefore four columns wide and the
+  LOD2 band covers the outer half of the ring.
 - Each quad takes the layer of the face it belongs to: the block's top reference for `+Y`, bottom
   for `-Y`, and side for `±X`/`±Z` and cross quads (`ADR-0015`). `Textures` are presentation-only,
   so changing one never invalidates a saved section.
 - `demo_coarse_regions` downsamples every complete 2x2x2 fine group with `lod::downsample`, meshes
-  with `mesh_coarse` at Lod1, and appends skirts on all sides.
-- A coarse region is active only when all four of its columns are outside the fine buffer, so fine
-  and coarse never overlap. Coarse LOD is rebuilt whole in the background and is disposable.
+  with `mesh_coarse` at Lod1, and appends skirts on all sides. `demo_far_regions` does the same
+  for complete `4x4` column squares with `lod::downsample4` (64 fine sections, the same
+  most-frequent-solid vote), `mesh_coarse` at Lod2, and Lod2 skirts (two cells = eight blocks).
+- A region is active only when all of its columns are outside the fine buffer, and an LOD1 region
+  is suppressed when an active LOD2 square covers it, so the three bands never overlap. Coarse
+  LOD is rebuilt whole in the background and is disposable. The LOD2 half shares the same
+  throttled job (`TERRAIN_DEMO_COARSE_MS`); an edit only sets `far_dirty`, so the edit path never
+  pays for a 64-section derivation.
 - `TerrainSection` carries `scale` (1/2/4); the shader scales quad origins, widths, heights, face
   offsets, cross quads, and UVs. Culling uses `32 * scale`.
 - `section_revision` includes scale, so an origin changing detail level re-uploads.
@@ -195,7 +205,7 @@ cargo tree -p terrain-core -e normal --no-default-features
 ```
 
 `terrain-gen` is the `terrain-core` binary; its golden and counter baselines are in
-`crates/terrain-core/tests/golden/`. Current local count: **645 lib tests** across `engine` and
+`crates/terrain-core/tests/golden/`. Current local count: **652 lib tests** across `engine` and
 `terrain-core` (2 ignored), **3** `light_preview`, **30** `terrain_gen` integration tests.
 
 ## Known gaps
@@ -203,9 +213,10 @@ cargo tree -p terrain-core -e normal --no-default-features
 - The renderer's texture array is still placeholder art: per-face references resolve to the eleven
   procedural layers by name, and an unknown name falls back to stone. Skirts on coarse meshes inherit
   the boundary face's layer rather than the side layer.
-- The ring radius is 6, not the spec's 16: a 16-column ring needs section compression or a
-  LOD-residency policy stronger than the current paletted sections before it fits the memory budget.
-- LOD2, skirts on every fine/coarse transition, and a visible loading indicator are not done.
+- Coarse regions are aligned squares, so the outermost column on the positive x/z axes has no
+  complete region and relies on the fine transition buffer; the rest of the rim is covered.
+- Coarse sections carry skirts on all sides, but a dedicated fine/coarse stitch (instead of the
+  extra fine transition ring) and a visible loading indicator are not implemented.
 - No normative older section record exists, so migration fixtures cannot be added yet.
 - The camera and entities are still `f32`/world-space on the CPU. Camera-relative rendering is
   applied, but the spec's `f64` camera migration is not.

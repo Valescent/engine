@@ -88,9 +88,19 @@ const TERRAIN_DEMO_FINE_RADIUS: i32 = 2;
 /// Fine meshes are kept one ring beyond the fine radius, so a column change
 /// does not leave a gap while the new fine mesh builds.
 const TERRAIN_DEMO_FINE_MARGIN: i32 = 1;
+/// Outer radius of the LOD1 band in columns. A complete LOD2 region is a
+/// `4x4` column square entirely beyond this radius.
+///
+/// The radius is one short of the first 4-aligned LOD2 base (`8`), so the
+/// middle band is four columns wide on each side and every LOD2 region inside
+/// the 33-column ring is complete. LOD2 then covers the outer half of the ring
+/// (columns `8..15` and `-16..-9`), which is the area where coarser cells save
+/// the most quads without touching the fine transition.
+const TERRAIN_DEMO_LOD1_RADIUS: i32 = 7;
 /// Minimum interval between coarse LOD uploads, in milliseconds.
 const TERRAIN_DEMO_UPLOAD_MS: u64 = 100;
-/// Minimum interval between whole-ring coarse rebuilds, in milliseconds.
+/// Minimum interval between whole-ring coarse rebuilds, in milliseconds. LOD2
+/// is rebuilt by the same job, so it shares this throttle.
 const TERRAIN_DEMO_COARSE_MS: u64 = 250;
 
 /// Sections per column as a `usize`, for array types (`K1.5`).
@@ -444,8 +454,14 @@ struct TerrainDemo {
     light: BTreeMap<(i32, i32), light2::ColumnLight>,
     /// LOD0 sections, keyed by the column they belong to.
     fine: BTreeMap<(i32, i32), Vec<DemoSection>>,
-    /// LOD1 sections for every complete coarse region in the ring.
+    /// LOD1 sections for every complete 2x2 region in the middle band.
     coarse: Vec<DemoSection>,
+    /// LOD2 sections for every complete 4x4 region beyond the LOD1 band.
+    far: Vec<DemoSection>,
+    /// A deferred LOD2 rebuild is due after an edit. LOD2 is expensive, so it
+    /// waits for the throttled whole-ring coarse job instead of rebuilding in
+    /// the edit path.
+    far_dirty: bool,
     /// Mesher and light material tables, resolved once from the pack.
     materials: mesher2::MaterialProps,
     /// The content pack, for resolving stable names on save (`A5.1`).
@@ -516,6 +532,8 @@ impl TerrainDemo {
             light: BTreeMap::new(),
             fine: BTreeMap::new(),
             coarse: Vec::new(),
+            far: Vec::new(),
+            far_dirty: false,
             materials: demo_materials(),
             pack,
             baselines: BTreeMap::new(),
@@ -729,7 +747,11 @@ impl TerrainDemo {
         if changed {
             self.light = demo_column_light(&self.columns);
             self.fine = demo_fine_all(&self.columns, &self.light, &self.materials);
-            self.coarse = demo_coarse(&self.columns, &self.materials, &self.pack);
+            let (coarse, far) =
+                demo_lod_sets(&self.columns, &self.materials, &self.pack, self.lod_column);
+            self.coarse = coarse;
+            self.far = far;
+            self.far_dirty = false;
             self.select_lod(self.lod_column);
         }
         changed
@@ -772,7 +794,10 @@ impl TerrainDemo {
         self.light = rebuild.light;
         self.apply_patches(rebuild.patches);
         // Coarse regions are disposable: refresh the ones an edit can reach.
+        // LOD2 reads 4x4 column groups and is too expensive for the edit path,
+        // so it is rebuilt by the next throttled whole-ring job.
         self.refresh_coarse_around(&rebuild.columns);
+        self.far_dirty = true;
         self.select_lod(self.lod_column);
     }
 
@@ -802,11 +827,13 @@ impl TerrainDemo {
         self.coarse.sort_by_key(|section| section.origin);
     }
 
-    /// Chooses LOD0 near the player and LOD1 for complete regions beyond.
+    /// Chooses LOD0 near the player, LOD1 for the middle band, and LOD2 far.
     ///
     /// Fine meshes are kept one ring beyond the fine radius as a transition
-    /// buffer. A coarse region is active only when all four of its columns are
-    /// outside that buffer, so fine and coarse never overlap.
+    /// buffer. An LOD1 region is active only when all four of its columns are
+    /// outside that buffer and it is not covered by an active LOD2 region, so
+    /// the three bands never overlap. LOD2 regions are complete 4x4 column
+    /// squares built entirely beyond [`TERRAIN_DEMO_LOD1_RADIUS`].
     fn select_lod(&mut self, player_column: (i32, i32)) {
         self.lod_column = player_column;
         let cutoff = self.fine_radius + TERRAIN_DEMO_FINE_MARGIN;
@@ -821,6 +848,22 @@ impl TerrainDemo {
             .filter(|&(&column, _)| ring(column) <= cutoff)
             .flat_map(|(_, sections)| sections.iter().cloned())
             .collect();
+
+        // Far regions still draw while the player walks toward them; the next
+        // throttled rebuild reclassifies them. All 16 columns must be clear of
+        // the fine buffer, which keeps LOD2 off the LOD0 transition.
+        let far_regions: BTreeSet<(i32, i32)> = self
+            .far
+            .iter()
+            .map(|section| (section.origin[0] / 32, section.origin[2] / 32))
+            .filter(|&(x, z)| (0..4).all(|dx| (0..4).all(|dz| ring((x + dx, z + dz)) > cutoff)))
+            .collect();
+        for section in &self.far {
+            if far_regions.contains(&(section.origin[0] / 32, section.origin[2] / 32)) {
+                active.push(section.clone());
+            }
+        }
+
         for section in &self.coarse {
             let region = (section.origin[0] / 32, section.origin[2] / 32);
             let near = [
@@ -831,7 +874,8 @@ impl TerrainDemo {
             ]
             .into_iter()
             .any(|column| ring(column) <= cutoff);
-            if !near {
+            let far_base = (region.0.div_euclid(4) * 4, region.1.div_euclid(4) * 4);
+            if !near && !far_regions.contains(&far_base) {
                 active.push(section.clone());
             }
         }
@@ -885,6 +929,7 @@ impl TerrainDemo {
             .values()
             .flatten()
             .chain(&self.coarse)
+            .chain(&self.far)
             .map(mesh_bytes)
             .sum();
         sections + light + meshes
@@ -1260,7 +1305,14 @@ fn build_terrain_demo_extent(
         .collect();
     demo.light = demo_column_light(&demo.columns);
     demo.fine = demo_fine_all(&demo.columns, &demo.light, &demo.materials);
-    demo.coarse = demo_coarse(&demo.columns, &demo.materials, &demo.pack);
+    let (coarse, far) = demo_lod_sets(
+        &demo.columns,
+        &demo.materials,
+        &demo.pack,
+        (column.x, column.y),
+    );
+    demo.coarse = coarse;
+    demo.far = far;
     demo.settle_spawn();
     demo.select_lod((column.x, column.y));
 
@@ -1537,6 +1589,7 @@ fn demo_fine_column(
 }
 
 /// Derives and meshes every complete `2x2x2` coarse group (`N1.4`, `N3.2`).
+#[cfg(test)]
 fn demo_coarse(
     columns: &BTreeMap<(i32, i32), Arc<[section::Section; COLUMN_SECTIONS]>>,
     materials: &mesher2::MaterialProps,
@@ -1554,6 +1607,73 @@ fn demo_coarse(
         .collect();
     out.sort_by_key(|section| section.origin);
     out
+}
+
+/// The LOD1 and LOD2 region bases selected for one player column.
+type BandSets = (BTreeSet<(i32, i32)>, BTreeSet<(i32, i32)>);
+
+/// The complete LOD1 and LOD2 region bases for a player column.
+///
+/// LOD2 owns a `4x4` column square only when all 16 columns are resident and
+/// every one of them is beyond [`TERRAIN_DEMO_LOD1_RADIUS`]. LOD1 regions in
+/// that square are dropped, so a later selection can never draw both levels
+/// over the same columns.
+fn coarse_bands(
+    columns: &BTreeMap<(i32, i32), Arc<[section::Section; COLUMN_SECTIONS]>>,
+    player: (i32, i32),
+) -> BandSets {
+    let ring = |column: (i32, i32)| (column.0 - player.0).abs().max((column.1 - player.1).abs());
+    let mut far = BTreeSet::new();
+    for &(x, z) in columns.keys() {
+        if x.rem_euclid(4) != 0 || z.rem_euclid(4) != 0 {
+            continue;
+        }
+        let complete = (0..4).all(|dx| (0..4).all(|dz| columns.contains_key(&(x + dx, z + dz))));
+        let clear =
+            (0..4).all(|dx| (0..4).all(|dz| ring((x + dx, z + dz)) > TERRAIN_DEMO_LOD1_RADIUS));
+        if complete && clear {
+            far.insert((x, z));
+        }
+    }
+
+    let mut coarse = BTreeSet::new();
+    for &(x, z) in columns.keys() {
+        if x.rem_euclid(2) != 0 || z.rem_euclid(2) != 0 {
+            continue;
+        }
+        if far.contains(&(x.div_euclid(4) * 4, z.div_euclid(4) * 4)) {
+            continue;
+        }
+        if columns.contains_key(&(x + 1, z))
+            && columns.contains_key(&(x, z + 1))
+            && columns.contains_key(&(x + 1, z + 1))
+        {
+            coarse.insert((x, z));
+        }
+    }
+    (coarse, far)
+}
+
+/// Builds the LOD1 and LOD2 section sets for `player`.
+fn demo_lod_sets(
+    columns: &BTreeMap<(i32, i32), Arc<[section::Section; COLUMN_SECTIONS]>>,
+    materials: &mesher2::MaterialProps,
+    pack: &content::ContentPack,
+    player: (i32, i32),
+) -> (Vec<DemoSection>, Vec<DemoSection>) {
+    let (coarse_regions, far_regions) = coarse_bands(columns, player);
+    let mut coarse: Vec<DemoSection> =
+        demo_coarse_regions(columns, materials, pack, &coarse_regions)
+            .into_values()
+            .flatten()
+            .collect();
+    let mut far: Vec<DemoSection> = demo_far_regions(columns, materials, pack, &far_regions)
+        .into_values()
+        .flatten()
+        .collect();
+    coarse.sort_by_key(|section| section.origin);
+    far.sort_by_key(|section| section.origin);
+    (coarse, far)
 }
 
 /// Meshes the coarse sections of `regions`.
@@ -1638,6 +1758,94 @@ fn demo_coarse_regions(
             sections.push(DemoSection {
                 origin: [x * 32, j * 64, z * 32],
                 scale: 2,
+                mesh,
+            });
+        }
+        sections.sort_by_key(|section| section.origin);
+        out.insert((x, z), sections);
+    }
+    out
+}
+
+/// Derives and meshes the LOD2 sections of `regions` (`N1.4`, `N3.2`).
+///
+/// A LOD2 region is the `4x4` column square whose base is 4-aligned, and one
+/// section covers `128` blocks, so three cover the column. Every section is
+/// derived with [`lod::downsample4`] from 64 fine sections and meshed with
+/// `mesh_coarse` at [`mesher2::MeshLod::Lod2`] (four blocks per cell), with a
+/// skirt of two LOD2 cells (`8` blocks) on every side. As with LOD1, the
+/// surrounding ring is derived too so a region culls against a real neighbour
+/// when present and falls back to air at the ring edge.
+#[allow(clippy::too_many_lines)]
+fn demo_far_regions(
+    columns: &BTreeMap<(i32, i32), Arc<[section::Section; COLUMN_SECTIONS]>>,
+    materials: &mesher2::MaterialProps,
+    pack: &content::ContentPack,
+    regions: &BTreeSet<(i32, i32)>,
+) -> BTreeMap<(i32, i32), Vec<DemoSection>> {
+    if regions.is_empty() {
+        return BTreeMap::new();
+    }
+    let water = pack.id("core:water").unwrap_or(0);
+    let scatter: Vec<section::BlockId> = pack
+        .records()
+        .iter()
+        .filter(|record| record.render_shape == content::RenderShape::CrossQuad)
+        .filter_map(|record| pack.id(&record.name))
+        .collect();
+
+    let mut expanded = BTreeSet::new();
+    for &(x, z) in regions {
+        for dx in -1..=1_i32 {
+            for dz in -1..=1_i32 {
+                expanded.insert((x + 4 * dx, z + 4 * dz));
+            }
+        }
+    }
+
+    let mut derived: BTreeMap<(i32, i32, i32), section::Section> = BTreeMap::new();
+    for &(x, z) in &expanded {
+        let complete = (0..4).all(|dx| (0..4).all(|dz| columns.contains_key(&(x + dx, z + dz))));
+        if !complete {
+            continue;
+        }
+        for j in 0..(COLUMN_SECTIONS / 4) {
+            let sections: [&section::Section; 64] = std::array::from_fn(|slot| {
+                let dx = i32::try_from(slot & 3).unwrap_or(0);
+                let dz = i32::try_from((slot >> 2) & 3).unwrap_or(0);
+                let dy = (slot >> 4) & 3;
+                &columns[&(x + dx, z + dz)][4 * j + dy]
+            });
+            if let Ok(coarse) = lod::downsample4(&sections, water, &scatter) {
+                derived.insert((x, i32::try_from(j).unwrap_or(0), z), coarse);
+            }
+        }
+    }
+
+    let air = section::Section::uniform(0);
+    let mut out: BTreeMap<(i32, i32), Vec<DemoSection>> = BTreeMap::new();
+    for &(x, z) in regions {
+        let mut sections = Vec::new();
+        for j in 0..(COLUMN_SECTIONS / 4) {
+            let j = i32::try_from(j).unwrap_or(0);
+            let Some(coarse) = derived.get(&(x, j, z)) else {
+                continue;
+            };
+            let neighbours: [Option<&section::Section>; 26] =
+                padded::NEIGHBOUR_ORDER.map(|(dx, dy, dz)| {
+                    derived
+                        .get(&(x + dx * 4, j + dy, z + dz * 4))
+                        .or(Some(&air))
+                });
+            let blocks = padded::PaddedBlocks::from_sections(coarse, &neighbours);
+            let mut mesh = mesher2::mesh_coarse(&blocks, materials, mesher2::MeshLod::Lod2, 0);
+            mesher2::add_skirts(&mut mesh, mesher2::SkirtEdges::ALL, mesher2::MeshLod::Lod2);
+            if mesher2::quad_count(&mesh) == 0 {
+                continue;
+            }
+            sections.push(DemoSection {
+                origin: [x * 32, j * 128, z * 32],
+                scale: 4,
                 mesh,
             });
         }
@@ -1804,6 +2012,8 @@ struct BuildJob {
 /// One whole-ring coarse LOD rebuild.
 struct CoarseJob {
     columns: ColumnMap,
+    /// Player column the LOD1/LOD2 split was built for.
+    player: (i32, i32),
     materials: Arc<mesher2::MaterialProps>,
     pack: Arc<content::ContentPack>,
 }
@@ -1832,7 +2042,11 @@ struct BuiltColumn {
 /// A finished coarse rebuild.
 struct CoarseBuilt {
     snapshot: ColumnMap,
-    sections: Vec<DemoSection>,
+    player: (i32, i32),
+    /// LOD1 sections for the middle band.
+    coarse: Vec<DemoSection>,
+    /// LOD2 sections for the far band.
+    far: Vec<DemoSection>,
 }
 
 enum PoolJob {
@@ -2071,23 +2285,21 @@ fn build_column(job: BuildJob) -> BuiltColumn {
     }
 }
 
-/// Builds the coarse LOD set for the whole resident ring.
+/// Builds the coarse LOD sets for the whole resident ring.
 fn build_coarse(job: CoarseJob) -> CoarseBuilt {
-    let mut regions = BTreeSet::new();
-    for &(x, z) in job.columns.keys() {
-        if x.rem_euclid(2) == 0 && z.rem_euclid(2) == 0 {
-            regions.insert((x, z));
-        }
-    }
-    let mut sections: Vec<DemoSection> =
-        demo_coarse_regions(&job.columns, &job.materials, &job.pack, &regions)
-            .into_values()
-            .flatten()
-            .collect();
-    sections.sort_by_key(|section| section.origin);
+    let (coarse, far) = demo_lod_sets(&job.columns, &job.materials, &job.pack, job.player);
+    debug!(
+        player = ?job.player,
+        coarse = coarse.len(),
+        far = far.len(),
+        columns = job.columns.len(),
+        "terrain coarse built"
+    );
     CoarseBuilt {
         snapshot: job.columns,
-        sections,
+        player: job.player,
+        coarse,
+        far,
     }
 }
 
@@ -3294,7 +3506,8 @@ impl App {
         }
 
         // Coarse LOD is disposable and rebuilt whole; keep one job in flight and
-        // let it lag a frame behind the fine ring.
+        // let it lag a frame behind the fine ring. LOD2 shares this job and
+        // throttle; an edit only marks it dirty so the edit path stays cheap.
         let now = Instant::now();
         let (dirty, busy, elapsed, changed) =
             self.terrain_ring
@@ -3304,23 +3517,31 @@ impl App {
                         .terrain_demo
                         .as_ref()
                         .is_some_and(|demo| demo.lod_column != player_column);
+                    let far_dirty = self
+                        .terrain_demo
+                        .as_ref()
+                        .is_some_and(|demo| demo.far_dirty);
                     (
-                        ring.coarse_dirty,
+                        ring.coarse_dirty || far_dirty,
                         ring.coarse_busy,
                         now.saturating_duration_since(ring.last_coarse),
                         changed,
                     )
                 });
         if changed {
+            if let Some(ring) = self.terrain_ring.as_mut() {
+                ring.coarse_dirty = true;
+            }
             self.upload_demo();
         }
-        if dirty && !busy && elapsed >= Duration::from_millis(TERRAIN_DEMO_COARSE_MS) {
+        if (dirty || changed) && !busy && elapsed >= Duration::from_millis(TERRAIN_DEMO_COARSE_MS) {
             let (Some(demo), Some(ring)) = (self.terrain_demo.as_ref(), self.terrain_ring.as_mut())
             else {
                 return centre_ready;
             };
             let job = PoolJob::Coarse(CoarseJob {
                 columns: demo.columns.clone(),
+                player: player_column,
                 materials: Arc::clone(&ring.assets.materials),
                 pack: Arc::clone(&ring.assets.pack),
             });
@@ -3429,18 +3650,16 @@ impl App {
                 }
             }
             PoolResult::Coarse(coarse) => {
-                let intact = self
-                    .terrain_demo
-                    .as_ref()
-                    .is_some_and(|demo| coarse_snapshot_intact(&demo.columns, &coarse.snapshot));
-                let mut apply = None;
-                if intact {
-                    apply = Some(coarse.sections);
-                }
+                let intact = self.terrain_demo.as_ref().is_some_and(|demo| {
+                    demo.lod_column == coarse.player
+                        && coarse_snapshot_intact(&demo.columns, &coarse.snapshot)
+                });
                 if let Some(demo) = &mut self.terrain_demo {
-                    if let Some(sections) = apply {
+                    if intact {
                         let changed = demo.columns.len() != coarse.snapshot.len();
-                        demo.coarse = sections;
+                        demo.coarse = coarse.coarse;
+                        demo.far = coarse.far;
+                        demo.far_dirty = false;
                         demo.select_lod(demo.lod_column);
                         if let Some(ring) = &mut self.terrain_ring {
                             ring.coarse_busy = false;
@@ -3658,6 +3877,7 @@ impl App {
                 let ready = demo.light.len();
                 let fine = demo.fine.len();
                 let coarse: usize = demo.coarse.len();
+                let lod2: usize = demo.far.len();
                 let quads = demo.quads;
                 let bytes = demo.footprint_bytes();
                 let in_flight = self
@@ -3666,7 +3886,7 @@ impl App {
                     .map_or(0, |ring| ring.in_flight.len());
                 info!(
                     wanted,
-                    resident, ready, fine, coarse, quads, in_flight, bytes, "terrain ring"
+                    resident, ready, fine, coarse, lod2, quads, in_flight, bytes, "terrain ring"
                 );
                 let full = resident >= wanted;
                 if let Some(ring) = &mut self.terrain_ring
@@ -4356,6 +4576,99 @@ mod tests {
                 .iter()
                 .any(|section| !section.mesh.skirts.is_empty()),
             "coarse meshes carry skirts for the fine boundary"
+        );
+    }
+
+    fn stub_section(origin: [i32; 3], scale: u32) -> DemoSection {
+        DemoSection {
+            origin,
+            scale,
+            mesh: mesher2::SectionMesh::default(),
+        }
+    }
+
+    #[test]
+    fn lod2_selects_the_far_band_without_overlapping_lod1() {
+        let mut demo =
+            build_terrain_demo(0x5EED, IVec2::new(0, 0), 0).expect("the v1 terrain builds");
+        demo.origin_column = IVec2::ZERO;
+        demo.fine.clear();
+        demo.coarse = vec![
+            stub_section([4 * 32, 0, 4 * 32], 2),
+            stub_section([8 * 32, 0, 8 * 32], 2),
+            stub_section([10 * 32, 0, 10 * 32], 2),
+        ];
+        demo.far = vec![
+            stub_section([8 * 32, 0, 8 * 32], 4),
+            stub_section([0, 0, 0], 4),
+        ];
+        demo.select_lod((0, 0));
+
+        let origins: BTreeSet<[i32; 3]> = demo.sections.iter().map(|s| s.origin).collect();
+        assert!(origins.contains(&[4 * 32, 0, 4 * 32]), "middle LOD1 region");
+        assert!(
+            origins.contains(&[8 * 32, 0, 8 * 32]),
+            "far LOD2 region replaces its LOD1 copy"
+        );
+        assert!(
+            !origins.contains(&[10 * 32, 0, 10 * 32]),
+            "LOD1 inside an active LOD2 square is suppressed"
+        );
+        assert!(
+            !origins.contains(&[0, 0, 0]),
+            "LOD2 touching the fine buffer is suppressed"
+        );
+        assert_eq!(demo.sections.len(), 2);
+        assert_eq!(
+            demo.far
+                .iter()
+                .find(|s| s.origin == [8 * 32, 0, 8 * 32])
+                .map(|s| s.scale),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn lod2_regions_are_complete_and_skirted() {
+        let mut columns = BTreeMap::new();
+        for x in 0..4 {
+            for z in 0..4 {
+                let stack: [section::Section; COLUMN_SECTIONS] =
+                    std::array::from_fn(|_| section::Section::uniform(1));
+                columns.insert((x, z), Arc::new(stack));
+            }
+        }
+        let regions = BTreeSet::from([(0, 0)]);
+        let far = demo_far_regions(
+            &columns,
+            &demo_materials(),
+            &content::v1_default(),
+            &regions,
+        );
+        let sections = far.get(&(0, 0)).expect("the 4x4 region is complete");
+        assert_eq!(sections.len(), 3, "one 128-block section per third");
+        assert_eq!(
+            sections.iter().map(|s| s.origin).collect::<Vec<_>>(),
+            vec![[0, 0, 0], [0, 128, 0], [0, 256, 0]]
+        );
+        for section in sections {
+            assert_eq!(section.scale, 4);
+            assert!(mesher2::quad_count(&section.mesh) > 0);
+            assert!(
+                !section.mesh.skirts.is_empty(),
+                "LOD2 sections are skirted on every side"
+            );
+        }
+        assert!(
+            demo_far_regions(
+                &columns,
+                &demo_materials(),
+                &content::v1_default(),
+                &BTreeSet::from([(4, 4)])
+            )
+            .get(&(4, 4))
+            .is_none_or(Vec::is_empty),
+            "a region with missing columns is not derived"
         );
     }
 

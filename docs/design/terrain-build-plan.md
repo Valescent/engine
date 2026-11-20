@@ -107,7 +107,7 @@ still unimplemented, in dependency order. Nothing here blocks the terrain engine
 | 2 | Persistence tests: migration fixtures (v1/v2/v3), corruption fuzz, kill-and-resume | Section round trip, rotation, temp recovery, torn tail, corrupt frame, world load order, worker ordering, revision advancement, journal replay, prefix trimming, repair actions, v1 header upgrade, migration resume/report, corruption fuzz, journal truncation at every byte, and repeated crash/save/reopen pass | Add migration fixtures for older record formats |
 | 3 | Frozen `versions.toml` + deprecation dialog | Policy specified (T1.12); no table or UI | Needed before the first generator bump |
 | 4 | Panic/deadline wrapper around jobs (`S1.2`, `S1.3`) | Jobs are plain functions; no watchdog | Wrap with `catch_unwind` and the soft deadline |
-| 5 | Demo integration: real light, texture refs, collision, streaming, LOD | `TERRAIN_DEMO` uses real column light, collision, edits, per-edit saves, and distance LOD1; tiles stream with prefetched neighbours; per-face texture references resolve to procedural layers (`ADR-0015`) | An asset pipeline to replace the placeholder layers |
+| 5 | Demo integration: real light, texture refs, collision, streaming, LOD | `TERRAIN_DEMO` uses real column light, collision, edits, per-edit saves, and distance LOD0/LOD1/LOD2; tiles stream with prefetched neighbours; per-face texture references resolve to procedural layers (`ADR-0015`) | An asset pipeline to replace the placeholder layers |
 | 6 | World-mode hydrology wiring | `Terrain::hydro_tile` returns a view of one `WorldHydro` solve, shared by every worker; generator version 2 | None |
 | 7 | Camera-relative rendering (§14.3) | Specified; camera is world-space | Camera-wide change; the draw path already matches the current convention |
 | 8 | `terrain-gen map`, report bundle, `calibrate-blend`, PR counter gate | `map --seed --from --size --cell` (ASCII surface map, `--json`); `verify --report <dir>` writes `manifest.json`, `verify.json`, and `verify.txt`; `calibrate-blend` measures W_blocks per biome pair; `counters --tier pr` gates a deterministic baseline in CI | Tune the biome centres/weights so the measured medians reach 20-28 and p90 reaches <=64 |
@@ -140,10 +140,10 @@ deliberately exits 1 when a scenario exceeds its budget.
 | W10 diagnostics | done; pinned metrics, ledger cap, shed ladder, overlay model |
 | W12 revisions | done (`src/revisions.rs`) |
 | W13 padding | done (`src/padded.rs`); one padded layout for blocks and light |
-| Residency, streaming | `src/residency.rs` owns the pure ring policy (`plan_ring`, `RingBudget`); the demo drives it over a column ring with LOD1 coarse meshes |
+| Residency, streaming | `src/residency.rs` owns the pure ring policy (`plan_ring`, `RingBudget`); the demo drives it over a column ring with LOD0/LOD1/LOD2 coarse meshes |
 | Edit log, header | done as records and framing (`src/editlog.rs`, `src/header.rs`); journal IO thread and save writer pending |
 | Pipeline | done (`src/pipeline.rs`): `F1.5` order, graph, tile caches, column/section, features wired |
-| LOD | derive and skirts done (`src/lod.rs`, `src/mesher2.rs`); the demo derives LOD1 for complete octant regions away from the player, with per-section scale in the draw path |
+| LOD | derive and skirts done (`src/lod.rs`, `src/mesher2.rs`); the demo derives LOD1 for complete 2x2 regions and LOD2 for complete 4x4 regions away from the player, with per-section scale in the draw path |
 | Renderer | not wired: new quad path in progress |
 | Wave 3 (hardening) | not started: saves, migration, fuzz, soak |
 
@@ -165,7 +165,7 @@ gates pass on a tree that compiles.
 | W21 | Journal commit policy + writer | `src/editlog.rs` | **done** — 19 tests |
 | W22 | Block-id resolution + surface stack wiring | `crates/terrain-core/src/pipeline.rs`, `crates/terrain-core/tests/golden/terrain-v1.golden` | **done** — `TerrainMaterials`, `with_pack`, seabed/snow/bedrock wired, goldens regenerated once |
 | W23 | Canonical section record encode/decode | `src/section.rs` | **done** — v2 `TSEC` layout, 22 tests; bin adoption in progress |
-| W24 | Terrain demo wiring (`TERRAIN_DEMO=1`) | `src/lib.rs`, `src/renderer.rs` | **done** — column ring at the spec radius 16 (1,089 columns), real column light, collision, async edits, per-edit saves; LOD0 within two columns and LOD1 beyond; per-face texture refs (`ADR-0015`); first column ~0.8 s, full ring ~45 s, ~126 MB section bytes, ~590 MB peak; ~24 ms edit rebuild |
+| W24 | Terrain demo wiring (`TERRAIN_DEMO=1`) | `src/lib.rs`, `src/renderer.rs` | **done** — column ring at the spec radius 16 (1,089 columns), real column light, collision, async edits, per-edit saves; LOD0 within two columns, LOD1 through the middle band, LOD2 far; per-face texture refs (`ADR-0015`); first column ~0.8 s, full ring ~56 s, ~118 MB ring footprint, ~570 MB peak, ~862k quads; ~24 ms edit rebuild |
 | W25 | Residency-driven column ring | `src/residency.rs`, `src/lib.rs` | **done** — `plan_ring` (bounded generate/build/evict), neighbour relight and border remesh, `Arc` snapshot validation, saved/journal replay before streaming, player frozen until the centre column is ready |
 
 Queued next:
@@ -195,7 +195,7 @@ prove; none is silently accepted.
 | W20 | `uniform_writable` is now the pipeline gate (the lead applied the call-site change), so a canopy crossing a section top and an ore entering uniform stone both work | None; covered by tests |
 | W14 renderer | Draw path is additive and naga-validated; `TERRAIN_DEMO=1` now builds a 96×96 patch (45 emitting sections, ~2.35 s) and submits it once. Opaque culling is off (cross-quads); origins are world-space because the camera has no floating origin | Review on a real run; revisit camera-relative when §14.3 lands |
 | W19 cracks | White specks in caves were **T-junction rasterisation cracks**, not lighting and not the highlight. Cell coverage is exact (`every_exposed_face_is_covered_once`: 0 holes, 0 overlaps per face plane); the gap was sub-cell. Fixed by expanding quads 0.001 blocks in the vertex shader (`M3.1` note) | Do not remove the overlap; a future shadow pass must account for it |
-| W24 demo | Real `light2` per column (pack-driven `sky_atten`/`opacity`/emission), collision against the patch, spawn on the patch surface; per-face texture references resolve to the renderer's 11 procedural layers; distance LOD1 and tile streaming are wired | Texture art and residency-driven ring streaming are the follow-ups |
+| W24 demo | Real `light2` per column (pack-driven `sky_atten`/`opacity`/emission), collision against the patch, spawn on the patch surface; per-face texture references resolve to the renderer's 11 procedural layers; distance LOD1/LOD2 and tile streaming are wired | Texture art and residency-driven ring streaming are the follow-ups |
 | W15 CLI | `verify`/`replay` are real and use the canonical record; unknown names are warnings, corrupt records are per-section drift, exit codes unchanged. `MAX_KNOWN_BLOCK` was hardcoded to 8 and rejected ids ≥15; it now derives from the pack | None |
 | Goldens | All six fixtures changed when ids were resolved (expected: `Section::content_hash` is over ids); two updates produced identical bytes | One more regeneration only if a later change alters output |
 | W23 section record | Re-encoding a **degraded** section would replace original unknown names with `?unknown:<id>` (`T1.6`) | Papered over by policy, not code: a world with unknown names loaded is **read-only** (no edits, no journal, no saves), so the round trip stays lossless. A name-override map is optional polish, not required |
@@ -210,18 +210,19 @@ prove; none is silently accepted.
 
 ## 8. Remaining roadmap (2026-11-20)
 
-The demo now has column-ring streaming, asynchronous first-column startup, ~24 ms edits, LOD1,
+The demo now has column-ring streaming, asynchronous first-column startup, ~24 ms edits, LOD0/LOD1/LOD2,
 persistence, migration reports, and repair. The remaining items are larger than a single patch;
 each entry says why and what the first safe step is.
 
 Landed since the 2026-11-20 review: world-mode hydrology (generator version 2), camera-relative
-rendering with a 2^20 precision test, the spec-radius column ring (1,089 columns), `calibrate-blend`
+rendering with a 2^20 precision test, the spec-radius column ring (1,089 columns), LOD2 in the far
+band (measured ~862k quads and ~118 MB versus ~1.955M and ~126 MB for LOD1 only), `calibrate-blend`
 plus the PR counter gate, and the `terrain-core` split with a CI crate-graph check.
 
 | Item | Why it is not a small change | First safe step |
 |---|---|---|
 | Texture art pipeline | `ADR-0015` and the per-face references are done; the renderer still builds eleven procedural placeholder layers, and a real pack needs an atlas format, mipmap policy, and visual baselines. | Define the atlas/mipmap policy, then generate layers from authored tiles. |
 | Biome blend data | `calibrate-blend` reports medians 43-72 at `blend_width = 0.05` (target 20-28) and p90 117-278 (target <=64); `0.025` gives 26-39 and p90 117-161. | Tune the biome centres/weights, then add the gradient-normalising term, with a generator version bump and fresh goldens. |
-| Ring memory headroom | 1,089 columns cost ~126 MB of section bytes and ~590 MB peak against a ~600 MB target. | Add a compression or LOD-residency pass before the rim grows. |
+| Ring memory headroom | 1,089 columns cost ~118 MB of ring footprint and ~570 MB peak against a ~600 MB target. | Add a compression or LOD-residency pass before the rim grows. |
 | Migration fixtures for older section formats | There is no normative older section record. Inventing v1 bytes would contradict `docs/dev/save-format.md`, whose version 2 record is the only layout the decoder knows. | Add a format bump + ADR defining v1, then fixtures and `migration.journal` transforms against it. Until then, `terrain-gen migrate` canonicalises v2 records and upgrades headers. |
-| LOD2 and transition skirts | The ring ships LOD0/LOD1; LOD2 and skirts at every fine/coarse transition are not done. | Wire LOD2 into the ring's coarse selection and measure the saved section bytes. |
+| LOD transition stitching | LOD2 is wired into the ring's coarse selection; coarse sections skirt all four sides, and the LOD0 edge still uses the extra fine transition ring rather than a stitch. The positive-axis rim column has no complete aligned coarse region. | Add a dedicated fine/coarse stitch and cover the positive rim column with an explicit partial region. |
