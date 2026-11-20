@@ -165,7 +165,7 @@ gates pass on a tree that compiles.
 | W21 | Journal commit policy + writer | `src/editlog.rs` | **done** — 19 tests |
 | W22 | Block-id resolution + surface stack wiring | `crates/terrain-core/src/pipeline.rs`, `crates/terrain-core/tests/golden/terrain-v1.golden` | **done** — `TerrainMaterials`, `with_pack`, seabed/snow/bedrock wired, goldens regenerated once |
 | W23 | Canonical section record encode/decode | `src/section.rs` | **done** — v2 `TSEC` layout, 22 tests; bin adoption in progress |
-| W24 | Terrain demo wiring (`TERRAIN_DEMO=1`) | `src/lib.rs`, `src/renderer.rs` | **done** — column ring at the spec radius 16 (1,089 columns), real column light, collision, async edits, per-edit saves; LOD0 within two columns, LOD1 through the middle band, LOD2 far; per-face texture refs (`ADR-0015`); first column ~0.8 s, full ring ~56 s, ~118 MB ring footprint, ~570 MB peak, ~862k quads; ~24 ms edit rebuild |
+| W24 | Terrain demo wiring (`TERRAIN_DEMO=1`) | `src/lib.rs`, `src/renderer.rs` | **done** — column ring follows the configured render distance (default 12 → 625 columns; cap 16 → 1,089), real column light, collision, async edits, per-edit saves; LOD0 within two columns, LOD1 through the middle band, LOD2 far; per-face texture refs (`ADR-0015`); first column ~0.8 s, full ring ~59 s at 12 / ~79 s at 16, ~71 MB / ~724k quads at 12 (peak ~491 MB) and ~118 MB / ~863k quads at 16 (peak ~686 MB); ~24 ms edit rebuild |
 | W25 | Residency-driven column ring | `src/residency.rs`, `src/lib.rs` | **done** — `plan_ring` (bounded generate/build/evict), neighbour relight and border remesh, `Arc` snapshot validation, saved/journal replay before streaming, player frozen until the centre column is ready |
 
 Queued next:
@@ -174,8 +174,8 @@ Queued next:
    `demo_texture_layer` still maps names onto eleven procedural placeholder layers.
 2. **Persistence follow-ups:** a decoder for an older section record format, and a richer world-repair dialog.
 
-Verification at the 2026-11-20 ring merge point: `fmt`, `clippy`, `cargo test` (653 lib, 2 ignored,
-3 light_preview, 24 integration) and `golden check` exit 0. Start the demo with `TERRAIN_DEMO=1`
+Verification at the 2026-11-20 ring merge point: `fmt`, `clippy`, `cargo test` (658 lib, 2 ignored,
+3 light_preview, 30 integration) and `golden check` exit 0. Start the demo with `TERRAIN_DEMO=1`
 and `cargo run --bin engine`; it needs `world/seed` (or `ENGINE_STRESS_SCENE=1`).
 
 ## 7. Review notes on landed work
@@ -211,14 +211,15 @@ persistence, migration reports, and repair. The remaining items are larger than 
 each entry says why and what the first safe step is.
 
 Landed since the 2026-11-20 review: world-mode hydrology (generator version 2), camera-relative
-rendering with a 2^20 precision test, the spec-radius column ring (1,089 columns), LOD2 in the far
-band (measured ~862k quads and ~118 MB versus ~1.955M and ~126 MB for LOD1 only), `calibrate-blend`
-plus the PR counter gate, the per-column biome dither (generator version 3), and the
-`terrain-core` split with a CI crate-graph check.
+rendering with a 2^20 precision test, the render-distance column ring (default 12 → 625 columns,
+cap 16 → the spec's 1,089), LOD2 in the far band (measured ~724k quads and ~71 MB at the default
+versus ~863k and ~118 MB at the cap; ~1.955M and ~126 MB for LOD1 only), `calibrate-blend` plus the
+PR counter gate, the per-column biome dither (generator version 3), and the `terrain-core` split
+with a CI crate-graph check.
 
 | Item | Why it is not a small change | First safe step |
 |---|---|---|
 | Texture art pipeline | `ADR-0015` and the per-face references are done; the renderer still builds eleven procedural placeholder layers, and a real pack needs an atlas format, mipmap policy, and visual baselines. | Define the atlas/mipmap policy, then generate layers from authored tiles. |
-| Ring memory headroom | 1,089 columns cost ~118 MB of ring footprint and ~570 MB peak against a ~600 MB target. | Add a compression or LOD-residency pass before the rim grows. |
+| Ring memory headroom | The default 12 costs ~71 MB of ring footprint and ~491 MB peak, under the ~600 MB target. The 16 cap costs ~118 MB and ~686 MB peak, so the default leaves headroom while the spec ring is the pressure point. | Keep the default at 12; add a compression or LOD-residency pass before raising it or before the rim grows. |
 | Migration fixtures for older section formats | There is no normative older section record. Inventing v1 bytes would contradict `docs/dev/save-format.md`, whose version 2 record is the only layout the decoder knows. | Add a format bump + ADR defining v1, then fixtures and `migration.journal` transforms against it. Until then, `terrain-gen migrate` canonicalises v2 records and upgrades headers. |
 | LOD transition stitching | LOD2 is wired into the ring's coarse selection; coarse sections skirt all four sides, and the LOD0 edge still uses the extra fine transition ring rather than a stitch. The positive-axis rim column has no complete aligned coarse region. | Add a dedicated fine/coarse stitch and cover the positive rim column with an explicit partial region. |

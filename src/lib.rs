@@ -91,11 +91,12 @@ const TERRAIN_DEMO_FINE_MARGIN: i32 = 1;
 /// Outer radius of the LOD1 band in columns. A complete LOD2 region is a
 /// `4x4` column square entirely beyond this radius.
 ///
-/// The radius is one short of the first 4-aligned LOD2 base (`8`), so the
-/// middle band is four columns wide on each side and every LOD2 region inside
-/// the 33-column ring is complete. LOD2 then covers the outer half of the ring
-/// (columns `8..15` and `-16..-9`), which is the area where coarser cells save
-/// the most quads without touching the fine transition.
+/// The radius is one short of the first 4-aligned LOD2 base (`8`), so every
+/// complete LOD2 region inside the ring is clear of the fine transition. At the
+/// spec cap (`render_distance_chunks = 16`) LOD2 covers the outer half of the
+/// 33-column ring (columns `8..15` and `-16..-9`); at the default 12 the `8..11`
+/// band still forms complete far squares; at 8 there is no complete far square
+/// and the middle band falls back to LOD1.
 const TERRAIN_DEMO_LOD1_RADIUS: i32 = 7;
 /// Minimum interval between coarse LOD uploads, in milliseconds.
 const TERRAIN_DEMO_UPLOAD_MS: u64 = 100;
@@ -208,7 +209,8 @@ pub fn run() -> Result<(), RunError> {
         let world_hydro = pipeline::Terrain::new(seed)?.solve_world_hydro()?;
         let replay_terrain =
             pipeline::Terrain::new(seed)?.with_world_hydro(Arc::clone(&world_hydro));
-        let mut demo = TerrainDemo::empty(seed, player_column, world_hydro);
+        let view_radius = residency::demo_view_radius(config.render_distance_chunks);
+        let mut demo = TerrainDemo::empty(seed, player_column, view_radius, world_hydro);
         demo.revision = last_saved;
         let save = match world.take() {
             Some(world) => match world_save::SaveWorker::start(world, 64) {
@@ -526,7 +528,12 @@ impl crate::player::BlockSource for TerrainDemo {
 impl TerrainDemo {
     /// An empty ring centred on `column`, ready to stream columns into.
     #[allow(clippy::cast_precision_loss)]
-    fn empty(seed: u64, column: IVec2, world_hydro: Arc<crate::hydro::WorldHydro>) -> Self {
+    fn empty(
+        seed: u64,
+        column: IVec2,
+        view_radius: i32,
+        world_hydro: Arc<crate::hydro::WorldHydro>,
+    ) -> Self {
         let pack = content::v1_default();
         let solid = solid_table(&pack);
         let air = pack.id("core:air").unwrap_or(0);
@@ -534,7 +541,7 @@ impl TerrainDemo {
         Self {
             seed,
             origin_column: column,
-            view_radius: residency::DEMO_VIEW_RADIUS,
+            view_radius,
             fine_radius: TERRAIN_DEMO_FINE_RADIUS,
             columns: BTreeMap::new(),
             light: BTreeMap::new(),
@@ -1299,7 +1306,12 @@ fn build_terrain_demo_extent(
     }
 
     // `L1.1`/`L2.4`: light from the content pack, one job per column.
-    let mut demo = TerrainDemo::empty(seed, column, std::sync::Arc::clone(&world_hydro));
+    let mut demo = TerrainDemo::empty(
+        seed,
+        column,
+        residency::DEMO_VIEW_RADIUS,
+        std::sync::Arc::clone(&world_hydro),
+    );
     demo.materials = materials;
     demo.pack = pack;
     demo.solid = solid_table(&demo.pack);
@@ -4681,6 +4693,33 @@ mod tests {
     }
 
     #[test]
+    fn coarse_bands_follow_a_smaller_ring() {
+        let columns = |radius: i32| {
+            let mut columns = BTreeMap::new();
+            for x in -radius..=radius {
+                for z in -radius..=radius {
+                    let stack: [section::Section; COLUMN_SECTIONS] =
+                        std::array::from_fn(|_| section::Section::uniform(0));
+                    columns.insert((x, z), Arc::new(stack));
+                }
+            }
+            columns
+        };
+
+        // Default 12: complete squares at base 8 and -12 are far.
+        let (coarse12, far12) = coarse_bands(&columns(12), (0, 0));
+        for base in [(8, 8), (8, -12), (-12, 8), (-12, -12)] {
+            assert!(far12.contains(&base), "missing far base {base:?}");
+        }
+        assert!(!coarse12.is_empty(), "the middle band still owns regions");
+
+        // Radius 8: no 4x4 square is both complete and beyond the LOD1 radius.
+        let (coarse8, far8) = coarse_bands(&columns(8), (0, 0));
+        assert!(far8.is_empty(), "LOD2 has no complete region at radius 8");
+        assert!(!coarse8.is_empty(), "the ring falls back to LOD1");
+    }
+
+    #[test]
     fn the_demo_tile_is_lod_selected_at_spawn() {
         let (mut demo, replay) =
             build_terrain_demo_extent(0x5EED, IVec2::new(0, 0), 0, 3, 0, 3, &[], &[], 0)
@@ -4795,7 +4834,7 @@ mod tests {
             .expect("the description compiles")
             .solve_world_hydro()
             .expect("the hydrology solves");
-        let demo = TerrainDemo::empty(seed, column, hydro);
+        let demo = TerrainDemo::empty(seed, column, residency::DEMO_VIEW_RADIUS, hydro);
         let mut app = App::with_world(World::default(), true);
         app.terrain_ring = Some(RingStream::new(&demo, Vec::new(), 2));
         app.terrain_demo = Some(demo);
@@ -4899,7 +4938,7 @@ mod tests {
             .expect("the description compiles")
             .solve_world_hydro()
             .expect("the hydrology solves");
-        let mut demo = TerrainDemo::empty(seed, column, hydro);
+        let mut demo = TerrainDemo::empty(seed, column, residency::DEMO_VIEW_RADIUS, hydro);
         demo.view_radius = 0;
         for key in [(0, 0), (5, 0), (6, 0)] {
             demo.insert_column(key, std::array::from_fn(|_| section::Section::uniform(0)));
@@ -5690,6 +5729,34 @@ mod tests {
 
         assert_eq!(app.camera.far_plane(), 448.0);
         assert_eq!(app.camera.fog_end(), 384.0);
+    }
+
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn the_ring_radius_never_exceeds_the_camera_visible_radius() {
+        let mut app = App::new(demo_world());
+        for render_distance in [8, 12, 16, 24, 32] {
+            app.config.render_distance_chunks = render_distance;
+            app.apply_render_distance();
+
+            let radius = residency::demo_view_radius(render_distance);
+            let ring_extent = radius as f32 * 32.0;
+            assert!(
+                ring_extent <= app.camera.fog_end(),
+                "radius {radius} ends at {ring_extent} blocks, past fog end {}",
+                app.camera.fog_end()
+            );
+            assert!(
+                ring_extent <= app.camera.far_plane(),
+                "radius {radius} ends at {ring_extent} blocks, past far plane {}",
+                app.camera.far_plane()
+            );
+        }
+
+        // The default selects the 625-column ring; the spec distance selects
+        // the 1,089-column cap.
+        assert_eq!(residency::demo_view_radius(12), 12);
+        assert_eq!(residency::demo_view_radius(16), residency::DEMO_VIEW_RADIUS);
     }
 
     #[test]
