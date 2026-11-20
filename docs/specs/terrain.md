@@ -1452,8 +1452,13 @@ contradict a MUST elsewhere in this document.
 - **The full tooling bundle is deferred.** `verify --report <dir>` writes a manifest plus JSON/text; the zip bundle is not implemented. `calibrate-blend` and the PR counter gate are implemented.
 - **Biome blend calibration is measured, not met.** `terrain-gen calibrate-blend` reports medians 43-72 blocks at `blend_width = 0.05` (target 20-28) and p90 117-278 (target <=64); `0.025` gives medians 26-39 but p90 117-161. Closing the gap needs tuned biome centres/weights and the gradient-normalising term, which is a generator version bump. The command is diagnostic and is not a CI gate.
 - **Section-record migration has no older format.** Version 2 records are canonicalised and headers upgrade v1 to v2; there is no normative v1 section record to decode or migrate.
-- **Camera-relative rendering is specified but not applied** (§14.3). The camera is still world-space;
-  the terrain draw path deliberately matches the existing convention so the two agree.
+- **Camera-relative rendering is applied; the CPU camera is still `f32`** (§14.3). Both draw paths
+  subtract one per-frame render origin (the camera's block position) from every submitted section
+  and chunk origin and from the view matrix; fog and culling use the same relative frame, and
+  picking, collision, and streaming stay world-space. A precision test at 2^20 blocks covers both
+  paths. The spec's `f64` camera and entity positions are not implemented, so very large worlds
+  still depend on the `f32` camera's block-aligned precision; see
+  [Terrain v1 runtime](../dev/terrain-v1.md#camera-relative-rendering).
 - **The headless tool links the engine crate**, so it also links `wgpu`. The crate split that would
   let CI enforce "no GPU in `terrain-gen`" is deferred (§19).
 - **`pipeline::AIR`/`WATER`** remain as tool-facing constants, pinned by a test; generation reads ids

@@ -98,6 +98,36 @@ ring would need a stronger compression or LOD residency story before it fits the
   offsets, cross quads, and UVs. Culling uses `32 * scale`.
 - `section_revision` includes scale, so an origin changing detail level re-uploads.
 
+## Camera-relative rendering
+
+Both draw paths share one convention (spec 14.3):
+
+- Per frame `Camera::render_view()` chooses `render_origin = floor(camera_position)` as an
+  `IVec3` and builds the view matrix from `camera_position - render_origin`. The frustum is
+  extracted from that same relative matrix.
+- Terrain sections keep their world-space `[i32; 3]` keys. The per-section origin uniform is
+  `section_world_origin - render_origin`, computed in `i64` and only then cast to `f32`;
+  `terrain_draw.wgsl` adds section-local quad coordinates.
+- Legacy chunks keep their `ChunkCoord` keys. The chunk origin uniform is
+  `chunk_world_origin - render_origin`; `shader.wgsl` adds only chunk-local cell coordinates.
+- `camera_position` in the frame uniform is the camera minus the same origin. Both fragment
+  shaders compute fog from `length(relative_world - relative_camera)`, which equals the Euclidean
+  world distance. The frame uniform also carries the world render origin, used only by the legacy
+  water shader to keep its wave phase anchored to world x/z after rebasing.
+- Culling subtracts the origin before testing section and chunk AABBs against the relative
+  frustum. The block highlight is uploaded in relative space too and is rebuilt when the origin
+  moves.
+- Crossing a block boundary rewrites the resident origin uniforms in place (`COPY_DST`). No CPU
+  world position changes: picking, collision, streaming, saves, and the ring all stay in world
+  space. The CPU camera is still a world-space `Vec3` (`f32`); `RenderView` is the only relative
+  representation.
+
+`camera::tests::camera_relative_precision_at_two_to_the_twenty` places the camera at
+`(2^20 + 0.5, 64.5, 2^20 + 0.5)`. A nearby section origin is `(32, -32, -32)` relative to the
+camera and a chunk is `(0, -32, 0)`; the f32 relative view-projection agrees with an f64
+world-space reference to `5.96e-8` in NDC. The same test confirms a raycast returns the world
+block and the player lands at world `y = 64`.
+
 ## Column ring
 
 - `residency::plan_ring` is the pure frame decision: given the player column, resident columns,
@@ -159,7 +189,7 @@ cargo test --locked
 cargo run --locked --quiet --bin terrain-gen -- golden check
 ```
 
-Current local count: **643 lib tests** (2 ignored), **3** `light_preview`, **30** `terrain_gen`
+Current local count: **647 lib tests** (2 ignored), **3** `light_preview`, **30** `terrain_gen`
 integration tests.
 
 ## Known gaps
@@ -171,4 +201,5 @@ integration tests.
   LOD-residency policy stronger than the current paletted sections before it fits the memory budget.
 - LOD2, skirts on every fine/coarse transition, and a visible loading indicator are not done.
 - No normative older section record exists, so migration fixtures cannot be added yet.
-- Camera-relative rendering (spec 14.3) is not applied.
+- The camera and entities are still `f32`/world-space on the CPU. Camera-relative rendering is
+  applied, but the spec's `f64` camera migration is not.
