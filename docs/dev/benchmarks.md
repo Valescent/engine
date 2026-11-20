@@ -501,7 +501,52 @@ With world-mode hydrology (generator version 2) the demo solves hydrology once a
 - Startup before the tile alignment and worker fan-out was 5.14 s; generation was 3.54 s serial.
 - `stream` prefetch builds one tile (~0.9 s) at a time while the frame loop stays at ~60 FPS.
 
+## Column ring cold fill (2026-11-20)
 
+Release build, Ryzen 5 7600 (6 cores / 12 logical), Windows 11, RTX 4060. The demo streams the
+16-column ring (1,089 columns) with 12 worker threads:
+
+```console
+cargo build --release --locked --no-default-features
+$env:TERRAIN_DEMO = "1"; $env:ENGINE_SEED = "12345"
+$env:ENGINE_NO_VSYNC = "1"; $env:RUST_LOG = "info,engine=debug"
+target\release\engine.exe
+```
+
+The baseline (full neighbour relight) and narrow-border-relight binaries were run back to back on an
+idle machine, each with a fresh `world/`. Fill time is `column ring streaming starts` to
+`terrain ring complete`; build values come from the per-column `terrain column ready` logs.
+
+| Run | Fill | Build light median | Build light mean | Steady quads | Steady bytes |
+|---|---:|---:|---:|---:|---:|
+| Baseline: full neighbour relight | 50.7 s | 82.8 ms | 87.7 ms | 863,188 | 117,837,026 |
+| Narrow border relight | **45.6 s** | **41.5 ms** | **45.3 ms** | 863,274 | 118,198,162 |
+| Change | **-10.0%** | -49.9% | -48.3% | +0.01% | +0.31% |
+
+Generation is unchanged at 385.6 ms mean / 383.5 ms median per column. Mesh time is ~6 ms mean
+because columns outside the two-column fine radius are not meshed; the LOD0 columns in the ring
+still take ~10 ms. Worker time per column is therefore roughly:
+
+| Work | Per column | Share |
+|---|---:|---:|
+| Generation (`Terrain::section` x12) | ~386 ms | ~85% |
+| Build light (centre + 8 narrow border repairs) | ~45-60 ms | ~10-13% |
+| Mesh and apply | ~6 ms | ~1-2% |
+
+- **Worker throughput is the limiter, not the frame budget.** `in_flight` stays at the 16-job cap
+  while the frame loop runs at 500+ FPS, so `RingBudget::v1`'s two build starts per frame is never
+  reached. No adaptive budget change was needed.
+- **Generation dominates.** `pipeline::Terrain::section` builds all 1,024 columns of one section,
+  and `generate_column` asks for all 12 sections, so a column regenerates its base columns 12 times.
+  That path is unchanged here (it is in `crates/terrain-core/src/pipeline.rs`).
+- **Stale builds still waste work.** About 30% of build results are discarded because a column in
+  their 5x5 neighbour snapshot arrived while the job ran; they are retried. Narrow relight makes
+  each discarded job much cheaper, but it is still the second-largest build cost.
+- **Steady state is unchanged in kind.** `terrain ring`: wanted 1089, resident 1089, ready 1089,
+  fine 25, coarse 197, lod2 96, in_flight 0. Both binaries vary by ~0.2% in quads/bytes between
+  runs because LOD apply order differs (the baseline itself measured 863,160 and 863,188 quads);
+  the relight path is pinned by `narrow_border_relight_matches_a_full_relight`, which compares every
+  neighbour's light and every affected section mesh against a full relight on seed `0x5EED`.
 
 | Date | Commit | Machine | Rust | Command | Workers | Result |
 |---|---|---|---|---|---|---|

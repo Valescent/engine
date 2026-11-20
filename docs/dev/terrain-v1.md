@@ -54,12 +54,12 @@ Physics refuses movement while the player's column has no light.
 | `Terrain::new` + world hydrology solve | ~165 ms |
 | 12 worker threads, one `Terrain` each | < 1 ms |
 | First column (generation + light + mesh) | ~0.8 s |
-| Full 25x25 ring (625 columns, default `render_distance_chunks = 12`) | **~59 s** |
-| Full 33x33 ring (1,089 columns, `render_distance_chunks = 16`) | **~79 s** |
-| Steady-state ring footprint, default 12 (`terrain ring` log) | **~71 MB**, **~724,000 quads** |
+| Full 25x25 ring (625 columns, default `render_distance_chunks = 12`) | **~29 s** |
+| Full 33x33 ring (1,089 columns, `render_distance_chunks = 16`) | **~46 s** |
+| Steady-state ring footprint, default 12 (`terrain ring` log) | **~72 MB**, **~724,000-776,000 quads** |
 | Steady-state ring footprint, cap 16 | **~118 MB**, **~863,000 quads** |
-| Process peak working set, default 12 (release, no vsync) | **~491 MB** |
-| Process peak working set, cap 16 | **~686 MB** |
+| Process peak working set, default 12 (release, no vsync) | **~476-491 MB** |
+| Process peak working set, cap 16 | **~570-686 MB** (run-to-run) |
 
 Every worker owns its own `Terrain` because the pipeline caches behind `RefCell`. One
 `Arc<WorldHydro>` solve is shared by every worker, so a lake or river that crosses a column
@@ -72,10 +72,9 @@ no resident column sits outside the far plane. The default 12 gives
 `(2*14+1)^2 = 841`; `render_distance_chunks = 16` gives the spec ring
 (`(2*16+1)^2 = 1,089` wanted, `(2*18+1)^2 = 1,369` resident). Section storage is paletted and
 bit-packed, and only the inner two columns are LOD0. The measured steady state is ~71 MB of ring
-footprint and ~491 MB peak working set at the default 12, or ~118 MB and ~686 MB at the 16 cap;
-the default leaves headroom under the ~600 MB target that the cap does not. Nearest-first order
-keeps the centre playable in under a second while the full ring fills in ~59 s at 12 or ~79 s at
-16 (`ENGINE_NO_VSYNC=1`).
+footprint and ~491 MB peak working set at the default 12, or ~118 MB and ~570-686 MB at the 16 cap.
+Nearest-first order keeps the centre playable in under a second while the full ring fills in ~53 s
+at 12 or ~46 s at 16 after the narrow border relight (`ENGINE_NO_VSYNC=1`).
 
 ## Light
 
@@ -84,6 +83,9 @@ keeps the centre playable in under a second while the full ring fills in ~59 s a
   copied.
 - `relight_span_view` repairs only the band an edit can reach; the edited column repairs from
   `y = 0` because a block moves the sky seed below it, neighbours only around the edit.
+- Ring builds use the same narrow repair: a lit neighbour is relit from `y = 0` through the highest
+  border cell whose light properties the new column changes, plus `RELIGHT_RADIUS`. A border with
+  no light-relevant change leaves the neighbour's light untouched.
 - `section_differs` drives the remesh set: every section whose light changed plus the sections
   touched by the edited block's 26-block neighbourhood.
 
@@ -176,19 +178,23 @@ where an absolute `f32` subtraction would collapse a block to zero.
   `RingBudget::v1` is two generate, two build, two evict per frame, with 16 jobs in flight.
 - Generation jobs run on a fixed fan-out of workers, one `Terrain` each and one shared
   `Arc<WorldHydro>`. A finished column is inserted immediately; its light pass is a second job.
-- A build job computes light for the new column and every present neighbour, then meshes only the
-  new column plus neighbour sections whose border light or border blocks changed. The result is
-  applied only when its 5x5 column snapshot is still `Arc`-identical, so a stale job is retried
-  rather than installed.
+- A build job lights the new column in full. Each already-lit present neighbour reuses its old
+  light and repairs from `y = 0` through the highest changed border cell plus `RELIGHT_RADIUS`
+  (`ColumnView` + `relight_span_view`): skylight can descend losslessly below a border change,
+  while lateral light climbs at most `RELIGHT_RADIUS`. A neighbour whose border light properties
+  did not change is not relit at all. It then meshes only the new column plus neighbour sections
+  whose border light or border blocks changed. The result is applied only when its 5x5 column
+  snapshot is still `Arc`-identical, so a stale job is retried rather than installed.
 - Eviction happens beyond `radius + 2` (`residency::UNLOAD_MARGIN`), farthest first. A column with
   an edit whose section save has not been queued is protected, as is any in-flight column.
 - Saved sections and recovered journal frames are replayed at startup over the section records
   before streaming starts, so a column generated later already includes its edits.
 - Startup is non-blocking: the player is frozen on the centre column until its light lands, then
   moved to the measured surface. Movement is guarded by `TerrainDemo::aabb_ready`.
-- Measured at the default 12: full 25x25 ring in ~59 s, ~71 MB of section bytes, ~724,000 quads,
-  ~491 MB peak process working set. At the 16 cap: ~79 s, ~118 MB, ~863,000 quads, ~686 MB peak.
-  The per-second `terrain ring` info line reports resident/ready/fine/coarse counts and bytes.
+- Measured after the narrow border relight: the default 12 ring fills in ~29 s (625 columns, ~72 MB,
+  ~724,000-776,000 quads, ~476-491 MB peak); the 16 cap fills in ~46 s (1,089 columns, ~118 MB, ~863,000 quads,
+  ~570-686 MB peak depending on the run). The per-second `terrain ring` info line reports
+  resident/ready/fine/coarse counts and bytes.
 
 ## Persistence
 
@@ -232,7 +238,7 @@ cargo tree -p terrain-core -e normal --no-default-features
 ```
 
 `terrain-gen` is the `terrain-core` binary; its golden and counter baselines are in
-`crates/terrain-core/tests/golden/`. Current local count: **661 lib tests** across `engine` and
+`crates/terrain-core/tests/golden/`. Current local count: **662 lib tests** across `engine` and
 `terrain-core` (2 ignored), **3** `light_preview`, **30** `terrain_gen` integration tests.
 
 ## Known gaps
