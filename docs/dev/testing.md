@@ -56,7 +56,7 @@ CI also runs dependency licence and advisory checks, commit message checks, and 
 
 ## Current coverage
 
-The headless suite covers **652 library tests** across `engine` and `terrain-core` (2 ignored),
+The headless suite covers **653 library tests** across `engine` and `terrain-core` (2 ignored),
 **3** `light_preview`, and **30** `terrain_gen` integration tests. The terrain integration test
 and its goldens live under `crates/terrain-core/tests/`; `light_preview` stays with `engine`.
 

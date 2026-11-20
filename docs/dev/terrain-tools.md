@@ -41,20 +41,29 @@ inside it.
    window, never the phase of the grid.
 2. **Blend cells only.** An anchor is kept when `best != second` and `w(q) < 0.95`, where
    `w(q) = 0.5 + 0.5 * smoothstep01(q / 255)` is the exact expression `biome_pick` evaluates.
-   Hysteresis is not used and the generated climate is not changed.
-3. **Direction.** The margin `q` is fitted with a least-squares plane over the `5 x 5` cells
-   centred on the anchor. The plane's gradient, normalised in block space, is the transect
-   direction. The wider stencil is deliberate: central differences of a quantised `q` are one
-   step apart near the border and skew the transect direction.
+   Hysteresis is not used and the generated climate is not changed. `q` is the quantised
+   **block distance** to the pair's border, not a raw `d2` margin: the climate stage computes
+   `d = m / |grad m|` and then `q = clamp(floor(d / ramp * 255 + 0.5), 0, 255)`, with
+   `ramp = BLEND_BLOCKS / (2 * 0.8042)`. The tool reads the stored `q`, so it measures exactly
+   the value `biome_pick` reconstructs.
+3. **Direction.** The margin `q` is fitted with a least-squares plane that has an intercept,
+   over the cells of a `5 x 5` window that share the anchor's **ordered** `(best, second)`
+   pair and are not saturated (`q < 255`). The window widens to `7 x 7` then `9 x 9` until four
+   cells qualify. `q` is a V across a border, so a plane through both sides has a crease in it;
+   keeping one side makes the fitted gradient normal to the border instead of nearly
+   tangential.
 4. **Sampling.** A block position maps to the cell lattice as `(block - 2) / 4`. `q` is
    bilinearly interpolated over the cell centres there, then `w` is evaluated with the exact
    formula above. Samples are one block apart from `-march` to `+march`. `march` is 256 blocks,
    shortened when the world edge is nearer, and transects that cannot reach 128 blocks are
    discarded.
 5. **Border crossing.** Walking from the anchor opposite the gradient, the first local minimum
-   of `w` is the border (`w = 0.5`). Because `q` is quantised, bilinear `w` can sit a fraction
-   of a block above `0.5`; a minimum at `w <= 0.51` (`q <= 17`) is accepted and the residual
-   error is below one block.
+   of `w` is the border (`w = 0.5`): the walk stops at the first rise after a descent, and at
+   the first rise after the anchor when the anchor is already the minimum. It never scans past
+   that rise to a deeper, unrelated minimum. Because `q` is quantised, bilinear `w` can sit a
+   fraction of a block above `0.5`; a minimum at `w <= 0.51` (`q <= 17`) is accepted and the
+   residual error is below one block. A profile with no such minimum before the rise is
+   discarded.
 6. **End crossing.** Continuing in the gradient direction, the first sample at or beyond
    `w = 0.95` is linearly interpolated with its predecessor.
 7. **Width.** `W_blocks = 2 * (d_end - d_border)`: the distance from `w = 0.5` to `w = 0.95`,
@@ -75,10 +84,12 @@ Text is a pinned table; the first line is the run configuration, then one row pe
 pair. `--json` is one object with sorted pairs and fixed two-decimal values:
 
 ```json
-{"subcommand":"calibrate-blend","seeds":3,"from":[-1024,-1024],"size":2048,"step":16,"pairs":[{"pair":[0,1],"samples":5219,"median_blocks":48.76,"p10_blocks":27.12,"p90_blocks":172.60,"assessed":true,"ok":false}],"ok":false}
+{"subcommand":"calibrate-blend","seeds":3,"from":[-1024,-1024],"size":2048,"step":16,"pairs":[{"pair":[0,1],"samples":2213,"median_blocks":23.50,"p10_blocks":18.98,"p90_blocks":33.45,"assessed":true,"ok":true}],"ok":true}
 ```
 
 Current v1 status is recorded in [Benchmark results](benchmarks.md#terrain-blend-calibration-2026-11-20).
+Generator version 3 calls `biome_pick` once per column for the surface rules and the feature
+footprint, so the measured `q` is the shipped transition, not a diagnostic copy.
 
 ## counters
 

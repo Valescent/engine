@@ -87,7 +87,8 @@ ring fills in ~56 s (`ENGINE_NO_VSYNC=1`).
   find lakes (~165 ms once per seed).
 - `hydro_tile` returns a view when the tile is inside the solved grid and falls back to a standalone
   tile solve outside it.
-- This is generator version 2: a version 1 world is refused rather than regenerated.
+- This is generator version 3: world-mode hydrology plus the per-column biome dither. A version 1
+  or 2 world is refused rather than regenerated with different water or biome borders.
 
 ## Meshing and LOD
 
@@ -205,7 +206,7 @@ cargo tree -p terrain-core -e normal --no-default-features
 ```
 
 `terrain-gen` is the `terrain-core` binary; its golden and counter baselines are in
-`crates/terrain-core/tests/golden/`. Current local count: **652 lib tests** across `engine` and
+`crates/terrain-core/tests/golden/`. Current local count: **653 lib tests** across `engine` and
 `terrain-core` (2 ignored), **3** `light_preview`, **30** `terrain_gen` integration tests.
 
 ## Known gaps

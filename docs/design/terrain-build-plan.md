@@ -110,7 +110,7 @@ still unimplemented, in dependency order. Nothing here blocks the terrain engine
 | 5 | Demo integration: real light, texture refs, collision, streaming, LOD | `TERRAIN_DEMO` uses real column light, collision, edits, per-edit saves, and distance LOD0/LOD1/LOD2; tiles stream with prefetched neighbours; per-face texture references resolve to procedural layers (`ADR-0015`) | An asset pipeline to replace the placeholder layers |
 | 6 | World-mode hydrology wiring | `Terrain::hydro_tile` returns a view of one `WorldHydro` solve, shared by every worker; generator version 2 | None |
 | 7 | Camera-relative rendering (§14.3) | Specified; camera is world-space | Camera-wide change; the draw path already matches the current convention |
-| 8 | `terrain-gen map`, report bundle, `calibrate-blend`, PR counter gate | `map --seed --from --size --cell` (ASCII surface map, `--json`); `verify --report <dir>` writes `manifest.json`, `verify.json`, and `verify.txt`; `calibrate-blend` measures W_blocks per biome pair; `counters --tier pr` gates a deterministic baseline in CI | Tune the biome centres/weights so the measured medians reach 20-28 and p90 reaches <=64 |
+| 8 | `terrain-gen map`, report bundle, `calibrate-blend`, PR counter gate | `map --seed --from --size --cell` (ASCII surface map, `--json`); `verify --report <dir>` writes `manifest.json`, `verify.json`, and `verify.txt`; `calibrate-blend --seeds 16` assesses all five biome pairs and passes; the per-column `biome_pick` is wired into the surface rules and feature footprint in generator version 3; `counters --tier pr` gates a deterministic baseline in CI | None |
 | 9 | Split `terrain-core` from `engine` | Deferred; `terrain-gen` links `wgpu` today | Enables the `Q1.9` crate-graph check |
 
 Ordering rationale: persistence first because it is the only thing that can lose player work; the rest
@@ -173,12 +173,8 @@ Queued next:
 1. **Texture art.** Per-face references and the mesher wiring are done (`ADR-0015`);
    `demo_texture_layer` still maps names onto eleven procedural placeholder layers.
 2. **Persistence follow-ups:** a decoder for an older section record format, and a richer world-repair dialog.
-3. **Blend calibration data.** The `calibrate-blend` tool and the PR counter gate are done.
-   Measured medians at `blend_width = 0.05` are 43-72 blocks against the 20-28 target, and p90 is
-   117-278 against <=64; halving the width lowers the median to ~31 but not p90. Tuning the biome
-   centres and weights is a generation change (version bump + goldens).
 
-Verification at the 2026-11-20 ring merge point: `fmt`, `clippy`, `cargo test` (652 lib, 2 ignored,
+Verification at the 2026-11-20 ring merge point: `fmt`, `clippy`, `cargo test` (653 lib, 2 ignored,
 3 light_preview, 24 integration) and `golden check` exit 0. Start the demo with `TERRAIN_DEMO=1`
 and `cargo run --bin engine`; it needs `world/seed` (or `ENGINE_STRESS_SCENE=1`).
 
@@ -217,12 +213,12 @@ each entry says why and what the first safe step is.
 Landed since the 2026-11-20 review: world-mode hydrology (generator version 2), camera-relative
 rendering with a 2^20 precision test, the spec-radius column ring (1,089 columns), LOD2 in the far
 band (measured ~862k quads and ~118 MB versus ~1.955M and ~126 MB for LOD1 only), `calibrate-blend`
-plus the PR counter gate, and the `terrain-core` split with a CI crate-graph check.
+plus the PR counter gate, the per-column biome dither (generator version 3), and the
+`terrain-core` split with a CI crate-graph check.
 
 | Item | Why it is not a small change | First safe step |
 |---|---|---|
 | Texture art pipeline | `ADR-0015` and the per-face references are done; the renderer still builds eleven procedural placeholder layers, and a real pack needs an atlas format, mipmap policy, and visual baselines. | Define the atlas/mipmap policy, then generate layers from authored tiles. |
-| Biome blend data | `calibrate-blend` reports medians 43-72 at `blend_width = 0.05` (target 20-28) and p90 117-278 (target <=64); `0.025` gives 26-39 and p90 117-161. | Tune the biome centres/weights, then add the gradient-normalising term, with a generator version bump and fresh goldens. |
 | Ring memory headroom | 1,089 columns cost ~118 MB of ring footprint and ~570 MB peak against a ~600 MB target. | Add a compression or LOD-residency pass before the rim grows. |
 | Migration fixtures for older section formats | There is no normative older section record. Inventing v1 bytes would contradict `docs/dev/save-format.md`, whose version 2 record is the only layout the decoder knows. | Add a format bump + ADR defining v1, then fixtures and `migration.journal` transforms against it. Until then, `terrain-gen migrate` canonicalises v2 records and upgrades headers. |
 | LOD transition stitching | LOD2 is wired into the ring's coarse selection; coarse sections skirt all four sides, and the LOD0 edge still uses the extra fine transition ring rather than a stitch. The positive-axis rim column has no complete aligned coarse region. | Add a dedicated fine/coarse stitch and cover the positive rim column with an explicit partial region. |

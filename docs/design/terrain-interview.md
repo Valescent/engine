@@ -763,14 +763,18 @@ an ADR, or the executable source.
       biome is a content edit plus a description version.
 - [x] E3.3 Are transitions hard, dithered, or blended? Over how many blocks?
       **Blend + keyed dither, ~24 blocks.** Per block take best and second `d2`,
-      `m = d2_second - d2_best`, `w = smoothstep(0, BLEND_W, m)` (1 deep inside, 0.5 at the
-      border). Top two biomes only. Material/tree/cover pick best if
-      `hash01(seed, "biome_dither", x, z) < w`, else second. Hash keyed on `(x,z)` only, never
-      `y`, so a column has one biome and chunk order does not matter. Height and snow line use
-      undithered lattice climate, so terrain stays smooth.
+      `m = d2_second - d2_best`, `d = m / |grad m|` (straight-line blocks to the border),
+      `w = smoothstep(0, BLEND_W, d)` (1 deep inside, 0.5 at the border). Top two biomes only.
+      Material/tree/cover pick best if `hash01(seed, "biome_dither", x, z) < w`, else second.
+      Hash keyed on `(x,z)` only, never `y`, so a column has one biome and chunk order does not
+      matter. Height and snow line use undithered lattice climate, so terrain stays smooth.
+      The analytic gradient is
+      `grad m = 2*[(T_b - T_s)*grad T + ((H - H_s)/w_s - (H - H_b)/w_b)*grad H]`, with
+      forward differences over one macro cell so every global cell has one stencil.
 - [x] E3.5 What does a field tile store per cell for biomes?
       **Three parallel `u8` arrays:** `biome_best`, `biome_second`, `biome_margin`, with
-      `q = clamp(floor(m/BLEND_W*255 + 0.5), 0, 255)`. Dither reconstructs
+      `q = clamp(floor(d/BLEND_W*255 + 0.5), 0, 255)` and `BLEND_W = 24/(2*0.8042) ≈ 14.92`
+      blocks. Dither reconstructs
       `w = 0.5 + 0.5*smoothstep01(q/255)`: `q=0` is the border (`w=0.5`), `q=255` is deep
       inside (`w=1`). One helper `biome_pick(tile, cell, x, z) -> u8` owns the logic. Nearest
       lattice cell decides the cell; no interpolation. Single-biome worlds set
@@ -778,12 +782,18 @@ an ADR, or the executable source.
       lattice arrays and never feeds terrain through the biome arrays. ~3 bytes/cell, ~3.7 KB
       per 128-block tile.
 - [x] E3.6 How is `BLEND_W` calibrated so the transition really spans 24 blocks?
-      **Measured, not labelled.** `W_blocks` = transect distance from the border (`w = 0.5`) to
+      **Measured, and now met.** `W_blocks` = transect distance from the border (`w = 0.5`) to
       `w = 0.95`, doubled. `terrain-gen calibrate-blend` casts 512-block transects perpendicular to
       each biome-pair border over the sweep seeds and reports median/p10/p90 per pair. Acceptance:
       **median 20–28 blocks, p10 ≥ 8, p90 ≤ 64**, re-run on any change to climate fields,
-      `BLEND_W`, or biome centres; pairs with <20 transects are reported only. Failures are fixed in
-      data (centres/weights), not code; a gradient-normalising term is a later version bump. `q`
+      `BLEND_W`, or biome centres; pairs with <20 transects are reported only. The audit found the
+      transect scale correct (synthetic linear margin: 23.90 measured vs 23.98 closed form) and
+      two measurement defects: the border walk skipped the nearest minimum, and the direction
+      plane straddled the border's V. Both are fixed, and the gradient normaliser is now part of
+      `q` rather than a later bump. At 16 seeds all five pairs pass (medians 23.33–27.17, p10
+      14.69–18.76, p90 32.55–63.32). Generator version 3 calls `biome_pick` once per column for
+      the surface rules and the `3 x 3` feature footprint, so the measured transition is the
+      shipped one; the golden section hash and the PR counter baseline were refreshed. `q`
       quantisation is checked to be <0.1 block per step at a ~24-block band.
 - [x] E3.2 How many biomes exist and how are they named and versioned?
       **Six records in two classes.** Climate biomes (the only argmin candidates): **plains**

@@ -15,7 +15,7 @@ is the methodology; this page is the run log.
 | Engine run (v0.0.5) | Historical baseline; see [Engine run](#engine-run-v005-release) |
 | Engine run (v0.0.8) | Current; see [Engine run](#engine-run-v008-release) |
 | Terrain v1 demo | Current; see [Terrain v1 demo](#terrain-v1-demo-2026-11-20) |
-| Terrain blend calibration | Current; fails the v1 target; see [Terrain blend calibration](#terrain-blend-calibration-2026-11-20) |
+| Terrain blend calibration | Current; passes the v1 target; see [Terrain blend calibration](#terrain-blend-calibration-2026-11-20) |
 | Terrain PR counters | Current; gated by the `CI` terrain job; see [Terrain PR counters](#terrain-pr-counters-2026-11-20) |
 | Headless run (v0.0.8) | Current; gated by the `Perf` workflow |
 
@@ -326,31 +326,60 @@ budget (625 ready columns, mean under 20 ms, p95 under 50 ms, under 200 MB of bl
 `terrain-gen calibrate-blend` measures `W_blocks` from `w = 0.5` to `w = 0.95`, doubled, per
 unordered biome pair. The definition is in [Terrain tools](terrain-tools.md#calibrate-blend).
 This run used the whole 2048-block world window (`--from -1024 -1024 --size 2048`) and the
-default 16-block anchor stride on the shipped v1 `blend_width = 0.05`:
+default 16-block anchor stride:
 
 ```console
-cargo run --locked --quiet --no-default-features --bin terrain-gen -- calibrate-blend --seeds 3
+cargo run --locked --quiet --no-default-features --bin terrain-gen -- calibrate-blend --seeds 16
 ```
 
 | Pair | Transects | Median | p10 | p90 | Assessment |
 |---|---:|---:|---:|---:|---|
-| 0-1 (plains/forest) | 5,219 | 48.76 | 27.12 | 172.60 | fails median and p90 |
-| 0-2 (plains/desert) | 869 | 43.50 | 25.06 | 164.02 | fails median and p90 |
-| 0-3 (plains/tundra) | 1,118 | 71.52 | 33.08 | 278.26 | fails median and p90 |
-| 1-3 (forest/tundra) | 707 | 38.01 | 20.38 | 159.61 | fails median and p90 |
-| 2-3 (desert/tundra) | 5 | 47.71 | 30.45 | 78.53 | reported only (<20 transects) |
+| 0-1 (plains/forest) | 11,769 | 23.57 | 18.76 | 32.55 | passes |
+| 0-2 (plains/desert) | 2,869 | 23.78 | 14.85 | 41.02 | passes |
+| 0-3 (plains/tundra) | 2,179 | 24.40 | 17.58 | 53.12 | passes |
+| 1-3 (forest/tundra) | 2,249 | 23.33 | 15.04 | 37.69 | passes |
+| 2-3 (desert/tundra) | 36 | 27.17 | 14.69 | 63.32 | passes |
 
-The command exits `1`. The measured medians are about twice the `20-28` target, which is
-consistent with `blend_width = 0.05` being the documented **starting point**, not a measured
-value. Halving the width to `0.025` lowers the medians to 26-39 (measured: pair 0-1 31.17,
-0-2 28.26, 0-3 39.44, 1-3 26.37) but not p90 (117-161), so the scale alone does not close the
-gap. The p90 spread stays wider than the `<= 64` gate even after that change. The interview's
-`E3.6` answer records the intended
-follow-up: fix the data (biome centres and weights) first, and add the gradient-normalising term
-in a later version bump. Changing `blend_width` or the biome table changes generated blocks, so
-it is a separate, generator-versioned change with fresh goldens, sweeps, and counter baselines.
+The command exits `0`. All five pairs are assessed and inside median `20..=28`, p10 `>= 8`,
+and p90 `<= 64`.
 
-The tool is therefore local-only for now and is not part of the `Terrain gates` job.
+### What changed
+
+The audit found the transect scale correct: a synthetic two-centre table with a linear margin
+of 23.98 blocks closed form measured 23.90, so the tool neither halves nor doubles the width.
+Two measurement defects and one generation-data change closed the gap.
+
+1. **The border search skipped the nearest minimum.** After the anchor, the walk kept scanning
+   past an immediate rise until it found a lower value, which could be an unrelated border
+   dozens of blocks away. It now stops at the first rise after the descent (or after the
+   anchor), so a transect with no border inside the profile is discarded instead of measuring
+   a far one. This removed the 100-400-block tail.
+2. **The direction fit straddled the border.** `q` is a V across a pair border, so a plane
+   through both sides could be nearly tangential. The fit now uses only cells with the
+   anchor's ordered `(best, second)` pair, drops saturated cells, and has an intercept; the
+   window widens from `5 x 5` to `9 x 9` when fewer than four cells qualify.
+3. **`q` is now a block distance.** The margin is divided by its analytic gradient,
+   `grad m = 2 * [(T_b - T_s) grad T + ((H - H_s)/w_s - (H - H_b)/w_b) grad H]`, so a pair's
+   transition is a fixed number of blocks instead of a fixed `d2` margin. The ramp is
+   `BLEND_BLOCKS / (2 * 0.8042)` blocks, which makes a straight border measure exactly
+   `BLEND_BLOCKS = 24`. The two gradients are forward differences over one macro cell, which
+   keeps one stencil per global cell so a climate tile's border still matches its neighbour.
+
+The earlier data-only attempt (halving the raw `d2` width to `0.025`) reached medians 26-39 but
+left p90 at 117-161, so the normalising term was required. Biome centres and weights are
+unchanged, and the coverage rules (three biomes per seed, each at least 5% of land) still hold.
+
+The measured `q` is stored climate state and, in generator version 3, is the shipped
+transition: the column pipeline calls `biome_pick` once per column for the surface rules and
+once per column of the `3 x 3` feature footprint. The dither is observable in the output, not
+just in the tool: at seed `0x5EED` the plains/desert border near `(-870, -98)` produces grass on
+a column whose nearest centre is desert, and sand one block away. The golden `equator` section
+hash moved from `08ecf2b38fc52eb3` to `dd09269e8fc5b39c`; the PR counters are unchanged because
+a topsoil swap does not change solid, air, or water counts. Across the whole finite world the
+dithered coverage for seed `0x5EED` is plains 39.4%, forest 35.9%, desert 6.3%, tundra 18.4% of
+land (seeds 1 and 2 are similar), so all four biomes stay above the 5% floor.
+
+The tool remains a local diagnostic and is not part of the `Terrain gates` job.
 
 ## Terrain PR counters (2026-11-20)
 
