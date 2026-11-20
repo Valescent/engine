@@ -19,7 +19,9 @@
 //! asks [`Budget`] whether one more upload fits, which are different questions.
 
 use std::cmp::Ordering;
+use std::collections::BTreeSet;
 
+use crate::error::Stage;
 use crate::hash::mix;
 use crate::revisions::RequestKey;
 
@@ -512,10 +514,153 @@ pub const fn teleport_budget() -> Budget {
     }
 }
 
+/// The demo's column-ring radius.
+///
+/// The spec default is [`VIEW_RADIUS`] (16, `1,369` resident columns), but the
+/// demo keeps a smaller ring so raw section storage stays under the ~600 MB
+/// working-set target: `(2 * 6 + 1)^2 = 169` columns, against 289 at radius 8
+/// and 1,369 at radius 16. LOD1 carries the view beyond the fine ring.
+pub const DEMO_VIEW_RADIUS: i32 = 6;
+
+/// `K4.1`: the per-frame ring budget, in columns.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RingBudget {
+    /// Missing columns whose generation may start this frame.
+    pub generate: usize,
+    /// Generated columns whose light/mesh work may start this frame.
+    pub build: usize,
+    /// Columns outside the unload margin that may be dropped this frame.
+    pub evict: usize,
+    /// Total jobs (generate + build) allowed outstanding at once.
+    pub max_in_flight: usize,
+}
+
+impl RingBudget {
+    /// `2` generate, `2` build, `2` evict, `16` in flight.
+    #[must_use]
+    pub const fn v1() -> Self {
+        Self {
+            generate: 2,
+            build: 2,
+            evict: 2,
+            max_in_flight: 16,
+        }
+    }
+}
+
+impl Default for RingBudget {
+    fn default() -> Self {
+        Self::v1()
+    }
+}
+
+/// One frame's bounded ring work.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RingPlan {
+    /// Missing resident columns to generate, nearest first.
+    pub generate: Vec<[i32; 2]>,
+    /// Generated columns to light and mesh, nearest first.
+    pub build: Vec<[i32; 2]>,
+    /// Columns beyond the unload margin to drop, farthest first.
+    pub evict: Vec<[i32; 2]>,
+}
+
+/// `K1.1`/`K4.1`: decides one frame of column-ring work.
+///
+/// Pure: no world, no I/O, no clock. `resident` is the set of columns whose
+/// blocks are present, `needs_build` the subset waiting for light/mesh, and
+/// `in_flight` every column with a generation or build job running. `protected`
+/// columns are never evicted (an edit whose save is not yet queued, or the
+/// player's own column).
+///
+/// Rules:
+/// - generate: missing columns inside `radius`, nearest first, bounded by
+///   `budget.generate` and the remaining in-flight capacity;
+/// - build: resident columns in `needs_build` that are not beyond
+///   `radius + UNLOAD_MARGIN`, nearest first, bounded by `budget.build` and the
+///   remaining capacity;
+/// - evict: resident columns outside `radius + UNLOAD_MARGIN`, farthest first,
+///   bounded by `budget.evict`, never a protected or in-flight column.
+///
+/// A column appears in at most one list. Every returned column is distinct.
+#[must_use]
+pub fn plan_ring(
+    centre: [i32; 2],
+    radius: i32,
+    resident: &BTreeSet<[i32; 2]>,
+    in_flight: &BTreeSet<[i32; 2]>,
+    needs_build: &BTreeSet<[i32; 2]>,
+    protected: &BTreeSet<[i32; 2]>,
+    budget: RingBudget,
+) -> RingPlan {
+    let mut capacity = budget.max_in_flight.saturating_sub(in_flight.len());
+
+    let mut build: Vec<[i32; 2]> = needs_build
+        .iter()
+        .copied()
+        .filter(|column| {
+            resident.contains(column)
+                && !in_flight.contains(column)
+                && membership(*column, centre, radius) != Membership::Absent
+        })
+        .collect();
+    build.sort_by(|a, b| compare(&ring_request(*a, centre), &ring_request(*b, centre)));
+    let take = budget.build.min(capacity);
+    build.truncate(take);
+    capacity -= build.len();
+
+    let mut generate = Vec::new();
+    if radius >= 0 {
+        for dx in -radius..=radius {
+            for dz in -radius..=radius {
+                let column = [centre[0] + dx, centre[1] + dz];
+                if resident.contains(&column) || in_flight.contains(&column) {
+                    continue;
+                }
+                generate.push(column);
+            }
+        }
+    }
+    generate.sort_by(|a, b| compare(&ring_request(*a, centre), &ring_request(*b, centre)));
+    generate.truncate(budget.generate.min(capacity));
+
+    let mut evict: Vec<[i32; 2]> = resident
+        .iter()
+        .copied()
+        .filter(|column| {
+            !protected.contains(column)
+                && !in_flight.contains(column)
+                && membership(*column, centre, radius) == Membership::Absent
+        })
+        .collect();
+    evict.sort_by(|a, b| compare(&ring_request(*b, centre), &ring_request(*a, centre)));
+    evict.truncate(budget.evict);
+    // Defensive: a column scheduled for generation or build is never evicted.
+    evict.retain(|column| !generate.contains(column) && !build.contains(column));
+
+    RingPlan {
+        generate,
+        build,
+        evict,
+    }
+}
+
+/// One column-level request used only to reuse [`compare`]'s ring order.
+fn ring_request(column: [i32; 2], centre: [i32; 2]) -> Request {
+    Request::new(
+        Class::Ring,
+        RequestKey {
+            coord: [column[0], 0, column[1]],
+            stage: Stage::Streaming,
+            revision: 0,
+        },
+        centre,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::Stage;
 
     fn key(column: [i32; 2], revision: u64) -> RequestKey {
         RequestKey {
@@ -917,5 +1062,192 @@ mod tests {
         // The frustum slack is the pinned 20 degrees, in radians.
         assert!((frustum_slack() - 20.0_f32.to_radians()).abs() < 1e-6);
         assert_eq!(FRUSTUM_SLACK_DEGREES, 20.0);
+    }
+
+    fn set(columns: &[[i32; 2]]) -> BTreeSet<[i32; 2]> {
+        columns.iter().copied().collect()
+    }
+
+    fn ring_columns(centre: [i32; 2], radius: i32) -> Vec<[i32; 2]> {
+        let mut out = Vec::new();
+        for dx in -radius..=radius {
+            for dz in -radius..=radius {
+                out.push([centre[0] + dx, centre[1] + dz]);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn ring_generates_nearest_first() {
+        let centre = [0, 0];
+        let plan = plan_ring(
+            centre,
+            2,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            RingBudget {
+                generate: 5,
+                ..RingBudget::v1()
+            },
+        );
+        assert_eq!(plan.generate.len(), 5);
+        // Ring order reuses `compare`: ring, then squared distance.
+        assert_eq!(plan.generate[0], [0, 0]);
+        let rings: Vec<i32> = plan
+            .generate
+            .iter()
+            .map(|column| ring_request(*column, centre).ring())
+            .collect();
+        assert!(rings.windows(2).all(|pair| pair[0] <= pair[1]), "{rings:?}");
+        let unique: BTreeSet<_> = plan.generate.iter().copied().collect();
+        assert_eq!(unique.len(), plan.generate.len(), "no duplicates");
+    }
+
+    #[test]
+    fn ring_work_is_bounded_and_respects_in_flight() {
+        let centre = [0, 0];
+        let resident = set(&ring_columns(centre, 3));
+        let needs: BTreeSet<[i32; 2]> = resident.iter().copied().collect();
+        let in_flight = set(&[[0, 0], [1, 0], [0, 1]]);
+        let budget = RingBudget {
+            generate: 4,
+            build: 4,
+            evict: 4,
+            max_in_flight: 6,
+        };
+        let plan = plan_ring(
+            centre,
+            6,
+            &resident,
+            &in_flight,
+            &needs,
+            &BTreeSet::new(),
+            budget,
+        );
+
+        assert!(plan.generate.len() <= budget.generate);
+        assert!(plan.build.len() <= budget.build);
+        assert!(
+            plan.generate.len() + plan.build.len() <= 3,
+            "capacity is 6 - 3"
+        );
+
+        for column in &plan.build {
+            assert!(resident.contains(column));
+            assert!(!in_flight.contains(column));
+        }
+        for column in &plan.generate {
+            assert!(!resident.contains(column));
+            assert!(!in_flight.contains(column));
+            assert!(in_ring(*column, centre, 6));
+        }
+
+        // Zero capacity means no new jobs at all.
+        let saturated = plan_ring(
+            centre,
+            6,
+            &resident,
+            &set(&ring_columns(centre, 3)),
+            &needs,
+            &BTreeSet::new(),
+            budget,
+        );
+        assert_eq!(saturated.generate, Vec::<[i32; 2]>::new());
+        assert_eq!(saturated.build, Vec::<[i32; 2]>::new());
+        assert!(
+            saturated.evict.is_empty(),
+            "in-flight columns are never evicted"
+        );
+    }
+
+    #[test]
+    fn ring_evicts_farthest_first_and_protects_edits() {
+        let centre = [0, 0];
+        let near = set(&ring_columns(centre, 2));
+        let mut resident = near.clone();
+        resident.extend(set(&[[9, 0], [0, 9], [10, 0], [-9, 9]]));
+        let protected = set(&[[10, 0]]);
+        let plan = plan_ring(
+            centre,
+            2,
+            &resident,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &protected,
+            RingBudget {
+                generate: 0,
+                build: 0,
+                evict: 2,
+                max_in_flight: 8,
+            },
+        );
+
+        // `radius + UNLOAD_MARGIN = 4`: 9, 9, 10 and (-9, 9) are all absent.
+        assert_eq!(plan.evict.len(), 2, "budget bounded");
+        assert!(
+            !plan.evict.contains(&[10, 0]),
+            "a protected edit is never evicted"
+        );
+        let rings: Vec<i32> = plan
+            .evict
+            .iter()
+            .map(|column| ring_request(*column, centre).ring())
+            .collect();
+        assert!(
+            rings.windows(2).all(|pair| pair[0] >= pair[1]),
+            "farthest first: {rings:?}"
+        );
+        assert_eq!(plan.evict[0], [-9, 9], "ring 9 is the farthest");
+        assert!(plan.generate.is_empty(), "the near ring is complete");
+    }
+
+    #[test]
+    fn ring_lists_never_overlap_and_boundary_is_exact() {
+        let centre = [3, -4];
+        let resident = set(&ring_columns(centre, 4));
+        let needs = set(&[[3, -4], [4, -4], [5, -4]]);
+        let in_flight = set(&[[6, -4], [7, -4]]);
+        let plan = plan_ring(
+            centre,
+            3,
+            &resident,
+            &in_flight,
+            &needs,
+            &BTreeSet::new(),
+            RingBudget::v1(),
+        );
+
+        let mut all = BTreeSet::new();
+        for column in plan.generate.iter().chain(&plan.build).chain(&plan.evict) {
+            assert!(all.insert(*column), "{column:?} appears twice");
+        }
+        assert_eq!(plan.build, vec![[3, -4], [4, -4]], "nearest ready first");
+        assert!(plan.evict.is_empty(), "radius 4 is still inside 3 + 2");
+
+        let outside = plan_ring(
+            centre,
+            3,
+            &set(&[[centre[0] + 6, centre[1]]]),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            RingBudget::v1(),
+        );
+        assert_eq!(outside.evict, vec![[centre[0] + 6, centre[1]]]);
+    }
+
+    #[test]
+    fn demo_radius_fits_the_memory_target() {
+        assert_eq!(DEMO_VIEW_RADIUS, 6);
+        let side = 2 * DEMO_VIEW_RADIUS + 1;
+        assert_eq!(side, 13);
+        assert_eq!(side * side, 169, "13 x 13 columns");
+        // Radius 16 with the two-column unload margin is 1,369 columns; radius
+        // 8 would be 289.
+        assert_eq!((2 * unload_radius() + 1) * (2 * unload_radius() + 1), 1_369);
+        assert_eq!((2 * 8 + 1) * (2 * 8 + 1), 289);
     }
 }

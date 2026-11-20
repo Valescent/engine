@@ -12,8 +12,10 @@ $env:ENGINE_STRESS_SCENE = "1"   # only needed when world/seed is absent
 cargo run --bin engine
 ```
 
-The demo opens a tile-streamed 128x128 terrain patch on top of the legacy scene. Edits, saves, and
-repairs use `world/terrain-demo/`; the legacy `world/chunks/` path is untouched.
+The demo opens a column-level streaming ring on top of the legacy scene. Every column within
+six columns of the player is resident (169 columns), fine-meshed inside two columns, and drawn
+as LOD1 beyond. Edits, saves, and repairs use `world/terrain-demo/`; the legacy `world/chunks/`
+path is untouched.
 
 | Input | Effect |
 |---|---|
@@ -34,26 +36,32 @@ repairs use `world/terrain-demo/`; the legacy `world/chunks/` path is untouched.
 | `src/mesher2.rs`, `src/lod.rs` | Greedy section meshing, coarse downsample, skirts |
 | `src/section.rs`, `src/lod.rs`, `src/revisions.rs`, `src/residency.rs`, `src/editlog.rs` | Section storage, LOD derivation, revisions, residency policy, edit journal |
 | `src/save.rs`, `src/world_save.rs` | Section files, backup rotation, journal file, `WorldSave`, save worker, repair, migration/report |
-| `src/lib.rs` | Demo app, parallel column generation, light/mesh rebuild, LOD selection, tile streaming, save/repair wiring |
+| `src/lib.rs` | Demo app, ring generation/light/mesh jobs, LOD selection, save/repair wiring |
 | `src/renderer.rs`, `src/terrain_draw.wgsl` | Packed-quad draw path, per-section scale, incremental upload |
 
 ## Startup
 
-The demo builds one 4x4-column tile (128x128 blocks) aligned to a 128-block generation tile.
+The window opens immediately; nothing is built synchronously. The ring generates the centre
+column first, measures its surface, and moves the player there when the first light pass lands.
+Physics refuses movement while the player's column has no light.
 
 | Phase | Release |
 |---|---:|
-| `Terrain::new` | ~0 ms |
-| Field tile | ~18 ms |
-| Column generation (12 workers, one `Terrain` each) | **~0.82 s** |
-| Column light | ~31 ms |
-| Fine meshes | ~31 ms |
-| Coarse LOD meshes | ~45 ms |
-| **Total build** | **~0.9 s** |
+| `Terrain::new` + world hydrology solve | ~165 ms |
+| 12 worker threads, one `Terrain` each | < 1 ms |
+| First column (generation + light + mesh) | ~0.8 s |
+| Full 13x13 ring (169 columns) | **~8 s** |
+| Steady-state terrain heap (`terrain ring` log) | **~22 MB** |
+| Process peak working set (RTX 4060, release) | **~346 MB** |
 
-Every worker owns its own `Terrain` because the pipeline caches behind `RefCell`. A field tile is
-~18 ms, so duplicating it per worker is cheaper than serialising the per-column work. Output is
-keyed and sorted, so worker order cannot change the patch.
+Every worker owns its own `Terrain` because the pipeline caches behind `RefCell`. One
+`Arc<WorldHydro>` solve is shared by every worker, so a lake or river that crosses a column
+boundary has one level. Output is keyed and sorted, so worker order cannot change the ring.
+
+The radius is **6**, not the spec default 16: `(2*6+1)^2 = 169` columns, against 289 at radius 8
+and 1,369 (`(2*16+2+1)^2` with the unload margin) at radius 16. Section storage is paletted and
+bit-packed, not a flat `u16` array, so 169 columns stay around 22 MB of terrain heap. A radius-16
+ring would need a stronger compression or LOD residency story before it fits the ~600 MB target.
 
 ## Light
 
@@ -77,29 +85,39 @@ keyed and sorted, so worker order cannot change the patch.
 
 ## Meshing and LOD
 
-- Fine sections are greedy-meshed with `MeshLod::Lod0`.
+- Fine sections are greedy-meshed with `MeshLod::Lod0` inside a two-column radius, with one extra
+  ring of fine meshes kept as a transition buffer.
 - Each quad takes the layer of the face it belongs to: the block's top reference for `+Y`, bottom
   for `-Y`, and side for `±X`/`±Z` and cross quads (`ADR-0015`). `Textures` are presentation-only,
   so changing one never invalidates a saved section.
-- `demo_coarse` downsamples every complete 2x2x2 fine group with `lod::downsample`, meshes with
-  `mesh_coarse` at Lod1, and appends skirts on all sides.
-- The active set replaces a complete coarse region with one coarse section per 2x2x2 group when the
-  player is more than one column away; missing coarse neighbours are treated as air so boundary walls
-  are emitted.
+- `demo_coarse_regions` downsamples every complete 2x2x2 fine group with `lod::downsample`, meshes
+  with `mesh_coarse` at Lod1, and appends skirts on all sides.
+- A coarse region is active only when all four of its columns are outside the fine buffer, so fine
+  and coarse never overlap. Coarse LOD is rebuilt whole in the background and is disposable.
 - `TerrainSection` carries `scale` (1/2/4); the shader scales quad origins, widths, heights, face
   offsets, cross quads, and UVs. Culling uses `32 * scale`.
 - `section_revision` includes scale, so an origin changing detail level re-uploads.
 
-## Tiles and streaming
+## Column ring
 
-- Active patch: one 4x4-column tile; saved edits are loaded for its columns.
-- `plan_stream` is the pure decision: swap to a cached tile, build the tile underfoot if missing,
-  pause physics when no ground tile is ready, prefetch with two columns of lead, and add the diagonal
-  when both axes are near an edge.
-- One background build at a time; active + three cached tiles; farthest evicted. Measured working
-  set: **350 MB** with the demo vs **295 MB** for the legacy stress scene.
-- Tile crossing swaps the cached patch, uploads the renderer sections, and keeps the old patch for an
-  instant swap back.
+- `residency::plan_ring` is the pure frame decision: given the player column, resident columns,
+  in-flight jobs, pending builds, protected edits, and a budget, it returns a bounded
+  nearest-first generate batch, a nearest-first build batch, and a farthest-first evict batch.
+  `RingBudget::v1` is two generate, two build, two evict per frame, with 16 jobs in flight.
+- Generation jobs run on a fixed fan-out of workers, one `Terrain` each and one shared
+  `Arc<WorldHydro>`. A finished column is inserted immediately; its light pass is a second job.
+- A build job computes light for the new column and every present neighbour, then meshes only the
+  new column plus neighbour sections whose border light or border blocks changed. The result is
+  applied only when its 5x5 column snapshot is still `Arc`-identical, so a stale job is retried
+  rather than installed.
+- Eviction happens beyond `radius + 2` (`residency::UNLOAD_MARGIN`), farthest first. A column with
+  an edit whose section save has not been queued is protected, as is any in-flight column.
+- Saved sections and recovered journal frames are replayed at startup over the section records
+  before streaming starts, so a column generated later already includes its edits.
+- Startup is non-blocking: the player is frozen on the centre column until its light lands, then
+  moved to the measured surface. Movement is guarded by `TerrainDemo::aabb_ready`.
+- Measured: full 13x13 ring in ~8 s, ~22 MB terrain heap, ~346 MB peak process working set; the
+  per-second `terrain ring` info line reports resident/ready/fine/coarse counts and bytes.
 
 ## Persistence
 
@@ -141,7 +159,7 @@ cargo test --locked
 cargo run --locked --quiet --bin terrain-gen -- golden check
 ```
 
-Current local count: **636 lib tests** (2 ignored), **3** `light_preview`, **24** `terrain_gen`
+Current local count: **645 lib tests** (2 ignored), **3** `light_preview`, **24** `terrain_gen`
 integration tests.
 
 ## Known gaps
@@ -149,7 +167,8 @@ integration tests.
 - The renderer's texture array is still placeholder art: per-face references resolve to the eleven
   procedural layers by name, and an unknown name falls back to stone. Skirts on coarse meshes inherit
   the boundary face's layer rather than the side layer.
-- Residency-driven ring streaming (16-column view radius) is not wired; the demo pages tiles.
+- The ring radius is 6, not the spec's 16: a 16-column ring needs section compression or a
+  LOD-residency policy stronger than the current paletted sections before it fits the memory budget.
+- LOD2, skirts on every fine/coarse transition, and a visible loading indicator are not done.
 - No normative older section record exists, so migration fixtures cannot be added yet.
 - Camera-relative rendering (spec 14.3) is not applied.
-- LOD2, skirts on every fine/coarse transition, and a visible loading indicator are not done.

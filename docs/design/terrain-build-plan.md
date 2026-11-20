@@ -140,7 +140,7 @@ deliberately exits 1 when a scenario exceeds its budget.
 | W10 diagnostics | done; pinned metrics, ledger cap, shed ladder, overlay model |
 | W12 revisions | done (`src/revisions.rs`) |
 | W13 padding | done (`src/padded.rs`); one padded layout for blocks and light |
-| Residency, streaming | pure decision modules (`src/residency.rs`, `src/streaming.rs`); the demo streams tiles with prefetch, but residency is not the caller yet |
+| Residency, streaming | `src/residency.rs` owns the pure ring policy (`plan_ring`, `RingBudget`); the demo drives it over a column ring with LOD1 coarse meshes |
 | Edit log, header | done as records and framing (`src/editlog.rs`, `src/header.rs`); journal IO thread and save writer pending |
 | Pipeline | done (`src/pipeline.rs`): `F1.5` order, graph, tile caches, column/section, features wired |
 | LOD | derive and skirts done (`src/lod.rs`, `src/mesher2.rs`); the demo derives LOD1 for complete octant regions away from the player, with per-section scale in the draw path |
@@ -165,20 +165,19 @@ gates pass on a tree that compiles.
 | W21 | Journal commit policy + writer | `src/editlog.rs` | **done** — 19 tests |
 | W22 | Block-id resolution + surface stack wiring | `src/pipeline.rs`, `tests/golden/terrain-v1.golden` | **done** — `TerrainMaterials`, `with_pack`, seabed/snow/bedrock wired, goldens regenerated once |
 | W23 | Canonical section record encode/decode | `src/section.rs` | **done** — v2 `TSEC` layout, 22 tests; bin adoption in progress |
-| W24 | Terrain demo wiring (`TERRAIN_DEMO=1`) | `src/lib.rs`, `src/renderer.rs` | **done** — 128x128 patch, real column light, collision, async edits, per-edit saves; tile streaming with prefetched neighbours; per-face texture refs (`ADR-0015`); distance LOD1 is wired; ~0.9 s parallel startup build; ~24 ms edit rebuild (one remeshed section) |
+| W24 | Terrain demo wiring (`TERRAIN_DEMO=1`) | `src/lib.rs`, `src/renderer.rs` | **done** — column ring (radius 6, 169 columns), real column light, collision, async edits, per-edit saves; LOD0 within two columns and LOD1 beyond; per-face texture refs (`ADR-0015`); first column ~0.8 s, full ring ~8 s, ~22 MB terrain heap; ~24 ms edit rebuild |
+| W25 | Residency-driven column ring | `src/residency.rs`, `src/lib.rs` | **done** — `plan_ring` (bounded generate/build/evict), neighbour relight and border remesh, `Arc` snapshot validation, saved/journal replay before streaming, player frozen until the centre column is ready |
 
 Queued next:
 
-1. **Residency-driven ring streaming.** Tiles stream in 128x128 units with prefetched neighbours; residency and the streaming ring are not the caller yet.
-2. **Texture art.** Per-face references and the mesher wiring are done (`ADR-0015`);
+1. **Texture art.** Per-face references and the mesher wiring are done (`ADR-0015`);
    `demo_texture_layer` still maps names onto eleven procedural placeholder layers.
-3. **Persistence follow-ups:** a decoder for an older section record format, and a richer world-repair dialog.
-4. `terrain-gen calibrate-blend`; then the PR counter gate (R1.8).
+2. **Persistence follow-ups:** a decoder for an older section record format, and a richer world-repair dialog.
+3. `terrain-gen calibrate-blend`; then the PR counter gate (R1.8).
 
-Verification at the 2026-11-19 merge point: `fmt`, `clippy --all-targets`,
-`cargo test` (629 lib, 2 ignored, 3 light_preview, 24 integration), `golden check`, `sweep --tier pr`, and
-`seams --window 5x5 --seeds 3` all exit 0. Start the demo with `TERRAIN_DEMO=1` and
-`cargo run --bin engine`; it needs `world/seed` (or `ENGINE_STRESS_SCENE=1`).
+Verification at the 2026-11-20 ring merge point: `fmt`, `cargo test` (645 lib, 2 ignored,
+3 light_preview, 24 integration) and `golden check` exit 0. Start the demo with `TERRAIN_DEMO=1`
+and `cargo run --bin engine`; it needs `world/seed` (or `ENGINE_STRESS_SCENE=1`).
 
 ## 7. Review notes on landed work
 
@@ -208,14 +207,14 @@ prove; none is silently accepted.
 
 ## 8. Remaining roadmap (2026-11-20)
 
-The demo now has parallel startup, ~24 ms edits, LOD1, tile streaming, persistence, migration
-reports, and repair. The remaining items are larger than a single patch; each entry says why and
-what the first safe step is.
+The demo now has column-ring streaming, asynchronous first-column startup, ~24 ms edits, LOD1,
+persistence, migration reports, and repair. The remaining items are larger than a single patch;
+each entry says why and what the first safe step is.
 
 | Item | Why it is not a small change | First safe step |
 |---|---|---|
 | Texture art pipeline | `ADR-0015` and the per-face references are done; the renderer still builds eleven procedural placeholder layers, and a real pack needs an atlas format, mipmap policy, and visual baselines. | Define the atlas/mipmap policy, then generate layers from authored tiles. |
-| Residency-driven ring streaming | `VIEW_RADIUS` is 16 columns (1,369 resident columns). Whole-tile paging cannot express that: an 8-tile ring held no measurable extra working set but retained far more terrain, and the active patch is 4x4 columns. | Build a column-level ring over the existing `columns` map: generate missing columns, relight new columns and their 8 neighbours, mesh only new and boundary sections, and evict by `residency::membership`. Keep the tile pager until this lands. |
+| Full 16-column ring | The ring is wired but runs at radius 6 (169 columns) so the demo stays around 346 MB peak working set. Radius 16 is 1,369 columns; the spec's ~40 KB/column target still needs a tighter section compression or a LOD-residency policy that does not keep full LOD0 sections at the rim. | Measure paletted-section bytes per column at radius 8, then decide between a compression pass and LOD0/LOD1 residency. |
 | Migration fixtures for older section formats | There is no normative older section record. Inventing v1 bytes would contradict `docs/dev/save-format.md`, whose version 2 record is the only layout the decoder knows. | Add a format bump + ADR defining v1, then fixtures and `migration.journal` transforms against it. Until then, `terrain-gen migrate` canonicalises v2 records and upgrades headers. |
 | World-mode hydrology | `WorldHydro` solves the finite world continuously, but `Terrain` caches per-tile `HydroTile` values and is built once per worker. A full-world solve is ~512^2 macro cells and would run per worker, and rivers change goldens. | Measure `WorldHydro` at side 512; if acceptable, store one `Arc<WorldHydro>` in `Terrain` and return `WorldTileView`s. Regenerate goldens once. |
 | Camera-relative rendering | The camera is world-space and the draw path already matches that convention; a floating-origin change touches picking, collision, streaming centres, and both draw paths. | Prototype a camera-origin offset on the terrain path only, behind a flag, with a precision test at 2^20 blocks. |

@@ -1442,10 +1442,12 @@ contradict a MUST elsewhere in this document.
   prefix trimming, repair, and header migration are implemented in `src/save.rs` and
   `src/world_save.rs`. See [Save format](../dev/save-format.md). Section-record migration for an
   older record format has no normative format yet.
-- **`TERRAIN_DEMO` is a demo, not the product**: a tile-streamed 128x128 patch with real per-column
-  lighting (sky, block, water attenuation), per-face texture references resolved to procedural
-  layers, collision, edits, per-edit saves, distance LOD1, and prefetched tile paging. LOD2 and
-  residency-driven ring streaming remain; the world model behind it is the shipped one.
+- **`TERRAIN_DEMO` is a demo, not the product**: a column-level streaming ring with real
+  per-column lighting (sky, block, water attenuation), per-face texture references resolved to
+  procedural layers, collision, edits, per-edit saves, distance LOD1, and residency-driven
+  generate/build/evict decisions. The demo ring is six columns (169 resident columns, ~346 MB peak
+  process working set) rather than the spec's 16-column view; a 16-column ring needs stronger
+  section compression or LOD residency. LOD2 remains; the world model behind it is the shipped one.
 - **`terrain-gen map` is ASCII-only** for now: `--seed --from --size --cell` prints a height/water grid and `--json` rows. PNG modes, `tEXt` metadata, legends, and `--ndjson` are deferred.
 - **The full tooling bundle is deferred.** `verify --report <dir>` writes a manifest plus JSON/text; the zip bundle, `calibrate-blend`, and the PR counter gate are not implemented.
 - **Section-record migration has no older format.** Version 2 records are canonicalised and headers upgrade v1 to v2; there is no normative v1 section record to decode or migrate.
