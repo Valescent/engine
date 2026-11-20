@@ -16,6 +16,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Chunk vertices pack into 12 bytes (three cell bytes plus face, two UV bytes, layer, and light/AO) and quads use four vertices plus six indices (16-bit where a chunk fits, 32-bit otherwise), cutting vertex buffer memory by about 75 percent.
 - Back faces are culled for terrain and water; greedy quads wind counter-clockwise around their outward normal on all six faces.
 
+### Changed
+
+- Chunk block storage is four-bit packed (16 KiB per chunk) with `VCHK` unchanged. Blocks plus light drop from 381 MB to 191 MB at `render_distance_chunks = 24` and from 669 MB to 335 MB at `32`; meshing costs about 15-25% more per chunk because of the nibble decode.
+- Light fields store the sky plane for every chunk and the block-light plane only when a lamp is in range, cutting typical resident light from 39 KiB to 19 KiB per chunk. A lamp restores the full field for the 27 chunks around it.
+- Water meshes are built only for chunks that contain water; dry chunks skip the full-grid water scan (about 0.37 ms each). Water mesh jobs are still full resolution and are not distance-limited.
+- The renderer caches resident geometry bytes, tests each chunk's frustum once per frame for both opaque and water draws, and drops non-active LOD meshes after a replacement is uploaded. Settled frame time at distance 32 falls from 9.06 ms to about 5 ms on the reference machine; distance 24 is unchanged at about 2.3 ms.
+- Light jobs skip the block-light working grid when no lamp is in range and use a flat ceiling array instead of a hash map. Headless settle time falls from 15.1 s to 12.2 s at distance 24 and from 29.1 s to 24.4 s at 32.
+- Chunk level work drains under a 2 ms per-frame budget in a deterministic order, a chunk leaves the queue while its job runs and returns when the result is accepted, and active-LOD selection happens on upload instead of scanning every loaded chunk each frame. Settled distance-32 frame time falls to about 4.3 ms and no frame logs a slow work phase; headless wall time falls to 11.7 s at distance 24 and 21.6 s at 32.
+- Index buffers are shared: one `u16` quad pattern replaces the per-chunk index buffers, so resident geometry at distance 32 falls from 125.9 MB to 100.9 MB and visible geometry from 37.6 MB to 30.1 MB. Chunks above 65,535 vertices keep a `u32` fallback buffer.
+- Mesh uploads rose from 2 to 8 per frame; the old cap limited first-load streaming, and the new value keeps distance-32 settle at the worker rate. The quad record from ADR-0015 is implemented as pack/unpack with unit tests, unused until the pool lands.
+- Chunk geometry now renders from a 12-byte quad pool with vertex pulling and indirect draws: at distance 32, draw calls fall from 3,409 to 2, resident geometry from 100.9 MB to 37.6 MiB, visible geometry from 30.1 MB to 7.52 MiB, and frame CPU from 4.3 ms to 1.9 ms. The per-chunk vertex and index path remains as the fallback.
+- Chunk-top horizon culling is available behind `ENGINE_HORIZON_CULL`; it removes roughly 70% of visible chunks and vertex work at distance 32. It stays opt-in until the LOD hierarchy and a moving-camera visual check.
+
 ### Fixed
 
 - Columns whose chunks are built only at LOD2 now count as ready; the readiness check previously ignored the coarsest level, leaving the outer ring unready.

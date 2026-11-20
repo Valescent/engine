@@ -458,6 +458,11 @@ impl MeshQueue {
         true
     }
 
+    /// Forgets a built mesh so the level pass requests it again.
+    pub(crate) fn forget_built(&mut self, chunk: ChunkCoord, lod: Lod, kind: MeshKind) {
+        self.built.remove(&(chunk, lod, kind));
+    }
+
     /// Returns whether a mesh for this chunk, LOD, and kind is current.
     pub(crate) fn is_built(&self, chunk: ChunkCoord, lod: Lod, kind: MeshKind) -> bool {
         self.built.get(&(chunk, lod, kind)) == Some(&self.revision(chunk))

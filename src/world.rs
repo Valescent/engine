@@ -23,6 +23,9 @@ pub(crate) const CHUNK_SIZE: i32 = 32;
 /// Cells in one chunk.
 pub(crate) const CHUNK_CELLS: usize = (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) as usize;
 
+/// Bytes of packed block storage in one chunk: four bits per cell.
+pub(crate) const CHUNK_STORAGE_BYTES: usize = CHUNK_CELLS / 2;
+
 /// Chunks in one vertical world column.
 pub(crate) const CHUNK_COLUMN: i32 = 4;
 
@@ -98,15 +101,20 @@ impl PartialOrd for ChunkCoord {
 /// state and lives in [`World`] as a separate field.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Chunk {
-    blocks: Box<[Block]>,
+    cells: Box<[u8]>,
     filled: usize,
+    water: usize,
+    /// Highest solid block's local y, or `-1` when the chunk has none.
+    top: i32,
 }
 
 impl Default for Chunk {
     fn default() -> Self {
         Self {
-            blocks: vec![Block::Air; CHUNK_CELLS].into_boxed_slice(),
+            cells: vec![0; CHUNK_STORAGE_BYTES].into_boxed_slice(),
             filled: 0,
+            water: 0,
+            top: -1,
         }
     }
 }
@@ -121,9 +129,19 @@ impl Chunk {
         self.filled
     }
 
+    /// Whether the chunk holds any water, so a water mesh is worth building.
+    pub(crate) fn has_water(&self) -> bool {
+        self.water > 0
+    }
+
+    /// Highest solid block's local y, or `-1` when the chunk has none.
+    pub(crate) fn top(&self) -> i32 {
+        self.top
+    }
+
     /// Returns the block at a local coordinate, or `Air` outside the chunk.
     pub(crate) fn block(&self, local: IVec3) -> Block {
-        local_index(local).map_or(Block::Air, |index| self.blocks[index])
+        local_index(local).map_or(Block::Air, |index| packed_block(&self.cells, index))
     }
 
     /// Stores a block at a local coordinate. Coordinates outside the chunk are ignored.
@@ -131,7 +149,7 @@ impl Chunk {
         let Some(index) = local_index(local) else {
             return;
         };
-        let previous = self.blocks[index];
+        let previous = packed_block(&self.cells, index);
         if previous == block {
             return;
         }
@@ -140,22 +158,65 @@ impl Chunk {
             (_, Block::Air) => self.filled -= 1,
             _ => {}
         }
-        self.blocks[index] = block;
+        match (previous, block) {
+            (Block::Water, _) => self.water -= 1,
+            (_, Block::Water) => self.water += 1,
+            _ => {}
+        }
+        let packed = block.id();
+        let byte = &mut self.cells[index / 2];
+        if index.is_multiple_of(2) {
+            *byte = (*byte & 0xF0) | (packed & 0x0F);
+        } else {
+            *byte = (*byte & 0x0F) | ((packed & 0x0F) << 4);
+        }
+
+        if block.is_solid() && local.y > self.top {
+            self.top = local.y;
+        } else if previous.is_solid() && !block.is_solid() && local.y == self.top {
+            self.recompute_top();
+        }
+    }
+
+    /// Recomputes the highest solid cell after the top block is cleared.
+    fn recompute_top(&mut self) {
+        for y in (0..CHUNK_SIZE).rev() {
+            for x in 0..CHUNK_SIZE {
+                for z in 0..CHUNK_SIZE {
+                    let index = local_index(IVec3::new(x, y, z)).expect("in-chunk cell");
+                    if packed_block(&self.cells, index).is_solid() {
+                        self.top = y;
+                        return;
+                    }
+                }
+            }
+        }
+        self.top = -1;
+    }
+
+    /// Packed four-bit block storage, two cells per byte.
+    pub(crate) fn storage(&self) -> &[u8] {
+        &self.cells
     }
 
     /// Non-air blocks in local `(x, y, z)` order.
     pub(crate) fn iter(&self) -> impl Iterator<Item = (IVec3, Block)> + '_ {
-        self.blocks
-            .iter()
-            .enumerate()
-            .filter(|(_, block)| **block != Block::Air)
-            .map(|(index, block)| (local_from_index(index), *block))
+        (0..CHUNK_CELLS).filter_map(move |index| {
+            let block = packed_block(&self.cells, index);
+            (block != Block::Air).then(|| (local_from_index(index), block))
+        })
     }
+}
 
-    /// Raw blocks in local `(x, y, z)` order.
-    pub(crate) fn blocks(&self) -> &[Block] {
-        &self.blocks
-    }
+/// Decodes one packed cell, low nibble first within each byte.
+pub(crate) fn packed_block(cells: &[u8], index: usize) -> Block {
+    let byte = cells[index / 2];
+    let id = if index.is_multiple_of(2) {
+        byte & 0x0F
+    } else {
+        byte >> 4
+    };
+    Block::from_id(id).unwrap_or(Block::Air)
 }
 
 /// Linear index of a chunk-local coordinate, or `None` outside the chunk.
@@ -258,7 +319,7 @@ impl World {
 
     /// Bytes held by stored blocks and light fields, excluding meshes and GPU state.
     pub(crate) fn resident_bytes(&self) -> usize {
-        self.chunks.len() * CHUNK_CELLS
+        self.chunks.len() * CHUNK_STORAGE_BYTES
             + self
                 .light
                 .values()
@@ -1034,6 +1095,31 @@ mod tests {
     }
 
     #[test]
+    fn top_tracks_the_highest_solid_block() {
+        let mut chunk = Chunk::default();
+        assert_eq!(chunk.top(), -1);
+
+        chunk.set_block(IVec3::new(1, 5, 1), Block::Stone);
+        assert_eq!(chunk.top(), 5);
+
+        chunk.set_block(IVec3::new(2, 9, 3), Block::Water);
+        assert_eq!(chunk.top(), 5, "water does not occlude");
+
+        chunk.set_block(IVec3::new(2, 9, 3), Block::Stone);
+        assert_eq!(chunk.top(), 9);
+
+        chunk.set_block(IVec3::new(5, 9, 5), Block::Stone);
+        chunk.set_block(IVec3::new(2, 9, 3), Block::Air);
+        assert_eq!(chunk.top(), 9, "another solid at the same height survives");
+
+        chunk.set_block(IVec3::new(5, 9, 5), Block::Air);
+        assert_eq!(chunk.top(), 5);
+
+        chunk.set_block(IVec3::new(1, 5, 1), Block::Air);
+        assert_eq!(chunk.top(), -1);
+    }
+
+    #[test]
     fn stored_chunks_never_contain_air() {
         let mut world = World::default();
         world.set_block(IVec3::new(5, 5, 5), Block::Stone);
@@ -1043,6 +1129,74 @@ mod tests {
         for (_, chunk) in world.iter_chunks() {
             assert!(chunk.iter().all(|(_, block)| block != Block::Air));
         }
+    }
+
+    #[test]
+    fn chunk_storage_is_four_bits_per_cell() {
+        let mut chunk = Chunk::default();
+        assert_eq!(chunk.storage().len(), CHUNK_STORAGE_BYTES);
+        assert_eq!(CHUNK_STORAGE_BYTES, CHUNK_CELLS / 2);
+
+        let blocks = [
+            Block::Stone,
+            Block::Dirt,
+            Block::Grass,
+            Block::Wood,
+            Block::Leaves,
+            Block::Lamp,
+            Block::Water,
+            Block::Sand,
+        ];
+        for (offset, block) in blocks.into_iter().enumerate() {
+            let local = IVec3::new(i32::try_from(offset).unwrap(), 3, 5);
+            chunk.set_block(local, block);
+            assert_eq!(chunk.block(local), block);
+        }
+        assert_eq!(chunk.len(), blocks.len());
+
+        let cleared = IVec3::new(1, 3, 5);
+        chunk.set_block(cleared, Block::Air);
+        assert_eq!(chunk.block(cleared), Block::Air);
+        assert_eq!(chunk.len(), blocks.len() - 1);
+        assert_eq!(
+            chunk.iter().count(),
+            blocks.len() - 1,
+            "iteration skips the cleared cell"
+        );
+    }
+
+    #[test]
+    fn water_count_tracks_placements_replacements_and_removals() {
+        let mut world = World::default();
+        let chunk = chunk_at(IVec3::ZERO);
+        let first = IVec3::new(3, 4, 5);
+        let second = IVec3::new(4, 4, 5);
+
+        world.set_block(first, Block::Water);
+        world.set_block(first, Block::Water);
+        let data = world.chunk(chunk).expect("stored chunk");
+        assert!(data.has_water());
+        assert_eq!(data.water, 1);
+
+        world.set_block(first, Block::Stone);
+        let data = world.chunk(chunk).expect("stored chunk");
+        assert!(!data.has_water());
+        assert_eq!(data.water, 0);
+
+        world.set_block(first, Block::Water);
+        world.set_block(second, Block::Water);
+        let data = world.chunk(chunk).expect("stored chunk");
+        assert!(data.has_water());
+        assert_eq!(data.water, 2);
+        assert_eq!(data.len(), 2);
+
+        world.set_block(first, Block::Air);
+        let data = world.chunk(chunk).expect("stored chunk");
+        assert!(data.has_water());
+        assert_eq!(data.water, 1);
+
+        world.set_block(second, Block::Air);
+        assert!(world.chunk(chunk).is_none());
     }
 
     #[test]

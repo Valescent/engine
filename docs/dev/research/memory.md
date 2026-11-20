@@ -16,6 +16,20 @@ and somewhat less after it. At distance 32 that is roughly 230 MB more before me
 The per-chunk figures are the pre-v0.0.8 baseline. The 12-byte indexed vertex keeps mesh buffers
 lower; the settled distance-24 working set was 626 MB before the headless gate was added.
 
+## v0.0.9 packing
+
+Block storage is now four bits per cell, 16 KiB per chunk, and `VCHK` is unchanged. The packed store
+is a direct table, not a palette: the nine block IDs fit a nibble, so a mod or content set that needs
+more than sixteen types will need a palette index instead.
+
+Measured after the change (seed 42, `ENGINE_HEADLESS=1`): 190.6 MB of blocks and light at distance 24
+and 334.6 MB at distance 32, down from 381.2 MB and 669.2 MB. Meshing costs about 15-25% more per
+chunk because of the nibble decode; it runs on workers, so the trade is memory for off-frame CPU.
+
+Light is sparse as well. The sky plane is always stored; the block-light plane exists only when a lamp
+is within the 3x3x3 neighbourhood. Generated terrain places no lamps, so the typical field is 19.2 KiB
+instead of 39 KiB. A lamp restores the full plane for the 27 chunks around it.
+
 A light job is transiently far larger than a chunk: it copies a 3x3 footprint (27 chunks, 864 KiB)
 and allocates a 96^3 working grid with three `u8` arrays (2.65 MB). With 44 jobs in flight the
 engine can hold about 150 MB of scratch that never shows up in the per-chunk table.

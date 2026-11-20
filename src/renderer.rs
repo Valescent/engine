@@ -7,9 +7,7 @@ use std::sync::Arc;
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 use thiserror::Error;
-#[cfg(feature = "tracy")]
-use tracing::warn;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use wgpu::util::DeviceExt;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
@@ -17,8 +15,10 @@ use winit::window::Window;
 use crate::block::{TEXTURE_LAYERS, TEXTURE_SIZE};
 use crate::camera::Camera;
 use crate::frustum::Frustum;
+use crate::horizon::Horizon;
 use crate::mesh::{Lod, MeshData};
 use crate::overlay::{OverlayVertex, build_overlay_mesh};
+use crate::quad_renderer::{POOL_BYTES, QuadRenderer};
 use crate::sky::SkySample;
 use crate::voxel::{HighlightVertex, Vertex};
 use crate::world::{CHUNK_SIZE, ChunkCoord};
@@ -75,9 +75,12 @@ pub enum RendererError {
 
 struct GpuMesh {
     vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
+    /// Per-chunk buffer only when the mesh exceeds a `u16` index; otherwise the
+    /// renderer's shared quad pattern is used.
+    index_buffer: Option<wgpu::Buffer>,
     index_format: wgpu::IndexFormat,
     index_count: u32,
+    bytes: u64,
 }
 
 struct GpuChunk {
@@ -108,12 +111,36 @@ impl GpuChunk {
         }
     }
 
+    /// Stores `mesh` in `lod`, returning the mesh it replaced.
+    fn replace_mesh(&mut self, lod: Lod, revision: u64, mesh: GpuMesh) -> Option<GpuMesh> {
+        self.slot(lod)
+            .replace((revision, mesh))
+            .map(|(_, replaced)| replaced)
+    }
+
+    /// Clears `lod`, returning the mesh it held.
+    fn take_mesh(&mut self, lod: Lod) -> Option<GpuMesh> {
+        self.slot(lod).take().map(|(_, mesh)| mesh)
+    }
+
     fn active_mesh(&self) -> Option<&GpuMesh> {
         self.active.and_then(|lod| self.mesh(lod))
     }
 
     fn is_empty(&self) -> bool {
         self.lod0.is_none() && self.lod1.is_none() && self.lod2.is_none() && self.water.is_none()
+    }
+
+    fn meshes(&self) -> impl Iterator<Item = &GpuMesh> {
+        [
+            self.lod0.as_ref(),
+            self.lod1.as_ref(),
+            self.lod2.as_ref(),
+            self.water.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|(_, mesh)| mesh)
     }
 }
 
@@ -124,6 +151,10 @@ pub(crate) struct FrameStats {
     pub(crate) visible_chunks: u32,
     pub(crate) visible_vertices: u64,
     pub(crate) draw_calls: u32,
+    /// Vertex and index bytes resident for every built LOD and water mesh.
+    pub(crate) geometry_bytes: u64,
+    /// Vertex and index bytes reached by this frame's draws.
+    pub(crate) visible_bytes: u64,
 }
 
 pub(crate) struct Renderer {
@@ -141,6 +172,14 @@ pub(crate) struct Renderer {
     camera_bind_group: wgpu::BindGroup,
     chunk_bind_group_layout: wgpu::BindGroupLayout,
     chunks: BTreeMap<ChunkCoord, GpuChunk>,
+    /// Six `u16` indices per quad, shared by every chunk that fits a `u16` index.
+    shared_index_buffer: wgpu::Buffer,
+    /// Sum of `GpuMesh::bytes` over every resident slot plus the shared index
+    /// buffer, maintained on mutation.
+    geometry_bytes: u64,
+    /// The ADR-0015 quad-pool path, when the adapter supports it.
+    quad: Option<QuadRenderer>,
+    frame_index: u64,
     present_modes: Vec<wgpu::PresentMode>,
     vsync: bool,
     _block_texture: wgpu::Texture,
@@ -185,12 +224,41 @@ impl Renderer {
             "selected GPU adapter"
         );
 
+        let adapter_limits = adapter.limits();
+        let downlevel = adapter.get_downlevel_capabilities().flags;
+        let legacy_forced = std::env::var("ENGINE_LEGACY_RENDER").is_ok_and(|value| value == "1");
+        let quad_supported = !legacy_forced
+            && adapter
+                .features()
+                .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
+            && downlevel.contains(wgpu::DownlevelFlags::INDIRECT_EXECUTION)
+            && downlevel.contains(wgpu::DownlevelFlags::VERTEX_STORAGE)
+            && adapter_limits.max_storage_buffers_per_shader_stage >= 2
+            && adapter_limits.max_storage_buffer_binding_size >= POOL_BYTES
+            && adapter_limits.max_buffer_size >= POOL_BYTES;
+        if quad_supported {
+            info!("quad pool render path enabled");
+        } else {
+            warn!("quad pool render path unavailable; using per-chunk meshes");
+        }
+
+        let mut required_features = timer_features(&adapter);
+        if quad_supported {
+            required_features |= wgpu::Features::INDIRECT_FIRST_INSTANCE;
+        }
+        let mut required_limits =
+            wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter_limits);
+        if quad_supported {
+            required_limits.max_storage_buffers_per_shader_stage = 2;
+            required_limits.max_storage_buffer_binding_size = POOL_BYTES;
+            required_limits.max_buffer_size = required_limits.max_buffer_size.max(POOL_BYTES);
+        }
+
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("engine device"),
-                required_features: timer_features(&adapter),
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults()
-                    .using_resolution(adapter.limits()),
+                required_features,
+                required_limits,
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
                 memory_hints: wgpu::MemoryHints::Performance,
                 trace: wgpu::Trace::Off,
@@ -244,6 +312,16 @@ impl Renderer {
         let texture_bind_group_layout = create_texture_bind_group_layout(&device);
         let (block_texture, texture_bind_group) =
             create_block_texture(&device, &queue, &texture_bind_group_layout);
+        let quad = if quad_supported {
+            QuadRenderer::new(
+                &device,
+                &config,
+                &camera_bind_group_layout,
+                &texture_bind_group_layout,
+            )
+        } else {
+            None
+        };
         let pipeline = create_pipeline(
             &device,
             &config,
@@ -275,6 +353,9 @@ impl Renderer {
         let overlay_pipeline = create_overlay_pipeline(&device, &config)?;
         let (overlay_buffer, overlay_buffer_size) = create_overlay_buffer(&device);
 
+        let shared_index_buffer = create_shared_index_buffer(&device);
+        let shared_index_bytes = shared_index_buffer.size();
+
         let renderer = Self {
             window,
             instance,
@@ -290,6 +371,10 @@ impl Renderer {
             camera_bind_group,
             chunk_bind_group_layout,
             chunks: BTreeMap::new(),
+            shared_index_buffer,
+            geometry_bytes: shared_index_bytes,
+            quad,
+            frame_index: 0,
             present_modes,
             vsync: true,
             _block_texture: block_texture,
@@ -373,10 +458,20 @@ impl Renderer {
         lod: Lod,
         revision: u64,
         mesh: &MeshData,
-    ) {
+    ) -> bool {
+        if let Some(quad) = self.quad.as_mut() {
+            let frame = self.frame_index;
+            if !quad.upload(&self.queue, chunk, lod, mesh, frame) {
+                warn!(?chunk, quads = mesh.quads.len(), "quad pool full; retrying");
+                return false;
+            }
+            return true;
+        }
+
         if mesh.is_empty() {
+            let mut removed = 0;
             if let Some(gpu_chunk) = self.chunks.get_mut(&chunk) {
-                *gpu_chunk.slot(lod) = None;
+                removed = gpu_chunk.take_mesh(lod).map_or(0, |mesh| mesh.bytes);
                 if gpu_chunk.active == Some(lod) {
                     gpu_chunk.active = None;
                 }
@@ -384,24 +479,33 @@ impl Renderer {
                     self.chunks.remove(&chunk);
                 }
             }
-            return;
+            self.geometry_bytes -= removed;
+            return true;
         }
 
         let (vertex_buffer, _) = create_vertex_buffer(&self.device, &mesh.vertices);
         let (index_buffer, index_format, index_count) = create_index_buffer(&self.device, mesh);
-        let gpu_chunk = self.chunk_entry(chunk);
-        *gpu_chunk.slot(lod) = Some((
-            revision,
-            GpuMesh {
-                vertex_buffer,
-                index_buffer,
-                index_format,
-                index_count,
-            },
-        ));
-        if gpu_chunk.active.is_none() {
-            gpu_chunk.active = Some(lod);
+        let gpu_mesh = GpuMesh {
+            bytes: vertex_buffer.size() + index_buffer.as_ref().map_or(0, wgpu::Buffer::size),
+            vertex_buffer,
+            index_buffer,
+            index_format,
+            index_count,
+        };
+        let bytes = gpu_mesh.bytes;
+        let replaced = {
+            let gpu_chunk = self.chunk_entry(chunk);
+            let replaced = gpu_chunk.replace_mesh(lod, revision, gpu_mesh);
+            if gpu_chunk.active.is_none() {
+                gpu_chunk.active = Some(lod);
+            }
+            replaced
+        };
+        self.geometry_bytes += bytes;
+        if let Some(replaced) = replaced {
+            self.geometry_bytes -= replaced.bytes;
         }
+        true
     }
 
     fn chunk_entry(&mut self, chunk: ChunkCoord) -> &mut GpuChunk {
@@ -427,42 +531,87 @@ impl Renderer {
     }
 
     /// Makes `lod` the drawn mesh when that mesh is resident.
+    ///
+    /// Once the active mesh is resident, stale LOD slots are dropped so LOD
+    /// transitions do not retain the previous meshes. Water is never pruned
+    /// here, and the active slot always survives.
     pub(crate) fn select_active(&mut self, chunk: ChunkCoord, lod: Lod) {
+        if let Some(quad) = self.quad.as_mut() {
+            let frame = self.frame_index;
+            quad.select_active(&self.queue, chunk, lod, frame);
+            return;
+        }
+        let mut pruned = 0;
         if let Some(gpu_chunk) = self.chunks.get_mut(&chunk)
             && gpu_chunk.mesh(lod).is_some()
         {
             gpu_chunk.active = Some(lod);
+            for stale in [Lod::Lod0, Lod::Lod1, Lod::Lod2] {
+                if stale != lod {
+                    pruned += gpu_chunk.take_mesh(stale).map_or(0, |mesh| mesh.bytes);
+                }
+            }
         }
+        self.geometry_bytes -= pruned;
     }
 
     /// Uploads or clears a chunk's transparent water mesh.
-    pub(crate) fn upload_water_chunk(&mut self, chunk: ChunkCoord, revision: u64, mesh: &MeshData) {
+    pub(crate) fn upload_water_chunk(
+        &mut self,
+        chunk: ChunkCoord,
+        revision: u64,
+        mesh: &MeshData,
+    ) -> bool {
+        if let Some(quad) = self.quad.as_mut() {
+            let frame = self.frame_index;
+            if !quad.upload_water(&self.queue, chunk, mesh, frame) {
+                warn!(
+                    ?chunk,
+                    quads = mesh.quads.len(),
+                    "quad pool full; retrying water"
+                );
+                return false;
+            }
+            return true;
+        }
         if mesh.is_empty() {
+            let mut removed = 0;
             if let Some(gpu_chunk) = self.chunks.get_mut(&chunk) {
-                gpu_chunk.water = None;
+                removed = gpu_chunk.water.take().map_or(0, |(_, mesh)| mesh.bytes);
                 if gpu_chunk.is_empty() {
                     self.chunks.remove(&chunk);
                 }
             }
-            return;
+            self.geometry_bytes -= removed;
+            return true;
         }
 
         let (vertex_buffer, _) = create_vertex_buffer(&self.device, &mesh.vertices);
         let (index_buffer, index_format, index_count) = create_index_buffer(&self.device, mesh);
-        let gpu_chunk = self.chunk_entry(chunk);
-        gpu_chunk.water = Some((
-            revision,
-            GpuMesh {
-                vertex_buffer,
-                index_buffer,
-                index_format,
-                index_count,
-            },
-        ));
+        let gpu_mesh = GpuMesh {
+            bytes: vertex_buffer.size() + index_buffer.as_ref().map_or(0, wgpu::Buffer::size),
+            vertex_buffer,
+            index_buffer,
+            index_format,
+            index_count,
+        };
+        let bytes = gpu_mesh.bytes;
+        let replaced = self.chunk_entry(chunk).water.replace((revision, gpu_mesh));
+        self.geometry_bytes += bytes;
+        if let Some((_, replaced)) = replaced {
+            self.geometry_bytes -= replaced.bytes;
+        }
+        true
     }
 
     pub(crate) fn remove_chunk(&mut self, chunk: ChunkCoord) {
-        self.chunks.remove(&chunk);
+        if let Some(quad) = self.quad.as_mut() {
+            let frame = self.frame_index;
+            quad.remove(chunk, frame);
+        }
+        if let Some(gpu_chunk) = self.chunks.remove(&chunk) {
+            self.geometry_bytes -= gpu_chunk.meshes().map(|mesh| mesh.bytes).sum::<u64>();
+        }
     }
 
     pub(crate) fn total_vertices(&self) -> u64 {
@@ -511,8 +660,12 @@ impl Renderer {
         self.overlay_count = count;
     }
 
-    #[allow(clippy::cast_precision_loss)]
-    pub(crate) fn render(&mut self, frustum: &Frustum) -> FrameStats {
+    #[allow(clippy::cast_precision_loss, clippy::too_many_lines)]
+    pub(crate) fn render(&mut self, frustum: &Frustum, horizon: &Horizon) -> FrameStats {
+        self.frame_index += 1;
+        if let Some(quad) = self.quad.as_mut() {
+            quad.begin_frame(self.frame_index);
+        }
         let mut stats = FrameStats::default();
         let frame = {
             profiling::scope!("acquire");
@@ -564,24 +717,27 @@ impl Renderer {
                     store: wgpu::StoreOp::Store,
                 },
             })];
+            let mut quad = self.quad.take();
             let descriptor = self.scene_pass_descriptor(&attachments);
 
             #[cfg(feature = "tracy")]
             if let Some(profiler) = &self.profiler {
                 let mut scope = profiler.scope("world", &mut encoder);
                 let mut pass = scope.scoped_render_pass("terrain", descriptor);
-                self.draw_scene(&mut pass, frustum, &mut stats);
+                self.draw_scene(quad.as_mut(), &mut pass, frustum, horizon, &mut stats);
                 drop(pass);
             } else {
                 let mut pass = encoder.begin_render_pass(&descriptor);
-                self.draw_scene(&mut pass, frustum, &mut stats);
+                self.draw_scene(quad.as_mut(), &mut pass, frustum, horizon, &mut stats);
             }
 
             #[cfg(not(feature = "tracy"))]
             {
                 let mut pass = encoder.begin_render_pass(&descriptor);
-                self.draw_scene(&mut pass, frustum, &mut stats);
+                self.draw_scene(quad.as_mut(), &mut pass, frustum, horizon, &mut stats);
             }
+
+            self.quad = quad;
 
             #[cfg(feature = "tracy")]
             if let Some(profiler) = self.profiler.as_mut() {
@@ -646,30 +802,64 @@ impl Renderer {
     #[allow(clippy::cast_precision_loss)]
     fn draw_scene(
         &self,
+        quad: Option<&mut QuadRenderer>,
         pass: &mut wgpu::RenderPass<'_>,
         frustum: &Frustum,
+        horizon: &Horizon,
         stats: &mut FrameStats,
     ) {
-        if !self.chunks.is_empty() {
+        if let Some(quad) = quad {
+            quad.draw(
+                &self.queue,
+                pass,
+                &self.camera_bind_group,
+                &self.texture_bind_group,
+                frustum,
+                horizon,
+                stats,
+            );
+            return;
+        }
+
+        stats.geometry_bytes = self.geometry_bytes;
+
+        // One traversal: count every resident chunk and test each chunk's AABB
+        // once, recording the opaque and water meshes that survive culling.
+        let mut opaque = Vec::with_capacity(self.chunks.len());
+        let mut water = Vec::with_capacity(self.chunks.len());
+        for (chunk, gpu_chunk) in &self.chunks {
+            stats.total_chunks += 1;
+            let min = chunk.origin();
+            if !frustum.intersects_aabb(min, min + Vec3::splat(CHUNK_SIZE as f32)) {
+                continue;
+            }
+            if let Some(mesh) = gpu_chunk.active_mesh() {
+                opaque.push((gpu_chunk, mesh));
+            }
+            if let Some((_, mesh)) = &gpu_chunk.water {
+                water.push((gpu_chunk, mesh));
+            }
+        }
+
+        if !opaque.is_empty() {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
             pass.set_bind_group(2, &self.texture_bind_group, &[]);
-            for (chunk, gpu_chunk) in &self.chunks {
-                stats.total_chunks += 1;
-                let Some(mesh) = gpu_chunk.active_mesh() else {
-                    continue;
-                };
-                let min = chunk.origin();
-                if !frustum.intersects_aabb(min, min + Vec3::splat(CHUNK_SIZE as f32)) {
-                    continue;
-                }
+            for (gpu_chunk, mesh) in opaque {
                 pass.set_bind_group(1, &gpu_chunk.bind_group, &[]);
                 pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-                pass.set_index_buffer(mesh.index_buffer.slice(..), mesh.index_format);
+                pass.set_index_buffer(
+                    mesh.index_buffer
+                        .as_ref()
+                        .unwrap_or(&self.shared_index_buffer)
+                        .slice(..),
+                    mesh.index_format,
+                );
                 pass.draw_indexed(0..mesh.index_count, 0, 0..1);
                 stats.visible_chunks += 1;
                 stats.draw_calls += 1;
                 stats.visible_vertices += u64::from(mesh.index_count);
+                stats.visible_bytes += mesh.bytes;
             }
         }
 
@@ -677,23 +867,23 @@ impl Renderer {
         pass.set_pipeline(&self.water_pipeline);
         pass.set_bind_group(0, &self.camera_bind_group, &[]);
         pass.set_bind_group(2, &self.texture_bind_group, &[]);
-        for (chunk, gpu_chunk) in &self.chunks {
-            let Some((_, mesh)) = &gpu_chunk.water else {
-                continue;
-            };
-            let min = chunk.origin();
-            if !frustum.intersects_aabb(min, min + Vec3::splat(CHUNK_SIZE as f32)) {
-                continue;
-            }
+        for (gpu_chunk, mesh) in water {
             if gpu_chunk.active_mesh().is_none() {
                 stats.visible_chunks += 1;
             }
             pass.set_bind_group(1, &gpu_chunk.bind_group, &[]);
             pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-            pass.set_index_buffer(mesh.index_buffer.slice(..), mesh.index_format);
+            pass.set_index_buffer(
+                mesh.index_buffer
+                    .as_ref()
+                    .unwrap_or(&self.shared_index_buffer)
+                    .slice(..),
+                mesh.index_format,
+            );
             pass.draw_indexed(0..mesh.index_count, 0, 0..1);
             stats.draw_calls += 1;
             stats.visible_vertices += u64::from(mesh.index_count);
+            stats.visible_bytes += mesh.bytes;
         }
 
         if self.highlight_count > 0 {
@@ -1140,30 +1330,42 @@ fn create_depth_texture(
     (texture, view)
 }
 
+/// Quads addressable with a `u16` index buffer (four vertices per quad).
+const SHARED_QUADS: u32 = 65_536 / 4;
+
+/// Shared index pattern: six `u16` indices per quad, matching [`MeshData`].
+fn shared_index_data(quads: u32) -> Vec<u16> {
+    let mut data = Vec::with_capacity(quads as usize * 6);
+    for quad in 0..quads {
+        let base = u16::try_from(quad * 4).expect("shared index fits in u16");
+        data.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    data
+}
+
+fn create_shared_index_buffer(device: &wgpu::Device) -> wgpu::Buffer {
+    let indices = shared_index_data(SHARED_QUADS);
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("shared quad indices"),
+        contents: bytemuck::cast_slice(&indices),
+        usage: wgpu::BufferUsages::INDEX,
+    })
+}
+
 fn create_index_buffer(
     device: &wgpu::Device,
     mesh: &MeshData,
-) -> (wgpu::Buffer, wgpu::IndexFormat, u32) {
+) -> (Option<wgpu::Buffer>, wgpu::IndexFormat, u32) {
     let count = u32::try_from(mesh.indices.len()).expect("index count fits in u32");
     if u16::try_from(mesh.vertices.len()).is_ok() {
-        let indices: Vec<u16> = mesh
-            .indices
-            .iter()
-            .map(|index| u16::try_from(*index).expect("index fits in u16"))
-            .collect();
-        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("chunk indices"),
-            contents: bytemuck::cast_slice(&indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-        return (buffer, wgpu::IndexFormat::Uint16, count);
+        return (None, wgpu::IndexFormat::Uint16, count);
     }
     let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("chunk indices"),
         contents: bytemuck::cast_slice(&mesh.indices),
         usage: wgpu::BufferUsages::INDEX,
     });
-    (buffer, wgpu::IndexFormat::Uint32, count)
+    (Some(buffer), wgpu::IndexFormat::Uint32, count)
 }
 
 fn create_vertex_buffer(device: &wgpu::Device, mesh: &[Vertex]) -> (wgpu::Buffer, u32) {
@@ -1272,6 +1474,19 @@ fn create_overlay_buffer(device: &wgpu::Device) -> (wgpu::Buffer, u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_index_pattern_matches_the_mesher() {
+        let data = shared_index_data(3);
+        assert_eq!(data.len(), 18);
+        assert_eq!(&data[..6], &[0, 1, 2, 0, 2, 3]);
+        assert_eq!(&data[6..12], &[4, 5, 6, 4, 6, 7]);
+        assert_eq!(data.iter().max(), Some(&11));
+        assert_eq!(
+            shared_index_data(SHARED_QUADS).len(),
+            SHARED_QUADS as usize * 6
+        );
+    }
 
     #[test]
     fn vsync_prefers_fifo_and_tearing_falls_back() {

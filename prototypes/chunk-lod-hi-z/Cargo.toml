@@ -1,0 +1,16 @@
+[package]
+name = "chunk-lod-hi-z"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+bytemuck = { version = "1.25", features = ["derive"] }
+glam = "0.34"
+pollster = "1"
+wgpu = "30"
+
+[profile.release]
+opt-level = 3

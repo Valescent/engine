@@ -12,6 +12,7 @@ Milestones move from **planned** to **in progress** to **shipped**. Each one nam
 | 0.0.6   | Atmosphere            | Shipped  |
 | 0.0.7   | Advanced Horizons     | Shipped  |
 | 0.0.8   | Scale                 | In progress |
+| 0.0.9   | Far View              | In progress |
 
 ## v0.0.1: The Foundation
 
@@ -278,4 +279,41 @@ See [v0.0.8 scope](dev/v0.0.8-scope.md) for the deliverables and the
 ### Non-Goals
 - Gameplay, inventory, and survival systems
 - SVDAG and raymarching; both remain deferred
+- Save-format changes
+
+## v0.0.9: Far View
+
+**Status:** In progress - storage and the quad-pool renderer landed; hierarchy and horizon work next.
+
+**Goal:** Hold resident memory, VRAM, and frame cost roughly flat while the visible distance grows to kilometres.
+
+**Summary:** Detail falls off with distance instead of the whole world staying resident at full resolution.
+
+See [v0.0.9 scope](dev/v0.0.9-scope.md) for the deliverables and acceptance criteria, and
+[GPU-driven meshing research](dev/research/gpu-driven-meshing.md) for the analysis behind them.
+
+### Milestones
+
+#### 1. Storage and geometry
+- [x] Four-bit in-memory block storage; `VCHK` unchanged
+- [x] Sparse light storage: the block-light plane is stored only when a lamp is in range
+- [x] Quad pages, storage-buffer chunk info, vertex pulling, and one indirect draw per pass
+- [x] Current per-chunk path retained as the fallback
+
+#### 2. Distance
+- [x] Horizon culling from column tops, opt-in behind `ENGINE_HORIZON_CULL`
+- [ ] Hierarchy levels 1-2 with surface-only generation and parent retention
+- [ ] Hierarchy levels 3-4
+
+### Definition of Done
+- 60 FPS at distance 32 with a working set at or below 350 MB and geometry VRAM at or below 40 MB
+- 60 FPS at a 2 km view at or below 400 MB, and at an 8 km view at or below 500 MB
+- Draw calls at or below 10 at distance 32 and at or below 20 at a 2 km view
+- Main-thread frame time at or below 4 ms at distance 32, with no frame above 33 ms once ready
+- Headless counts unchanged for the same world, proving storage packing is not a content change
+
+### Non-Goals
+- The compute mesher, GPU-resident voxel and light pools, and readback-driven allocation
+- Hi-Z, GPU traversal, and the voxel visibility graph
+- Shadows, sub-voxels, and console backends
 - Save-format changes

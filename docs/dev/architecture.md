@@ -102,7 +102,11 @@ See [Coordinates](coordinates.md) for the full conventions, including chunk and 
 
 - Right-handed, Y-up.
 - A voxel at `(x, y, z)` occupies `[x, x + 1] × [y, y + 1] × [z, z + 1]`.
-- The world stores 32³ chunks of `Block` values in one dense `[Block; 32768]` array per chunk (32 KiB); a chunk also counts its non-air blocks. Missing chunks are air, and stored chunks never contain `Air`. Light lives beside the chunk map in a padded `LightField`, not inside `Chunk`.
+- The world stores 32³ chunks as four-bit packed block IDs (16 KiB per chunk, two cells per byte) with
+  a non-air counter and the highest solid local y for horizon culling; `VCHK` still stores one byte per
+  block. Light lives beside the chunk map in a padded `LightField`; the sky plane is always stored, and
+  the block-light plane only when a lamp is in range. Missing chunks are air, and stored chunks never
+  contain `Air`. Light lives beside the chunk map in a padded `LightField`, not inside `Chunk`.
 - Chunk meshes use chunk-local cells, 12-byte packed vertices (three cell bytes plus the face index, two UV bytes, the texture layer, and packed light/AO), and merge coplanar faces whose world-space neighbour is air, including across chunk borders. Quads emit four vertices and six indices, wound counter-clockwise around the outward normal, so the terrain and water pipelines cull back faces. The shader unpacks cells and normals.
 - LOD0 is the full-resolution greedy mesh; LOD1 and LOD2 are the same mesher over 2x2x2 and 4x4x4 downsamples. Both emit every chunk-boundary face so LOD transitions cannot crack.
 - Chunks at or within four chunk units of the player use LOD0, chunks at eight or more use LOD1, chunks at sixteen or more use LOD2, and the ranges between keep the current LOD.
@@ -116,11 +120,11 @@ See [Coordinates](coordinates.md) for the full conventions, including chunk and 
 - Surface format comes from `Surface::get_default_config`; the default is typically `Bgra8UnormSrgb`.
 - The chunk pipeline uses `Depth32Float`, depth write enabled, and `Less` depth comparison.
 - Bind group 0 holds a 160-byte frame uniform: view-projection, sky, ambient, and sun colours, sun direction, an unlit flag, the far plane, time of day, and the camera position.
-- Each non-empty chunk owns an origin uniform in bind group 1 and up to four vertex/index meshes: LOD0, LOD1, LOD2, and an optional transparent water mesh. The vertex shader adds the origin to the chunk-local vertex position.
-- Bind group 2 holds one ten-layer `texture_2d_array` and a nearest-filtering sampler that repeats in U and V and clamps in W. The table is in [Texture and asset pipeline](textures.md).
+- Each non-empty chunk owns an origin uniform in bind group 1 and up to four vertex meshes: LOD0, LOD1, LOD2, and an optional transparent water mesh. Index buffers are shared: one `u16` quad pattern serves every chunk that fits a `u16` index, and only larger chunks allocate their own `u32` buffer. The vertex shader adds the origin to the chunk-local vertex position. This is the fallback path.
+- When the adapter exposes storage buffers, `INDIRECT_FIRST_INSTANCE`, and indirect execution, chunk geometry uses the quad path from [ADR-0015](../decisions/0015-quad-pool-and-indirect-draws.md): bind group 1 is a 48-byte-per-chunk storage table plus the 12-byte quad pool, the vertex shader pulls six vertices per record, and the CPU writes one indirect argument list for opaque and one for water. Draws are one `multi_draw_indirect` per pass.
 - The clear colour follows the interpolated sky colour, so fog blends into the distance instead of ending against a fixed backdrop.
-- A chunk's previous buffer stays visible until a newer mesh for its LOD is uploaded. Edits invalidate both LODs; a chunk with an empty mesh releases that buffer.
-- Draw calls are frustum-culled per chunk AABB and counted with visible chunks, visible vertices, draw calls, worker rebuild time, and upload time in the once-per-second debug log.
+- A chunk's previous mesh stays visible until a newer mesh for its LOD is uploaded. Edits invalidate both LODs; a chunk with an empty mesh releases its range or buffer.
+- The CPU frustum-culls chunk AABBs in the quad path and writes indirect arguments for each visible chunk; visible chunks, visible vertices, resident and visible geometry bytes, draw calls, worker rebuild time, and upload time are logged once per second.
 - With the local `tracy` feature, the renderer requests timestamp queries when the adapter supports them, wraps the pass in a `wgpu-profiler` GPU zone, and ends the profiler frame after present. See [Profiling](profiling.md).
 - The surface starts in FIFO (vsync) presentation. `V` reconfigures it to immediate or mailbox presentation when supported, and back.
 - Water is a separate full-resolution mesh, drawn after all opaque chunks in ascending chunk order with blending `SrcAlpha`/`OneMinusSrcAlpha`, alpha `0.65`, `LessEqual` depth testing, and no depth writes. Faces are not sorted, so overlapping water can blend out of order.
@@ -131,7 +135,7 @@ See [Coordinates](coordinates.md) for the full conventions, including chunk and 
 
 ## Current limitations
 
-- No occlusion culling, horizon culling, or batched indirect drawing.
+- No occlusion culling; horizon culling is opt-in behind `ENGINE_HORIZON_CULL`.
 - No shadow maps or sorted transparency; water faces blend in mesh order.
 - One block palette; no inventory UI.
 

@@ -85,17 +85,19 @@ pub(crate) struct LightResult {
 /// Sky and block light for a chunk plus one border cell.
 ///
 /// Cells are indexed by chunk-local coordinates in `-1..=32` and stored as one
-/// nibble per cell; the border is what meshing samples across chunk edges.
+/// nibble per cell; the border is what meshing samples across chunk edges. The
+/// block plane is omitted when the neighbourhood contains no lamp, which covers
+/// every generated chunk.
 #[derive(Clone, Debug)]
 pub(crate) struct LightField {
     sky: PackedLight,
-    block: PackedLight,
+    block: Option<PackedLight>,
 }
 
 impl LightField {
-    /// Bytes held by the two packed planes.
+    /// Bytes held by the packed planes that exist.
     pub(crate) fn resident_bytes(&self) -> usize {
-        self.sky.resident_bytes() + self.block.resident_bytes()
+        self.sky.resident_bytes() + self.block.as_ref().map_or(0, PackedLight::resident_bytes)
     }
 
     /// Sky light at a local coordinate in `-1..=32`.
@@ -105,7 +107,9 @@ impl LightField {
 
     /// Block light at a local coordinate in `-1..=32`.
     pub(crate) fn block(&self, local: IVec3) -> u8 {
-        self.block.get(field_index(local))
+        self.block
+            .as_ref()
+            .map_or(0, |plane| plane.get(field_index(local)))
     }
 }
 
@@ -153,7 +157,10 @@ pub(crate) fn compute(snapshot: &LightSnapshot, chunk: ChunkCoord) -> LightField
     let base = chunk.world_origin() - IVec3::splat(SIZE);
 
     let mut blocks = vec![Block::Air; cells];
-    let mut ceiling: HashMap<(i32, i32), i32> = HashMap::new();
+    let columns = usize::try_from(GRID * GRID).expect("light grid columns fit in usize");
+    let column_stride = usize::try_from(GRID).expect("grid size fits");
+    // Highest solid world y per grid column; `i32::MIN` means open to the sky.
+    let mut ceiling = vec![i32::MIN; columns];
     for (coordinate, data) in &snapshot.cells {
         let origin = coordinate.world_origin();
         let offset = origin - base;
@@ -162,14 +169,14 @@ pub(crate) fn compute(snapshot: &LightSnapshot, chunk: ChunkCoord) -> LightField
             if block == Block::Air {
                 continue;
             }
+            let grid_cell = offset + cell;
             if block.is_solid() {
                 let world = origin + cell;
-                ceiling
-                    .entry((world.x, world.z))
-                    .and_modify(|top| *top = (*top).max(world.y))
-                    .or_insert(world.y);
+                let x = usize::try_from(grid_cell.x).expect("in-grid coordinate fits");
+                let z = usize::try_from(grid_cell.z).expect("in-grid coordinate fits");
+                let top = &mut ceiling[x * column_stride + z];
+                *top = (*top).max(world.y);
             }
-            let grid_cell = offset + cell;
             if in_grid(grid_cell) {
                 blocks[grid_index(grid_cell)] = block;
             }
@@ -177,27 +184,28 @@ pub(crate) fn compute(snapshot: &LightSnapshot, chunk: ChunkCoord) -> LightField
     }
 
     let mut sky = vec![0_u8; cells];
-    let mut block_light = vec![0_u8; cells];
+    let mut block_light: Option<Vec<u8>> = None;
     let mut sky_queue = VecDeque::new();
     let mut block_queue = VecDeque::new();
 
     for x in 0..GRID {
         for z in 0..GRID {
-            let column = (base.x + x, base.z + z);
-            let ceiling_y = ceiling.get(&column).copied();
+            let x_index = usize::try_from(x).expect("in-grid coordinate fits");
+            let z_index = usize::try_from(z).expect("in-grid coordinate fits");
+            let ceiling_y = ceiling[x_index * column_stride + z_index];
             for y in 0..GRID {
                 let cell = IVec3::new(x, y, z);
                 let index = grid_index(cell);
                 let block = blocks[index];
                 if block.is_solid() {
                     if block == Block::Lamp {
-                        block_light[index] = LAMP_LIGHT;
+                        block_light.get_or_insert_with(|| vec![0_u8; cells])[index] = LAMP_LIGHT;
                         block_queue.push_back((cell, LAMP_LIGHT));
                     }
                     continue;
                 }
                 let world_y = base.y + y;
-                if ceiling_y.is_none_or(|top| world_y > top) {
+                if world_y > ceiling_y {
                     sky[index] = MAX_LIGHT;
                 }
             }
@@ -224,11 +232,14 @@ pub(crate) fn compute(snapshot: &LightSnapshot, chunk: ChunkCoord) -> LightField
     }
 
     spread(&blocks, &mut sky, &mut sky_queue);
-    spread(&blocks, &mut block_light, &mut block_queue);
+    let block = block_light.map(|mut values| {
+        spread(&blocks, &mut values, &mut block_queue);
+        extract(&values)
+    });
 
     LightField {
         sky: extract(&sky),
-        block: extract(&block_light),
+        block,
     }
 }
 
@@ -366,6 +377,47 @@ mod tests {
         assert_eq!(field.sky(IVec3::new(SIZE, 1, SIZE)), MAX_LIGHT);
         assert_eq!(field.sky(IVec3::new(0, 0, 0)), 0);
         assert_eq!(field.block(IVec3::new(-1, -1, -1)), 0);
+    }
+
+    #[test]
+    fn chunks_without_lamps_omit_the_block_plane() {
+        let mut world = World::default();
+        for x in 0..8 {
+            for z in 0..8 {
+                world.set_block(IVec3::new(x, 0, z), Block::Stone);
+            }
+        }
+        let light = field(&world, chunk_at(IVec3::ZERO));
+
+        let plane = usize::try_from(PADDED * PADDED * PADDED)
+            .expect("plane fits")
+            .div_ceil(2);
+        assert_eq!(light.resident_bytes(), plane);
+        assert_eq!(light.block(IVec3::new(3, 3, 3)), 0);
+    }
+
+    #[test]
+    fn lamps_keep_the_block_plane() {
+        let world = world_with(&[(IVec3::new(4, 4, 4), Block::Lamp)]);
+        let light = field(&world, chunk_at(IVec3::ZERO));
+
+        let plane = usize::try_from(PADDED * PADDED * PADDED)
+            .expect("plane fits")
+            .div_ceil(2);
+        assert_eq!(light.resident_bytes(), plane * 2);
+        assert_eq!(light.block(IVec3::new(5, 4, 4)), 13);
+    }
+
+    #[test]
+    fn lamps_above_the_grid_omit_the_block_plane() {
+        let world = world_with(&[(IVec3::new(4, 70, 4), Block::Lamp)]);
+        let light = field(&world, chunk_at(IVec3::ZERO));
+
+        let plane = usize::try_from(PADDED * PADDED * PADDED)
+            .expect("plane fits")
+            .div_ceil(2);
+        assert_eq!(light.resident_bytes(), plane);
+        assert_eq!(light.block(IVec3::new(4, 1, 4)), 0);
     }
 
     #[test]

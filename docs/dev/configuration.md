@@ -33,6 +33,8 @@ environment variables.
 | `ENGINE_HEADLESS` | Engine (`run`) | `1` runs a windowless fixed-step benchmark instead of opening a window. Prints one `HEADLESS` summary line to stdout. |
 | `ENGINE_HEADLESS_FRAMES` | Engine (`headless`) | Measured frames for a headless run; default `600`. |
 | `ENGINE_HEADLESS_SPEED` | Engine (`headless`) | Camera speed in metres per second for a headless run; default `0` (standing). `32` triggers streaming and unloads. |
+| `ENGINE_LEGACY_RENDER` | Engine (`Renderer::new`) | `1` forces the per-chunk vertex/index path even when the adapter supports the quad pool. Used to A/B the two renderers and to exercise the fallback. |
+| `ENGINE_HORIZON_CULL` | Engine (`App::with_world`) | `1` enables conservative chunk-top horizon culling. Off by default until the LOD hierarchy and moving-camera visual check land. |
 | `WGPU_BACKEND` | `wgpu` | Forces a backend such as `dx12`, `vulkan`, or `metal`, depending on the platform. Unset lets `wgpu` choose. The engine does not parse it. |
 
 See [Testing](testing.md) for manual-run examples, [Setup](setup.md) for backend selection, and

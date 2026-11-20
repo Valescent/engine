@@ -10,12 +10,16 @@ mod config;
 mod frustum;
 mod generation;
 mod headless;
+mod horizon;
 mod light;
 mod mesh;
 mod mesher;
 mod metrics;
 mod overlay;
 mod player;
+mod pool;
+mod quad;
+mod quad_renderer;
 mod raycast;
 mod renderer;
 mod sky;
@@ -23,7 +27,10 @@ mod streaming;
 mod voxel;
 mod world;
 
-use std::collections::HashSet;
+#[cfg(test)]
+mod bench;
+
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -65,7 +72,13 @@ const MAX_COLUMNS_PER_FRAME: usize = 2;
 const INTERACTION_DISTANCE: f32 = 6.0;
 const SPAWN_X: i32 = 32;
 const SPAWN_Z: i32 = 32;
-const MAX_UPLOADS_PER_FRAME: usize = 2;
+/// Mesh uploads collected per frame. `2` made distance-32 first-load settle in 33 s against 22 s at
+/// `64`, so above this value the cap stops limiting; `8` stays above the worker rate while keeping
+/// each frame's upload burst small.
+const MAX_UPLOADS_PER_FRAME: usize = 8;
+
+/// Main-thread budget for draining the chunk work set each frame.
+const LEVEL_WORK_BUDGET: Duration = Duration::from_millis(2);
 const STRESS_SCENE_ENV: &str = "ENGINE_STRESS_SCENE";
 const STRESS_CHUNKS: i32 = 8;
 const STRESS_FLAT_CHUNKS: i32 = 4;
@@ -368,7 +381,7 @@ struct App {
     streaming: Option<Streaming>,
     seed: Option<u64>,
     save_directory: Option<PathBuf>,
-    level_work: HashSet<ChunkCoord>,
+    level_work: BTreeSet<ChunkCoord>,
     level_player_chunk: ChunkCoord,
     stats: FrameAccumulator,
     stress: bool,
@@ -387,6 +400,9 @@ struct App {
     focused: bool,
     occluded: bool,
     show_overlay: bool,
+    horizon_cull: bool,
+    horizon: horizon::Horizon,
+    horizon_at: Instant,
     overlay_fps: f64,
     overlay_frame_ms: f64,
     last_frame: Instant,
@@ -466,6 +482,9 @@ impl App {
             focused: true,
             occluded: false,
             show_overlay: cfg!(debug_assertions),
+            horizon_cull: std::env::var("ENGINE_HORIZON_CULL").is_ok_and(|value| value == "1"),
+            horizon: horizon::Horizon::disabled(),
+            horizon_at: Instant::now(),
             overlay_fps: 0.0,
             overlay_frame_ms: 0.0,
             last_frame: Instant::now(),
@@ -502,6 +521,13 @@ impl App {
                 if let Some(renderer) = &mut self.renderer {
                     renderer.remove_chunk(*chunk);
                 }
+            } else if !self.world.chunk(*chunk).is_some_and(Chunk::has_water)
+                && let Some(renderer) = &mut self.renderer
+            {
+                // No water job will run for a dry chunk, so clear any water mesh
+                // left over from before the last water block was removed.
+                let revision = self.queue.revision(*chunk);
+                renderer.upload_water_chunk(*chunk, revision, &mesh::MeshData::default());
             }
         }
 
@@ -521,7 +547,7 @@ impl App {
         let Some(pool) = self.mesher.clone() else {
             return;
         };
-        for (chunk, _) in self.world.iter_chunks() {
+        for (chunk, data) in self.world.iter_chunks() {
             self.queue.request(
                 &*pool,
                 &self.world,
@@ -530,22 +556,26 @@ impl App {
                 MeshKind::Opaque,
                 Priority::Urgent,
             );
-            self.queue.request(
-                &*pool,
-                &self.world,
-                chunk,
-                Lod::Lod0,
-                MeshKind::Water,
-                Priority::Background,
-            );
+            if data.has_water() {
+                self.queue.request(
+                    &*pool,
+                    &self.world,
+                    chunk,
+                    Lod::Lod0,
+                    MeshKind::Water,
+                    Priority::Background,
+                );
+            }
         }
     }
 
     /// Recalculates every chunk's LOD and requests any missing mesh.
     ///
-    /// Only chunks with outstanding level work are visited. Generation commits,
-    /// edits, and a player chunk change feed the set; a chunk stays in it until
-    /// its light, opaque mesh, and water mesh are built.
+    /// Only chunks with outstanding level work are visited, in chunk order, and
+    /// at most [`LEVEL_WORK_BUDGET`] of main-thread time is spent per frame. A
+    /// chunk is dropped from the set while it waits for a job result; accepting
+    /// the result re-inserts it, so the set stays a queue of actionable work
+    /// rather than a set of blocked chunks.
     fn request_levels(&mut self, pool: &dyn MeshPool) {
         profiling::scope!("mesh request");
         let feet = self.player.position.floor().as_ivec3();
@@ -556,24 +586,17 @@ impl App {
                 .extend(self.world.iter_chunks().map(|(chunk, _)| chunk));
         }
 
-        let work: Vec<ChunkCoord> = self.level_work.drain().collect();
-        for chunk in work {
-            if self.world.chunk(chunk).is_none() {
-                continue;
-            }
-            let mut done = true;
-            if !self.queue.light_is_current(chunk) {
-                done = false;
-                if !self.queue.light_pending(chunk) {
-                    self.queue
-                        .request_light(pool, &self.world, chunk, Priority::Background);
-                }
-            }
-            if self.queue.light_is_current(chunk) {
-                let lod = self.queue.desired_lod(chunk, player_chunk);
-                if !self.queue.is_built(chunk, lod, MeshKind::Opaque) {
-                    done = false;
-                    if !self.queue.is_pending(chunk, lod, MeshKind::Opaque) {
+        let started = Instant::now();
+        while let Some(chunk) = self.level_work.pop_first() {
+            let chunk_started = Instant::now();
+            if let Some(data) = self.world.chunk(chunk) {
+                let has_water = data.has_water();
+                let mut retry = false;
+                if self.queue.light_is_current(chunk) {
+                    let lod = self.queue.desired_lod(chunk, player_chunk);
+                    if !self.queue.is_built(chunk, lod, MeshKind::Opaque)
+                        && !self.queue.is_pending(chunk, lod, MeshKind::Opaque)
+                    {
                         self.queue.request(
                             pool,
                             &self.world,
@@ -582,12 +605,13 @@ impl App {
                             MeshKind::Opaque,
                             Priority::Background,
                         );
+                        retry = !self.queue.is_pending(chunk, lod, MeshKind::Opaque);
                     }
-                }
 
-                if !self.queue.is_built(chunk, Lod::Lod0, MeshKind::Water) {
-                    done = false;
-                    if !self.queue.is_pending(chunk, Lod::Lod0, MeshKind::Water) {
+                    if has_water
+                        && !self.queue.is_built(chunk, Lod::Lod0, MeshKind::Water)
+                        && !self.queue.is_pending(chunk, Lod::Lod0, MeshKind::Water)
+                    {
                         self.queue.request(
                             pool,
                             &self.world,
@@ -596,11 +620,27 @@ impl App {
                             MeshKind::Water,
                             Priority::Background,
                         );
+                        retry = retry || !self.queue.is_pending(chunk, Lod::Lod0, MeshKind::Water);
                     }
+                } else if !self.queue.light_pending(chunk) {
+                    self.queue
+                        .request_light(pool, &self.world, chunk, Priority::Background);
+                    retry = !self.queue.light_pending(chunk);
+                }
+                if retry {
+                    self.level_work.insert(chunk);
                 }
             }
-            if !done {
-                self.level_work.insert(chunk);
+            let took = chunk_started.elapsed();
+            if took.as_millis() >= 2 {
+                debug!(
+                    chunk = ?chunk,
+                    ms = took.as_secs_f64() * 1000.0,
+                    "slow level request"
+                );
+            }
+            if started.elapsed() >= LEVEL_WORK_BUDGET {
+                break;
             }
         }
         self.stats.pending_jobs = self.queue.pending_len();
@@ -615,6 +655,7 @@ impl App {
         self.stats.last_rebuild_ms = rebuild_ms;
 
         for light in lights {
+            self.level_work.insert(light.chunk);
             self.world.set_light_field(light.chunk, light.light);
         }
 
@@ -647,29 +688,33 @@ impl App {
         let mut upload_ms = 0.0;
         for result in &results {
             let started = Instant::now();
-            match result.kind {
+            let desired = self.queue.desired(result.chunk);
+            let uploaded = match result.kind {
                 MeshKind::Opaque => {
-                    renderer.upload_chunk(result.chunk, result.lod, result.revision, &result.mesh);
+                    let uploaded = renderer.upload_chunk(
+                        result.chunk,
+                        result.lod,
+                        result.revision,
+                        &result.mesh,
+                    );
+                    if uploaded && let Some(lod) = desired {
+                        renderer.select_active(result.chunk, lod);
+                    }
+                    uploaded
                 }
                 MeshKind::Water => {
-                    renderer.upload_water_chunk(result.chunk, result.revision, &result.mesh);
+                    renderer.upload_water_chunk(result.chunk, result.revision, &result.mesh)
                 }
+            };
+            if !uploaded {
+                self.queue
+                    .forget_built(result.chunk, result.lod, result.kind);
             }
+            self.level_work.insert(result.chunk);
             upload_ms += started.elapsed().as_secs_f64() * 1000.0;
         }
         self.stats.upload_ms += upload_ms;
         self.stats.last_upload_ms = upload_ms;
-    }
-
-    fn select_active_levels(&mut self) {
-        let Some(renderer) = &mut self.renderer else {
-            return;
-        };
-        for (chunk, _) in self.world.iter_chunks() {
-            if let Some(lod) = self.queue.desired(chunk) {
-                renderer.select_active(chunk, lod);
-            }
-        }
     }
 
     fn target_hit(&self) -> Option<RaycastHit> {
@@ -809,17 +854,14 @@ impl App {
             let slow2 = Instant::now();
             self.upload_finished_meshes(&*pool);
             let slow3 = Instant::now();
-            profiling::scope!("select active");
-            self.select_active_levels();
-            let slow4 = Instant::now();
-            if slow4.saturating_duration_since(slow0).as_millis() > 5 {
+            if slow3.saturating_duration_since(slow0).as_millis() > 5 {
                 let ms =
                     |a: Instant, b: Instant| b.saturating_duration_since(a).as_secs_f64() * 1000.0;
                 debug!(
                     stream = ms(slow0, slow1),
                     levels = ms(slow1, slow2),
                     upload = ms(slow2, slow3),
-                    select = ms(slow3, slow4),
+                    level_backlog = self.level_work.len(),
                     "slow phases"
                 );
             }
@@ -840,7 +882,11 @@ impl App {
             renderer.set_camera(&self.camera);
             renderer.set_sky(&self.sky.sample(), self.unlit);
             renderer.set_overlay(overlay.as_deref());
-            self.stats.totals = renderer.render(&frustum);
+            if self.horizon_cull && self.horizon_at.elapsed() >= Duration::from_millis(250) {
+                self.horizon = horizon::Horizon::build(self.camera.position(), &self.world);
+                self.horizon_at = Instant::now();
+            }
+            self.stats.totals = renderer.render(&frustum, &self.horizon);
         }
         if slow_render.elapsed().as_millis() > 5 {
             debug!(
@@ -853,6 +899,8 @@ impl App {
         metrics::visible_chunks(f64::from(self.stats.totals.visible_chunks));
         metrics::draw_calls(f64::from(self.stats.totals.draw_calls));
         metrics::visible_vertices(self.stats.totals.visible_vertices as f64);
+        metrics::geometry_bytes(self.stats.totals.geometry_bytes as f64);
+        metrics::visible_geometry_bytes(self.stats.totals.visible_bytes as f64);
         metrics::rebuild_ms(self.stats.last_rebuild_ms);
         metrics::upload_ms(self.stats.last_upload_ms);
         metrics::mesh_jobs(self.stats.pending_jobs as f64);
@@ -865,6 +913,7 @@ impl App {
         }
     }
 
+    #[allow(clippy::cast_precision_loss)]
     fn record_frame(&mut self, delta: Duration) {
         self.frame_accum += delta;
         self.frame_count += 1;
@@ -878,6 +927,8 @@ impl App {
                 total_chunks = self.stats.totals.total_chunks,
                 visible_vertices = self.stats.totals.visible_vertices,
                 draw_calls = self.stats.totals.draw_calls,
+                geometry_mb = self.stats.totals.geometry_bytes as f64 / (1024.0 * 1024.0),
+                visible_geometry_mb = self.stats.totals.visible_bytes as f64 / (1024.0 * 1024.0),
                 rebuild_ms = self.stats.rebuild_ms,
                 upload_ms = self.stats.upload_ms,
                 generated_columns = self.stats.generated_columns,
