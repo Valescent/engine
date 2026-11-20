@@ -14,7 +14,7 @@ use glam::{IVec3, Vec3};
 use thiserror::Error;
 #[cfg(feature = "tracy")]
 use tracing::warn;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use wgpu::util::DeviceExt;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
@@ -57,8 +57,19 @@ struct FrameUniform {
     settings: [f32; 4],
     /// Camera position relative to the frame's render origin, for fog distance.
     camera_position: [f32; 4],
-    /// The render origin itself, used only to keep water waves world-anchored.
-    render_origin: [f32; 4],
+    /// The frame's absolute world-block render origin.
+    ///
+    /// Section and chunk origin uniforms carry absolute integer origins too;
+    /// every vertex shader subtracts this field in integer space before the
+    /// small difference is converted to `f32`.
+    render_origin: [i32; 4],
+    /// The legacy water wave phase of `render_origin`, wrapped to `[0, TAU)`.
+    ///
+    /// `x` anchors `sin(phase + 0.7 x + 0.5 z)` and `y` anchors
+    /// `cos(phase + 0.6 x - 0.4 z)`. Wrapping the phase in `f64` keeps the wave
+    /// pattern world-anchored without casting an absolute world coordinate to
+    /// `f32`.
+    wave_anchor: [f32; 4],
 }
 
 impl Default for FrameUniform {
@@ -71,9 +82,64 @@ impl Default for FrameUniform {
             sun_direction: [0.0, 1.0, 0.0, 0.0],
             settings: [0.0, 100.0, 0.25, 100.0],
             camera_position: [0.0; 4],
-            render_origin: [0.0; 4],
+            render_origin: [0; 4],
+            wave_anchor: [0.0; 4],
         }
     }
+}
+
+/// What moving the frame origin costs now that origin uniforms are static.
+///
+/// Section and chunk origin uniforms hold absolute world-block integers and
+/// are uploaded once per resident. Only the relative-space highlight buffer is
+/// rebuilt, so `origin_buffer_writes` is always zero; `avoided_origin_writes`
+/// records the per-origin `Queue::write_buffer` calls the previous relative
+/// convention made on every whole-block crossing.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct OriginChange {
+    /// Frame origin before the move.
+    pub(crate) from: [i32; 3],
+    /// Frame origin after the move.
+    pub(crate) to: [i32; 3],
+    /// Resident origin uniforms rewritten by the move. Always zero.
+    pub(crate) origin_buffer_writes: usize,
+    /// Resident chunk plus section origins the move no longer rewrites.
+    pub(crate) avoided_origin_writes: usize,
+}
+
+fn origin_change(
+    from: IVec3,
+    to: IVec3,
+    resident_chunks: usize,
+    resident_sections: usize,
+) -> OriginChange {
+    OriginChange {
+        from: from.to_array(),
+        to: to.to_array(),
+        origin_buffer_writes: 0,
+        avoided_origin_writes: resident_chunks.saturating_add(resident_sections),
+    }
+}
+
+/// Wraps the world-space water-wave phase of `origin` into `[0, TAU)`.
+///
+/// The legacy water shader evaluates `sin(phase + 0.7 x + 0.5 z)` and
+/// `cos(phase + 0.6 x - 0.4 z)`. Shipping the phase of the frame origin,
+/// computed in `f64` and wrapped modulo `TAU`, lets the shader work only from
+/// relative coordinates: wrapping is invisible to `sin`/`cos`, and the pattern
+/// stays anchored to world x/z as the camera crosses a block. The result is
+/// below `TAU`, so it is exact enough in `f32` even when the world coordinate
+/// is not.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "a value in [0, TAU) loses no visible precision in f32"
+)]
+fn wave_anchor(origin: IVec3) -> [f32; 4] {
+    let x = f64::from(origin.x);
+    let z = f64::from(origin.z);
+    let along_x = (0.7 * x + 0.5 * z).rem_euclid(std::f64::consts::TAU);
+    let along_z = (0.6 * x - 0.4 * z).rem_euclid(std::f64::consts::TAU);
+    [along_x as f32, along_z as f32, 0.0, 0.0]
 }
 
 #[derive(Debug, Error)]
@@ -100,8 +166,9 @@ struct GpuMesh {
 }
 
 struct GpuChunk {
-    /// Chunk origin relative to the frame's render origin.
-    origin_buffer: wgpu::Buffer,
+    /// Absolute world-block chunk origin, uploaded once and never rewritten.
+    /// Kept for the chunk bind group's lifetime.
+    _origin_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     lod0: Option<(u64, GpuMesh)>,
     lod1: Option<(u64, GpuMesh)>,
@@ -243,11 +310,11 @@ pub(crate) fn decode_quad(raw: u64) -> DecodedQuad {
 /// so a draw needs no vertex buffer, no index buffer, and no per-quad data.
 /// Sections are keyed by world origin, so a submit is a diff: only new or
 /// changed origins allocate and upload, and unchanged origins keep their
-/// buffers. The origin uniform itself is the section origin minus the frame's
-/// [`RenderView::origin`]; when the camera crosses a block, every resident
-/// origin buffer is rewritten. The path is created only when
-/// [`Renderer::enable_terrain`] is called, which keeps the legacy mesh demo
-/// untouched.
+/// buffers. The origin uniform holds the section's **absolute** world-block
+/// origin; `terrain_draw.wgsl` subtracts the frame's render origin in integer
+/// space, so crossing a block never rewrites a resident origin. The path is
+/// created only when [`Renderer::enable_terrain`] is called, which keeps the
+/// legacy mesh demo untouched.
 #[derive(Debug)]
 pub(crate) struct TerrainDraw {
     device: wgpu::Device,
@@ -259,18 +326,14 @@ pub(crate) struct TerrainDraw {
     /// Draw order of the resident origins. Kept beside the map so a full
     /// submit draws in the caller's order, exactly like the old `Vec`.
     order: Vec<[i32; 3]>,
-    /// World block subtracted from every section origin this frame.
-    render_origin: IVec3,
 }
 
 #[derive(Debug)]
 struct GpuSection {
     /// The revision that produced the resident buffers.
     revision: u64,
-    /// World block origin, kept as integers so rebasing stays exact.
+    /// Absolute world block origin, kept as integers for culling.
     world_origin: [i32; 3],
-    /// World origin minus the current render origin, mirrored into the uniform.
-    origin: Vec3,
     /// World blocks per cell, mirrored into the origin uniform.
     scale: u32,
     origin_buffer: wgpu::Buffer,
@@ -343,7 +406,6 @@ impl TerrainDraw {
         format: wgpu::TextureFormat,
         camera_layout: &wgpu::BindGroupLayout,
         texture_layout: &wgpu::BindGroupLayout,
-        render_origin: IVec3,
     ) -> Result<Self, RendererError> {
         let section_layout = create_terrain_section_layout(device);
         let opaque_pipeline = create_terrain_pipeline(
@@ -378,7 +440,6 @@ impl TerrainDraw {
             water_pipeline,
             sections: BTreeMap::new(),
             order: Vec::new(),
-            render_origin,
         })
     }
 
@@ -431,6 +492,10 @@ impl TerrainDraw {
             .into_iter()
             .map(|(origin, _revision)| origin)
             .collect();
+        debug!(
+            resident = self.sections.len(),
+            uploaded, "terrain sections submitted"
+        );
         Ok(uploaded)
     }
 
@@ -465,11 +530,26 @@ impl TerrainDraw {
             resident.revision = revision;
             if resident.scale != section.scale {
                 resident.scale = section.scale;
-                resident.origin_buffer = create_terrain_origin_buffer(
+                resident.origin_buffer = create_origin_buffer(
                     device,
-                    resident.origin,
-                    scale_factor(section.scale),
+                    "terrain section origin",
+                    resident.world_origin,
+                    section_scale(section.scale),
                 );
+                // The scale lives in the origin uniform, so every resident
+                // range must bind the new buffer.
+                let origin_buffer = &resident.origin_buffer;
+                for range in [
+                    &mut resident.opaque,
+                    &mut resident.cutout,
+                    &mut resident.water,
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    range.bind_group =
+                        create_quad_bind_group(device, layout, origin_buffer, &range.buffer);
+                }
             }
             resident.opaque = update_quad_range(
                 device,
@@ -499,9 +579,12 @@ impl TerrainDraw {
         }
 
         let world_origin = section.origin;
-        let origin = relative_origin(world_origin, self.render_origin);
-        let origin_buffer =
-            create_terrain_origin_buffer(device, origin, scale_factor(section.scale));
+        let origin_buffer = create_origin_buffer(
+            device,
+            "terrain section origin",
+            world_origin,
+            section_scale(section.scale),
+        );
         let opaque = create_quad_range(device, queue, layout, &origin_buffer, section.opaque)?;
         let cutout = create_quad_range(device, queue, layout, &origin_buffer, section.cutout)?;
         let water = create_quad_range(device, queue, layout, &origin_buffer, section.water)?;
@@ -510,7 +593,6 @@ impl TerrainDraw {
             GpuSection {
                 revision,
                 world_origin,
-                origin,
                 scale: section.scale,
                 origin_buffer,
                 opaque,
@@ -521,31 +603,16 @@ impl TerrainDraw {
         Ok(())
     }
 
-    /// Rebases every resident origin uniform for a new frame origin.
-    fn set_render_origin(&mut self, origin: IVec3) {
-        if self.render_origin == origin {
-            return;
-        }
-        self.render_origin = origin;
-        for section in self.sections.values_mut() {
-            let relative = relative_origin(section.world_origin, origin);
-            if relative == section.origin {
-                continue;
-            }
-            section.origin = relative;
-            write_terrain_origin(
-                &self.queue,
-                &section.origin_buffer,
-                relative,
-                scale_factor(section.scale),
-            );
-        }
+    /// Number of resident emitting sections.
+    fn resident_count(&self) -> usize {
+        self.sections.len()
     }
 
     fn draw_opaque(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         frustum: &Frustum,
+        render_origin: IVec3,
         camera: &wgpu::BindGroup,
         texture: &wgpu::BindGroup,
         stats: &mut FrameStats,
@@ -557,7 +624,7 @@ impl TerrainDraw {
             let Some(section) = self.sections.get(origin) else {
                 continue;
             };
-            if !section_visible(frustum, section.origin, scale_factor(section.scale)) {
+            if !section_visible(frustum, section.world_origin, section.scale, render_origin) {
                 continue;
             }
             // Opaque and cutout share the pipeline; `fs_main` alpha tests.
@@ -574,6 +641,7 @@ impl TerrainDraw {
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         frustum: &Frustum,
+        render_origin: IVec3,
         camera: &wgpu::BindGroup,
         texture: &wgpu::BindGroup,
         stats: &mut FrameStats,
@@ -588,7 +656,7 @@ impl TerrainDraw {
             let Some(range) = &section.water else {
                 continue;
             };
-            if !section_visible(frustum, section.origin, scale_factor(section.scale)) {
+            if !section_visible(frustum, section.world_origin, section.scale, render_origin) {
                 continue;
             }
             pass.set_bind_group(1, &range.bind_group, &[]);
@@ -654,8 +722,17 @@ fn section_revision(section: &TerrainSection<'_>) -> u64 {
     hash
 }
 
-fn section_visible(frustum: &Frustum, origin: Vec3, scale: f32) -> bool {
-    frustum.intersects_aabb(origin, origin + Vec3::splat(SECTION_EXTENT * scale))
+fn section_visible(
+    frustum: &Frustum,
+    world_origin: [i32; 3],
+    scale: u32,
+    render_origin: IVec3,
+) -> bool {
+    let origin = relative_origin(world_origin, render_origin);
+    frustum.intersects_aabb(
+        origin,
+        origin + Vec3::splat(SECTION_EXTENT * scale_factor(scale)),
+    )
 }
 
 #[allow(
@@ -666,19 +743,36 @@ fn scale_factor(scale: u32) -> f32 {
     scale as f32
 }
 
-fn create_terrain_origin_buffer(device: &wgpu::Device, origin: Vec3, scale: f32) -> wgpu::Buffer {
-    let data = [origin.x, origin.y, origin.z, scale];
-    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("terrain section origin"),
-        contents: bytemuck::cast_slice(&data),
-        // `COPY_DST` lets the camera-relative rebase rewrite this in place.
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-    })
+/// The `w` lane of a section origin uniform: its LOD scale as an integer.
+fn section_scale(scale: u32) -> i32 {
+    i32::try_from(scale).expect("a terrain section scale is 1, 2, or 4")
 }
 
-fn write_terrain_origin(queue: &wgpu::Queue, buffer: &wgpu::Buffer, origin: Vec3, scale: f32) {
-    let data = [origin.x, origin.y, origin.z, scale];
-    queue.write_buffer(buffer, 0, bytemuck::cast_slice(&data));
+/// Usage for every per-origin uniform.
+///
+/// Deliberately no `COPY_DST`: the absolute world-space origin is uploaded once
+/// with the resident entry and can never be rewritten by
+/// `Queue::write_buffer`, so a camera crossing does no origin work at all.
+const ORIGIN_BUFFER_USAGE: wgpu::BufferUsages = wgpu::BufferUsages::UNIFORM;
+
+/// The four `i32` lanes of one origin uniform.
+fn origin_packet(world_origin: [i32; 3], extra: i32) -> [i32; 4] {
+    [world_origin[0], world_origin[1], world_origin[2], extra]
+}
+
+/// Uploads one origin uniform: absolute world blocks in `xyz`, `extra` in `w`.
+fn create_origin_buffer(
+    device: &wgpu::Device,
+    label: &str,
+    world_origin: [i32; 3],
+    extra: i32,
+) -> wgpu::Buffer {
+    let data = origin_packet(world_origin, extra);
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some(label),
+        contents: bytemuck::cast_slice(&data),
+        usage: ORIGIN_BUFFER_USAGE,
+    })
 }
 
 fn create_quad_range(
@@ -908,7 +1002,6 @@ impl Renderer {
         surface.configure(&device, &config);
 
         let view = camera.render_view();
-        let render_origin = view.origin.as_vec3().to_array();
         let frame = FrameUniform {
             view_projection: view.view_projection.to_cols_array(),
             settings: [0.0, camera.far_plane(), 0.25, camera.fog_end()],
@@ -918,7 +1011,8 @@ impl Renderer {
                 view.camera_position.z,
                 0.0,
             ],
-            render_origin: [render_origin[0], render_origin[1], render_origin[2], 0.0],
+            render_origin: [view.origin.x, view.origin.y, view.origin.z, 0],
+            wave_anchor: wave_anchor(view.origin),
             ..FrameUniform::default()
         };
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1032,39 +1126,36 @@ impl Renderer {
 
     /// Applies one frame's render origin and camera-relative transform.
     ///
-    /// Both draw paths and the highlight use the same origin. The origin only
-    /// changes when the camera crosses a block boundary, so resident origin
-    /// uniforms are rebased then rather than every frame.
+    /// Both draw paths and the highlight use the same origin. Origin uniforms
+    /// store absolute world-block integers, so moving the origin rewrites no
+    /// chunk or section buffer at all; only the small relative highlight buffer
+    /// is re-uploaded.
     pub(crate) fn set_camera(&mut self, view: &RenderView) {
         self.frame.view_projection = view.view_projection.to_cols_array();
         self.frame.settings[1] = view.far_plane;
         self.frame.settings[3] = view.fog_end;
         let camera_position = view.camera_position;
         self.frame.camera_position = [camera_position.x, camera_position.y, camera_position.z, 0.0];
-        let render_origin = view.origin.as_vec3();
-        self.frame.render_origin = [render_origin.x, render_origin.y, render_origin.z, 0.0];
+        self.frame.render_origin = [view.origin.x, view.origin.y, view.origin.z, 0];
+        self.frame.wave_anchor = wave_anchor(view.origin);
         if view.origin != self.render_origin {
+            let sections = self.terrain.as_ref().map_or(0, TerrainDraw::resident_count);
+            let change =
+                origin_change(self.render_origin, view.origin, self.chunks.len(), sections);
             self.render_origin = view.origin;
-            self.rebase_chunks();
-            if let Some(terrain) = &mut self.terrain {
-                terrain.set_render_origin(view.origin);
-            }
             self.upload_highlight();
-        }
-        self.write_frame();
-    }
-
-    /// Rewrites every legacy chunk origin uniform in relative space.
-    fn rebase_chunks(&mut self) {
-        let queue = &self.queue;
-        for (chunk, gpu_chunk) in &mut self.chunks {
-            let origin = relative_origin(chunk.world_origin().to_array(), self.render_origin);
-            queue.write_buffer(
-                &gpu_chunk.origin_buffer,
-                0,
-                bytemuck::cast_slice(&[origin.x, origin.y, origin.z, 0.0]),
+            debug!(
+                from = ?change.from,
+                to = ?change.to,
+                origin_buffer_writes = change.origin_buffer_writes,
+                avoided_origin_writes = change.avoided_origin_writes,
+                resident_chunks = self.chunks.len(),
+                resident_sections = sections,
+                highlight_vertices = self.highlight_world.len(),
+                "render origin moved"
             );
         }
+        self.write_frame();
     }
 
     /// Writes sky colours, sun direction, the unlit flag, and the clear colour.
@@ -1133,18 +1224,12 @@ impl Renderer {
     fn chunk_entry(&mut self, chunk: ChunkCoord) -> &mut GpuChunk {
         let device = &self.device;
         let layout = &self.chunk_bind_group_layout;
-        let render_origin = self.render_origin;
         self.chunks.entry(chunk).or_insert_with(|| {
-            let origin = relative_origin(chunk.world_origin().to_array(), render_origin);
-            let origin_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("chunk origin"),
-                contents: bytemuck::cast_slice(&[origin.x, origin.y, origin.z, 0.0]),
-                // The camera-relative rebase rewrites this in place.
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
+            let world_origin = chunk.world_origin().to_array();
+            let origin_buffer = create_origin_buffer(device, "chunk origin", world_origin, 0);
             GpuChunk {
                 bind_group: create_chunk_bind_group(device, layout, &origin_buffer),
-                origin_buffer,
+                _origin_buffer: origin_buffer,
                 lod0: None,
                 lod1: None,
                 lod2: None,
@@ -1272,7 +1357,6 @@ impl Renderer {
                 self.config.format,
                 &self.camera_bind_group_layout,
                 &self.textures_layout,
-                self.render_origin,
             )?;
             self.terrain = Some(terrain);
         }
@@ -1475,7 +1559,7 @@ impl Renderer {
         frustum: &Frustum,
         stats: &mut FrameStats,
     ) {
-        let render_origin = self.render_origin.as_vec3();
+        let render_origin = self.render_origin;
         if !self.chunks.is_empty() {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
@@ -1485,7 +1569,7 @@ impl Renderer {
                 let Some(mesh) = gpu_chunk.active_mesh() else {
                     continue;
                 };
-                let min = chunk.origin() - render_origin;
+                let min = relative_origin(chunk.world_origin().to_array(), render_origin);
                 if !frustum.intersects_aabb(min, min + Vec3::splat(CHUNK_SIZE as f32)) {
                     continue;
                 }
@@ -1504,6 +1588,7 @@ impl Renderer {
             terrain.draw_opaque(
                 pass,
                 frustum,
+                render_origin,
                 &self.camera_bind_group,
                 &self.texture_bind_group,
                 stats,
@@ -1518,7 +1603,7 @@ impl Renderer {
             let Some((_, mesh)) = &gpu_chunk.water else {
                 continue;
             };
-            let min = chunk.origin() - render_origin;
+            let min = relative_origin(chunk.world_origin().to_array(), render_origin);
             if !frustum.intersects_aabb(min, min + Vec3::splat(CHUNK_SIZE as f32)) {
                 continue;
             }
@@ -1539,6 +1624,7 @@ impl Renderer {
             terrain.draw_water(
                 pass,
                 frustum,
+                render_origin,
                 &self.camera_bind_group,
                 &self.texture_bind_group,
                 stats,
@@ -1628,7 +1714,7 @@ fn create_camera_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayo
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,
-                min_binding_size: wgpu::BufferSize::new(176),
+                min_binding_size: wgpu::BufferSize::new(192),
             },
             count: None,
         }],
@@ -1650,6 +1736,10 @@ fn create_camera_bind_group(
     })
 }
 
+/// Creates the chunk origin layout.
+///
+/// The uniform is the chunk's absolute world-block origin (`vec4<i32>`; `w` is
+/// padding), uploaded once per resident chunk.
 fn create_chunk_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("chunk bind group layout"),
@@ -1685,8 +1775,9 @@ fn create_terrain_section_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("terrain section bind group layout"),
         entries: &[
-            // The section origin, relative to the frame's render origin,
-            // exactly like the legacy chunk origin uniform.
+            // The section origin as absolute world blocks in `xyz` and the
+            // section scale in `w`. `terrain_draw.wgsl` subtracts the frame
+            // origin in integer space, exactly like the legacy chunk origin.
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX,
@@ -2386,6 +2477,59 @@ mod tests {
         )
         .validate(&module)
         .expect("terrain_draw.wgsl validates without optional capabilities");
+    }
+
+    #[test]
+    fn legacy_shader_parses_and_validates() {
+        let module = wgpu::naga::front::wgsl::parse_str(include_str!("shader.wgsl"))
+            .expect("shader.wgsl parses");
+        wgpu::naga::valid::Validator::new(
+            wgpu::naga::valid::ValidationFlags::all(),
+            wgpu::naga::valid::Capabilities::empty(),
+        )
+        .validate(&module)
+        .expect("shader.wgsl validates without optional capabilities");
+    }
+
+    #[test]
+    fn frame_uniform_matches_the_shader_layout() {
+        // 64-byte matrix, six vec4s, the integer render origin, and the wave
+        // anchor: the camera bind group layout advertises 192 bytes.
+        assert_eq!(size_of::<FrameUniform>(), 192);
+    }
+
+    #[test]
+    fn origin_packet_keeps_absolute_world_blocks_exact() {
+        let world = [1_048_579, 64, -1_048_581];
+
+        assert_eq!(origin_packet(world, 2), [1_048_579, 64, -1_048_581, 2]);
+        // The frame origin is not part of the packet: the same resident always
+        // uploads the same bytes, no matter where the camera is.
+        assert_eq!(origin_packet(world, 2), origin_packet(world, 2));
+    }
+
+    /// Origin uniforms are `UNIFORM` only: `Queue::write_buffer` requires
+    /// `COPY_DST`, so no camera crossing can rewrite them.
+    #[test]
+    fn origin_buffers_are_static() {
+        assert!(ORIGIN_BUFFER_USAGE.contains(wgpu::BufferUsages::UNIFORM));
+        assert!(!ORIGIN_BUFFER_USAGE.contains(wgpu::BufferUsages::COPY_DST));
+    }
+
+    #[test]
+    fn whole_block_crossing_writes_no_origin_buffers() {
+        // Whatever is resident, moving the frame origin rewrites nothing. The
+        // 1,089 + 64 case is the brief's ring-column count plus the legacy
+        // stress scene's 64 chunks; the second is the measured full demo ring
+        // (372 emitting sections + 1,388 legacy chunks), where the old rebase
+        // made one `write_buffer` call per origin on every crossing.
+        for (chunks, sections, avoided) in [(64, 1_089, 1_153), (1_388, 372, 1_760), (0, 0, 0)] {
+            let change =
+                origin_change(IVec3::new(0, 64, 0), IVec3::new(1, 64, 0), chunks, sections);
+
+            assert_eq!(change.origin_buffer_writes, 0);
+            assert_eq!(change.avoided_origin_writes, avoided);
+        }
     }
 
     #[test]

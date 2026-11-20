@@ -67,6 +67,14 @@ impl ChunkCoord {
     }
 
     /// Minimum-corner world position in metres.
+    ///
+    /// Rendering and culling use the exact integer [`Self::world_origin`];
+    /// this `f32` form remains for the CPU-side tests and tools that work in
+    /// world-space floats.
+    #[allow(
+        dead_code,
+        reason = "kept for tests; the renderer uses integer origins"
+    )]
     pub(crate) fn origin(self) -> Vec3 {
         self.world_origin().as_vec3()
     }

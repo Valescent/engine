@@ -129,29 +129,44 @@ Both draw paths share one convention (spec 14.3):
 
 - Per frame `Camera::render_view()` chooses `render_origin = floor(camera_position)` as an
   `IVec3` and builds the view matrix from `camera_position - render_origin`. The frustum is
-  extracted from that same relative matrix.
-- Terrain sections keep their world-space `[i32; 3]` keys. The per-section origin uniform is
-  `section_world_origin - render_origin`, computed in `i64` and only then cast to `f32`;
-  `terrain_draw.wgsl` adds section-local quad coordinates.
-- Legacy chunks keep their `ChunkCoord` keys. The chunk origin uniform is
-  `chunk_world_origin - render_origin`; `shader.wgsl` adds only chunk-local cell coordinates.
+  extracted from that same relative matrix and both paths cull against it.
+- Terrain sections and legacy chunks keep their world-space `i32` keys. Each origin uniform is
+  uploaded **once**, when the resident entry is created, as an absolute world-block
+  `vec4<i32>`: `xyz` is the origin, and `w` is the section scale (1/2/4) or chunk padding. The
+  origin buffers are created with `UNIFORM` and no `COPY_DST`, so `Queue::write_buffer` cannot
+  rewrite them.
+- Both vertex shaders subtract the frame origin in integer space and only then cast:
+  `vec3<f32>(origin.xyz - camera.render_origin.xyz)`. Relative deltas are bounded by the view
+  distance, far below `2^24`, so the cast is exact even when the absolute world coordinate is
+  not. At `2^30` one block is smaller than an `f32` ULP, but the relative delta is still exactly
+  `1`. This is why no absolute world origin is ever cast to `f32`; `terrain_draw.wgsl` adds the
+  section-local quad position after the subtraction, and `shader.wgsl` adds only the chunk-local
+  cell.
 - `camera_position` in the frame uniform is the camera minus the same origin. Both fragment
   shaders compute fog from `length(relative_world - relative_camera)`, which equals the Euclidean
-  world distance. The frame uniform also carries the world render origin, used only by the legacy
-  water shader to keep its wave phase anchored to world x/z after rebasing.
-- Culling subtracts the origin before testing section and chunk AABBs against the relative
-  frustum. The block highlight is uploaded in relative space too and is rebuilt when the origin
-  moves.
-- Crossing a block boundary rewrites the resident origin uniforms in place (`COPY_DST`). No CPU
-  world position changes: picking, collision, streaming, saves, and the ring all stay in world
-  space. The CPU camera is still a world-space `Vec3` (`f32`); `RenderView` is the only relative
-  representation.
+  world distance.
+- The legacy water wave used to reconstruct a world coordinate by adding an `f32` render origin.
+  It now uses `camera.wave_anchor`: the origin's `0.7x + 0.5z` and `0.6x - 0.4z` phases computed in
+  `f64` and wrapped modulo `TAU`. `sin`/`cos` cannot distinguish the wrapped value, so the pattern
+  stays world-anchored across a crossing without an absolute `f32` cast.
+- Culling uses the same integer subtraction before testing section and chunk AABBs against the
+  relative frustum. The block highlight is still uploaded in relative space and is the only buffer
+  rebuilt when the origin moves; it is a handful of vertices.
+- Crossing a block boundary writes **zero** origin buffers. At the full demo ring the renderer
+  held 372 emitting sections plus the legacy scene's 1,388 resident chunks; the old rebase made one
+  `write_buffer` call per origin, so a crossing eliminated **1,760** calls. The debug frame log
+  reports `origin_buffer_writes=0 avoided_origin_writes=1760` on each crossing. (The ring's 1,089
+  resident columns are not all emitting sections; the GPU origin count is per submitted section.)
+- No CPU world position changes: picking, collision, streaming, saves, and the ring all stay in
+  world space. The CPU camera is still a world-space `Vec3` (`f32`); `RenderView` is the only
+  relative representation.
 
 `camera::tests::camera_relative_precision_at_two_to_the_twenty` places the camera at
 `(2^20 + 0.5, 64.5, 2^20 + 0.5)`. A nearby section origin is `(32, -32, -32)` relative to the
 camera and a chunk is `(0, -32, 0)`; the f32 relative view-projection agrees with an f64
 world-space reference to `5.96e-8` in NDC. The same test confirms a raycast returns the world
-block and the player lands at world `y = 64`.
+block, the player lands at world `y = 64`, and that at `2^30` the integer delta is still exact
+where an absolute `f32` subtraction would collapse a block to zero.
 
 ## Column ring
 

@@ -6,17 +6,17 @@ struct Camera {
     sun_direction: vec4<f32>,
     // x: unlit flag, y: far plane, z: time of day, w: fog end distance.
     settings: vec4<f32>,
-    // Camera is relative to the frame origin; the render origin itself is
-    // world-space and only anchors the water wave phase.
+    // Camera is relative to the frame origin; the render origin and the chunk
+    // origin are absolute world blocks and are subtracted in integer space.
     camera_position: vec4<f32>,
-    render_origin: vec4<f32>,
+    render_origin: vec4<i32>,
+    // The frame origin's water-wave phase, wrapped to [0, 2*pi).
+    wave_anchor: vec4<f32>,
 };
 
 struct Chunk {
-    // Chunk origin relative to the frame's render origin, the same convention
-    // as the packed-quad section origin and `camera.camera_position`.
-    origin: vec3<f32>,
-    padding: f32,
+    // Absolute world-block chunk origin in `xyz`; `w` is padding.
+    origin: vec4<i32>,
 };
 
 @group(0) @binding(0)
@@ -75,7 +75,10 @@ struct VertexOut {
 fn vs_main(input: VertexIn) -> VertexOut {
     var output: VertexOut;
     let cell = vec3<f32>(f32(input.cell_face.x), f32(input.cell_face.y), f32(input.cell_face.z));
-    let world_position = chunk.origin + cell;
+    // Integer subtraction first: the difference is at most the view distance,
+    // so the f32 cast is exact even when the world coordinate is not.
+    let relative_origin = vec3<f32>(chunk.origin.xyz - camera.render_origin.xyz);
+    let world_position = relative_origin + cell;
     output.clip_position = camera.view_projection * vec4<f32>(world_position, 1.0);
     output.normal = face_normal(input.cell_face.w);
     output.uv = vec2<f32>(f32(input.texel.x), f32(input.texel.y));
@@ -140,13 +143,14 @@ fn fs_water(input: VertexOut) -> @location(0) vec4<f32> {
     );
 
     let phase = 40.0 * 3.141592653589793 * camera.settings.z;
-    // `world_position` is relative; add the render origin so the wave pattern
-    // stays anchored to world x/z as the camera crosses block boundaries.
-    let world = input.world_position + camera.render_origin.xyz;
+    // `world_position` is relative. The frame origin's phase (wrapped mod 2*pi
+    // on the CPU) restores the world-anchored wave pattern without casting a
+    // large absolute world coordinate to f32.
+    let world = input.world_position;
     let wave = vec3<f32>(
-        sin(phase + world.x * 0.7 + world.z * 0.5),
+        sin(phase + world.x * 0.7 + world.z * 0.5 + camera.wave_anchor.x),
         0.0,
-        cos(phase + world.x * 0.6 - world.z * 0.4),
+        cos(phase + world.x * 0.6 - world.z * 0.4 + camera.wave_anchor.y),
     );
     let normal = normalize(input.normal + 0.15 * wave);
 

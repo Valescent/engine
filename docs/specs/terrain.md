@@ -1474,11 +1474,12 @@ contradict a MUST elsewhere in this document.
   measured transition is the shipped one. The command is diagnostic and is not a CI gate.
 - **Section-record migration has no older format.** Version 2 records are canonicalised and headers upgrade v1 to v2; there is no normative v1 section record to decode or migrate.
 - **Camera-relative rendering is applied; the CPU camera is still `f32`** (§14.3). Both draw paths
-  subtract one per-frame render origin (the camera's block position) from every submitted section
-  and chunk origin and from the view matrix; fog and culling use the same relative frame, and
-  picking, collision, and streaming stay world-space. A precision test at 2^20 blocks covers both
-  paths. The spec's `f64` camera and entity positions are not implemented, so very large worlds
-  still depend on the `f32` camera's block-aligned precision; see
+  store absolute world-block origins as integers and subtract the frame's render origin in the
+  shader, casting only the small relative delta to `f32`; the view matrix uses the camera's offset
+  from the same origin, and fog and culling use that relative frame while picking, collision, and
+  streaming stay world-space. Crossing a block rewrites no origin uniform. A precision test at
+  2^20 blocks covers both paths. The spec's `f64` camera and entity positions are not implemented,
+  so very large worlds still depend on the `f32` camera's block-aligned precision; see
   [Terrain v1 runtime](../dev/terrain-v1.md#camera-relative-rendering).
 - **The headless tool is split out of the engine crate.** `terrain-gen` is a binary of the
   `terrain-core` library, which has no window, GPU, audio, or renderer dependency. CI enforces
