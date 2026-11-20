@@ -259,7 +259,7 @@ struct GpuSection {
     revision: u64,
     origin: Vec3,
     /// World blocks per cell, mirrored into the origin uniform.
-    scale: f32,
+    scale: u32,
     origin_buffer: wgpu::Buffer,
     opaque: Option<GpuQuadRange>,
     cutout: Option<GpuQuadRange>,
@@ -448,11 +448,13 @@ impl TerrainDraw {
         let layout = &self.section_layout;
         if let Some(resident) = self.sections.get_mut(&section.origin) {
             resident.revision = revision;
-            let scale = section.scale as f32;
-            if resident.scale != scale {
-                resident.scale = scale;
-                resident.origin_buffer =
-                    create_terrain_origin_buffer(device, resident.origin, scale);
+            if resident.scale != section.scale {
+                resident.scale = section.scale;
+                resident.origin_buffer = create_terrain_origin_buffer(
+                    device,
+                    resident.origin,
+                    scale_factor(section.scale),
+                );
             }
             resident.opaque = update_quad_range(
                 device,
@@ -482,8 +484,8 @@ impl TerrainDraw {
         }
 
         let origin = section_origin(section.origin);
-        let scale = section.scale as f32;
-        let origin_buffer = create_terrain_origin_buffer(device, origin, scale);
+        let origin_buffer =
+            create_terrain_origin_buffer(device, origin, scale_factor(section.scale));
         let opaque = create_quad_range(device, queue, layout, &origin_buffer, section.opaque)?;
         let cutout = create_quad_range(device, queue, layout, &origin_buffer, section.cutout)?;
         let water = create_quad_range(device, queue, layout, &origin_buffer, section.water)?;
@@ -492,7 +494,7 @@ impl TerrainDraw {
             GpuSection {
                 revision,
                 origin,
-                scale,
+                scale: section.scale,
                 origin_buffer,
                 opaque,
                 cutout,
@@ -517,7 +519,7 @@ impl TerrainDraw {
             let Some(section) = self.sections.get(origin) else {
                 continue;
             };
-            if !section_visible(frustum, section.origin, section.scale) {
+            if !section_visible(frustum, section.origin, scale_factor(section.scale)) {
                 continue;
             }
             // Opaque and cutout share the pipeline; `fs_main` alpha tests.
@@ -548,7 +550,7 @@ impl TerrainDraw {
             let Some(range) = &section.water else {
                 continue;
             };
-            if !section_visible(frustum, section.origin, section.scale) {
+            if !section_visible(frustum, section.origin, scale_factor(section.scale)) {
                 continue;
             }
             pass.set_bind_group(1, &range.bind_group, &[]);
@@ -625,6 +627,14 @@ fn section_origin(origin: [i32; 3]) -> Vec3 {
     // draw paths must use the same frame. Section origins are small integers,
     // so the `f32` conversion is exact.
     Vec3::new(origin[0] as f32, origin[1] as f32, origin[2] as f32)
+}
+
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "scale is 1, 2, or 4 and exact in f32"
+)]
+fn scale_factor(scale: u32) -> f32 {
+    scale as f32
 }
 
 fn create_terrain_origin_buffer(device: &wgpu::Device, origin: Vec3, scale: f32) -> wgpu::Buffer {

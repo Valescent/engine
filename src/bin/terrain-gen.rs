@@ -1919,11 +1919,11 @@ struct VerifyOutcome {
 fn cmd_verify(args: &[String], options: &Options) -> u8 {
     match verify_outcome(args) {
         Ok((outcome, report)) => {
-            if let Some(directory) = report {
-                if let Err(error) = write_verify_bundle(&outcome, &directory) {
-                    eprintln!("cannot write verify report: {error}");
-                    return EXIT_INVARIANT;
-                }
+            if let Some(directory) = report
+                && let Err(error) = write_verify_bundle(&outcome, &directory)
+            {
+                eprintln!("cannot write verify report: {error}");
+                return EXIT_INVARIANT;
             }
             print_verify(&outcome, options.json);
             if outcome.drifts.is_empty() {

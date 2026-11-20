@@ -304,14 +304,14 @@ pub struct Terrain {
     tiles: RefCell<BTreeMap<(i32, i32), std::rc::Rc<TileData>>>,
     hydro: RefCell<BTreeMap<(i32, i32), HydroTileRef>>,
     /// The one whole-world hydrology result, solved on first use and shared
-    /// with every worker that installs it ([Terrain::with_world_hydro]).
+    /// with every worker that installs it ([`Terrain::with_world_hydro`]).
     world_hydro: RefCell<Option<Arc<hydro::WorldHydro>>>,
 }
 
-/// The hydrology result for one tile (D8.2).
+/// The hydrology result for one tile (`D8.2`).
 ///
 /// World mode is the v1 path: the tile is a view of one solve over
-/// [hydro::WORLD_SIDE_CELLS], so a basin that crosses a tile seam has one
+/// [`hydro::WORLD_SIDE_CELLS`], so a basin that crosses a tile seam has one
 /// level. Tile mode remains for tiles outside that grid.
 #[derive(Clone, Debug)]
 pub enum HydroTileRef {
@@ -665,15 +665,15 @@ impl Terrain {
         }
         let hydro_started = Instant::now();
         let world = self.world_hydro()?;
-        let tile = match hydro::OwnedWorldTile::new(Arc::clone(&world), hydro_x, hydro_z) {
-            Some(view) => HydroTileRef::World(view),
-            None => {
+        let tile =
+            if let Some(view) = hydro::OwnedWorldTile::new(Arc::clone(&world), hydro_x, hydro_z) {
+                HydroTileRef::World(view)
+            } else {
                 let side = hydro::SIDE;
                 let heights = self.tile_heights(hydro_x, hydro_z);
                 let inflow = vec![0_u32; (side * side) as usize];
                 HydroTileRef::Tile(Rc::new(HydroTile::solve(&heights, &inflow)?))
-            }
-        };
+            };
         // Diagnostics only, taken after the solve returned.
         self.counters
             .record_latency(Stage::Hydrology, micros(hydro_started));

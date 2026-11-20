@@ -995,14 +995,7 @@ fn build_terrain_demo_extent(
     let pack = content::v1_default();
     let section_blocks = i32::try_from(description::SECTION_SIZE).expect("SECTION_SIZE fits i32");
 
-    let mut columns = demo_columns_extent(
-        seed,
-        min_x,
-        max_x,
-        min_z,
-        max_z,
-        std::sync::Arc::clone(&world_hydro),
-    )?;
+    let mut columns = demo_columns_extent(seed, min_x, max_x, min_z, max_z, &world_hydro)?;
     let mut baselines = BTreeMap::new();
     let mut read_only = false;
     for record in saved {
@@ -1229,7 +1222,7 @@ fn demo_columns_extent(
     max_x: i32,
     min_z: i32,
     max_z: i32,
-    world_hydro: std::sync::Arc<crate::hydro::WorldHydro>,
+    world_hydro: &std::sync::Arc<crate::hydro::WorldHydro>,
 ) -> Result<BTreeMap<(i32, i32), [section::Section; COLUMN_SECTIONS]>, error::TerrainError> {
     let section_count = i32::try_from(description::SECTIONS_PER_COLUMN).unwrap_or(12);
     let mut keys = Vec::new();
@@ -1248,7 +1241,7 @@ fn demo_columns_extent(
         let handles: Vec<_> = keys
             .chunks(chunk)
             .map(|chunk| {
-                let world_hydro = std::sync::Arc::clone(&world_hydro);
+                let world_hydro = std::sync::Arc::clone(world_hydro);
                 scope.spawn(move || -> Result<Vec<_>, error::TerrainError> {
                     let terrain = pipeline::Terrain::new(seed)?.with_world_hydro(world_hydro);
                     let mut out = Vec::with_capacity(chunk.len());
@@ -2489,10 +2482,10 @@ impl App {
     fn upload_demo(&mut self) {
         let column = Streaming::column_at(self.player.position);
         let column = (column.x, column.y);
-        if let Some(demo) = &mut self.terrain_demo {
-            if demo.lod_column != column {
-                demo.select_lod(column);
-            }
+        if let Some(demo) = &mut self.terrain_demo
+            && demo.lod_column != column
+        {
+            demo.select_lod(column);
         }
         let (Some(demo), Some(renderer)) = (self.terrain_demo.as_ref(), self.renderer.as_mut())
         else {
@@ -2544,23 +2537,23 @@ impl App {
             tile,
         );
         let mut ready = plan.ready;
-        if let Some(base) = plan.swap {
-            if let Some(demo) = self.terrain_cache.remove(&base) {
-                if let Some(old) = self.terrain_demo.take() {
-                    self.terrain_cache.insert(active_base, old);
-                }
-                self.terrain_demo = Some(demo);
-                self.upload_demo();
-                debug!(?base, "terrain stream tile swapped");
-                ready = true;
+        if let Some(base) = plan.swap
+            && let Some(demo) = self.terrain_cache.remove(&base)
+        {
+            if let Some(old) = self.terrain_demo.take() {
+                self.terrain_cache.insert(active_base, old);
             }
+            self.terrain_demo = Some(demo);
+            self.upload_demo();
+            debug!(?base, "terrain stream tile swapped");
+            ready = true;
         }
-        if let Some(base) = plan.build {
-            if self.terrain_stream_base != Some(base) {
-                self.terrain_stream = None;
-                self.terrain_stream_base = None;
-                self.start_stream_build(base);
-            }
+        if let Some(base) = plan.build
+            && self.terrain_stream_base != Some(base)
+        {
+            self.terrain_stream = None;
+            self.terrain_stream_base = None;
+            self.start_stream_build(base);
         }
 
         let active_base = self.terrain_demo.as_ref().map_or(active_base, demo_tile);
@@ -3494,7 +3487,7 @@ mod tests {
         let (demo, replay) =
             build_terrain_demo_extent(0x5EED, IVec2::new(0, 0), 0, 3, 0, 3, &[], &[], 0)
                 .expect("the one-tile demo builds");
-        assert!(replay.keys.is_empty());
+        assert_eq!(replay.keys, []);
         assert_eq!(
             demo.columns.keys().min(),
             Some(&(0, 0)),
@@ -3665,7 +3658,7 @@ mod tests {
             3,
             0,
             3,
-            pipeline::Terrain::new(0x5EED)
+            &pipeline::Terrain::new(0x5EED)
                 .expect("the v1 description compiles")
                 .solve_world_hydro()
                 .expect("the world hydrology solves"),
