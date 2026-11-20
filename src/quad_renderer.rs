@@ -512,6 +512,50 @@ impl QuadRenderer {
         true
     }
 
+    /// Uploads a coarse section's water mesh.
+    #[allow(clippy::cast_precision_loss)]
+    pub(crate) fn upload_section_water(
+        &mut self,
+        queue: &wgpu::Queue,
+        section: SectionKey,
+        mesh: &MeshData,
+        frame: u64,
+    ) -> bool {
+        if mesh.quads.is_empty() {
+            return true;
+        }
+        let Ok(quads) = u32::try_from(mesh.quads.len()) else {
+            return false;
+        };
+        let Some(range) = self.pool.allocate(quads) else {
+            return false;
+        };
+        let key = NodeKey::Section(section);
+        let Some(slot_index) = self.slot_for(key) else {
+            self.pool.free(range, frame);
+            return false;
+        };
+        queue.write_buffer(
+            &self.pool_buffer,
+            u64::from(range.first_quad) * size_of::<QuadRecord>() as u64,
+            bytemuck::cast_slice(&mesh.quads),
+        );
+
+        let origin = section.origin().as_vec3();
+        let position = *self.slot_positions.get(&key).expect("slot exists");
+        let slot = &mut self.slots[position];
+        if let Some(old) = slot.water.replace(range) {
+            self.pool.free(old, frame);
+        }
+        slot.water_indexed = quads <= MAX_INDEXED_QUADS;
+        slot.info.water_origin = [origin.x, origin.y, origin.z, section.scale() as f32];
+        slot.info.water_first = range.first_quad;
+        slot.info.water_quads = range.quads;
+        let info = slot.info;
+        self.write_info(queue, slot_index, &info);
+        true
+    }
+
     /// The LOD currently drawn for a chunk, if any.
     pub(crate) fn active_lod(&self, chunk: ChunkCoord) -> Option<Lod> {
         self.slot(NodeKey::Chunk(chunk))

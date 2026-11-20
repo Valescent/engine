@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Chunk vertices pack into 12 bytes (three cell bytes plus face, two UV bytes, layer, and light/AO) and quads use four vertices plus six indices (16-bit where a chunk fits, 32-bit otherwise), cutting vertex buffer memory by about 75 percent.
 - Back faces are culled for terrain and water; greedy quads wind counter-clockwise around their outward normal on all six faces.
 - The LOD hierarchy foundation is on the `lod-hierarchy` branch: `SectionKey` level math, a level-1 coarse generator with a modified-chunk overlay, per-column coarse light, and a `32³` sample-space mesh path. One level-1 section uses 32 KiB of samples + 19.7 KiB of light for 2,193 quads; the eight LOD1 chunks covering the same volume use 288 KiB of samples + light for 3,613 quads.
-- The quad pool accepts coarse section nodes through `NodeKey`, so a section uses the same page allocator, chunk-info buffer, indirect lists, and indexed path as a chunk. `ENGINE_HIERARCHY=1` draws one level-1 section 1,200 m ahead: +1 slot, 1,179 quads, and no extra draw calls. Streaming/selection and the L0 seam are next.
+- The quad pool accepts coarse section nodes through `NodeKey`, so a section uses the same page allocator, chunk-info buffer, indirect lists, and indexed path as a chunk. `ENGINE_HIERARCHY=1` stops L0 at `ENGINE_DETAIL_CHUNKS` (default 16), selects level-1/2 sections out to 2 km, generates one per frame, and meshes coarse water. The spawn view settles at 3,871 nodes (767 visible), 3.98 M vertices, 2 draws, 0.264 ms GPU, and 31.49 MB of allocated quads.
 
 ### Changed
 

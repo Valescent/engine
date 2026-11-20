@@ -756,26 +756,35 @@ The horizon A/B at the spawn view:
 - Horizon is now **on by default**; `ENGINE_HORIZON_CULL=0` disables it. `ENGINE_AUTO_STRAFE=1` is
   the dev hook used for the moving capture.
 
-### Hierarchy section demo
+### Hierarchy selection (first slice)
 
-`ENGINE_HIERARCHY=1` uploads one level-1 section 1,200 m ahead through the same quad pool. The pool
-now keys slots by `NodeKey::{Chunk, Section}`; both use the same page allocator, chunk-info buffer,
-indirect argument lists, and four-vertex indexed path. A section's chunk-info origin carries the
-section origin and its `2^level` scale, and the draw AABB uses the section extent.
+`ENGINE_HIERARCHY=1` stops L0 at `ENGINE_DETAIL_CHUNKS` (default 16, 512 m) and selects level-1
+sections (64 m) from 512-768 m and level-2 sections (128 m) from 768-2,048 m. Targets are sorted by
+distance; one section is generated, lit, meshed, and uploaded per frame. Sections use
+`NodeKey::{Chunk, Section}` in the same quad pool, and water samples get the same coarse treatment.
 
-| Distance-32 settled | L0 only | With the demo section |
-|---|---:|---:|
-| Visible chunks | 819 | 820 |
-| Visible vertices | 1,836,432 | 1,843,494 |
-| Draw calls | 2 | 2 |
-| Allocated quads | 28.32 MB | 28.33 MB |
+| Settled spawn view | Value |
+|---|---:|
+| L0 detail | 16 chunks (512 m) |
+| Section targets | 1,592 (672 level-1, 920 level-2) |
+| Nodes with geometry | 3,871 |
+| Visible nodes | 767 |
+| Visible vertices | 3,982,428 |
+| Draw calls | 2 |
+| GPU scene | 0.264-0.268 ms |
+| Allocated quads | 31.49 MB |
+| Frame | 0.56-1.99 ms, with occasional 47 ms window/surface stalls |
 
-- The demo section adds 1,179 quads (7,062 vertices) and one slot; the draw count is unchanged.
-- At the seed-42 spawn the section sits directly behind the near ridge and is depth-occluded, so the
-  screenshot does not change. The next step is placing/selecting sections at the L0 boundary rather
-  than a fixed point ahead.
-- It is a first-slice demo, not streaming: one section is generated and meshed on the main thread
-  once, with no LOD selection, parent retention, or edit invalidation yet.
+- Section geometry and coarse water are drawn; the census and allocation grow as expected.
+- The spawn camera still looks into the near ridge, so the far sections are largely depth-occluded
+  and the screenshot is not a conclusive seam check. The next visual gate needs a view over open
+  water/horizon.
+- Fixed distance bands replace projected-size selection for now. There is no parent retention,
+  section eviction budget, or edit invalidation yet; the target set is rebuilt when the player
+  crosses a 64 m cell and stale uploads are removed.
+- The 47 ms frame outliers occurred with `render_ms` reported, not section generation; suspect the
+  window/surface state rather than the hierarchy loop. Measure on the reference setup before
+  claiming the 2 km frame gate.
 
 ### Section foundation (level 1)
 

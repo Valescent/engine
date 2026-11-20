@@ -175,6 +175,32 @@ impl BorderBlocks {
     }
 }
 
+/// Builds one non-indexed greedy water mesh for a coarse section grid.
+pub(crate) fn build_section_water_mesh(
+    snapshot: &ChunkSnapshot,
+    border: &BorderBlocks,
+    light: Option<&LightField>,
+    scale: f32,
+) -> MeshData {
+    if !snapshot.has_water() {
+        return MeshData::default();
+    }
+    let full_block = |local: IVec3| full_block(snapshot, border, local);
+    let matches = |block: Block| block == Block::Water;
+    let exposed = |cell: IVec3, normal: IVec3| full_block(cell + normal) == Block::Air;
+    let corners = |anchor: IVec3, face: usize| water_corners(&full_block, light, anchor, face);
+    greedy(
+        CHUNK_SIZE,
+        scale,
+        &full_block,
+        &matches,
+        &exposed,
+        &|cell| cell,
+        &corners,
+        crate::quad::FLAG_WATER,
+    )
+}
+
 /// Builds one non-indexed greedy mesh for a coarse section sample grid.
 ///
 /// `scale` is the section's sample spacing in blocks. Positions and UVs are in

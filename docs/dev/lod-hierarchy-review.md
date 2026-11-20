@@ -122,9 +122,12 @@ Landed on the `lod-hierarchy` branch:
 - `bench_section`: one level-1 section generates in 629 µs, meshes in 1,053 µs, and uses 32,768 B of
   samples + 19,652 B of light for 2,193 quads; the eight LOD1 chunks covering the same volume mesh
   in 2,360 µs for 3,613 quads and use 288 KiB of samples + light.
-- The quad pool keys slots by `NodeKey::{Chunk, Section}`. `ENGINE_HIERARCHY=1` uploads one level-1
-  section 1,200 m ahead: +1 slot, 1,179 quads, 2 draws unchanged. It is depth-occluded at the spawn
-  view, so the next step is boundary placement/selection rather than a fixed point ahead.
+- The quad pool keys slots by `NodeKey::{Chunk, Section}`. `ENGINE_HIERARCHY=1` stops L0 at
+  `ENGINE_DETAIL_CHUNKS` (default 16), selects level-1 sections from 512-768 m and level-2 sections
+  from 768-2,048 m, generates one per frame, and uploads opaque and coarse water geometry. The spawn
+  view settles at 3,871 nodes (767 visible), 3.98 M vertices, 2 draws, 0.264 ms GPU, and 31.49 MB
+  of allocated quads. The camera still looks into the near ridge, so the seam needs a view over
+  open water/horizon.
 
 Still blocking the visual gate:
 

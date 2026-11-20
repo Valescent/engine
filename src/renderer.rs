@@ -749,6 +749,13 @@ impl Renderer {
             .is_some_and(|quad| quad.upload_section(&self.queue, section, mesh, frame))
     }
 
+    pub(crate) fn upload_section_water(&mut self, section: SectionKey, mesh: &MeshData) -> bool {
+        let frame = self.frame_index;
+        self.quad
+            .as_mut()
+            .is_some_and(|quad| quad.upload_section_water(&self.queue, section, mesh, frame))
+    }
+
     #[allow(dead_code)] // Streaming uses this when section eviction lands.
     pub(crate) fn remove_section(&mut self, section: SectionKey) {
         if let Some(quad) = self.quad.as_mut() {

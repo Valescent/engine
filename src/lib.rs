@@ -10,6 +10,7 @@ mod config;
 mod frustum;
 mod generation;
 mod headless;
+mod hierarchy;
 mod horizon;
 mod light;
 mod mesh;
@@ -52,6 +53,7 @@ use camera::Camera;
 use config::{Config, ConfigError};
 use frustum::Frustum;
 use generation::Generator;
+use hierarchy::{DEFAULT_DETAIL_CHUNKS, select_sections};
 use mesh::Lod;
 use mesher::{MeshKind, MeshPool, MeshQueue, Priority, collect_finished, create_pool};
 use player::{Player, PlayerInput};
@@ -71,6 +73,7 @@ const FRAME_LOG_INTERVAL: Duration = Duration::from_secs(1);
 const WORLD_CHUNKS: &str = "world/chunks";
 const CONFIG_FILE: &str = "config.toml";
 const MAX_COLUMNS_PER_FRAME: usize = 2;
+const MAX_SECTION_BUILDS_PER_FRAME: usize = 1;
 const INTERACTION_DISTANCE: f32 = 6.0;
 const SPAWN_X: i32 = 32;
 const SPAWN_Z: i32 = 32;
@@ -113,8 +116,17 @@ pub fn run() -> Result<(), RunError> {
     #[cfg(feature = "tracy")]
     let _tracy_client = tracy_client::Client::start();
 
-    let config = config::load(Path::new(CONFIG_FILE))?;
+    let mut config = config::load(Path::new(CONFIG_FILE))?;
     let stress = stress_requested();
+    let hierarchy = std::env::var("ENGINE_HIERARCHY").is_ok_and(|value| value == "1");
+    let detail_chunks = std::env::var("ENGINE_DETAIL_CHUNKS")
+        .ok()
+        .and_then(|value| value.trim().parse::<i32>().ok())
+        .unwrap_or(DEFAULT_DETAIL_CHUNKS)
+        .clamp(4, 32);
+    if hierarchy {
+        config.render_distance_chunks = detail_chunks;
+    }
     let setup = world_for(
         stress,
         Path::new(WORLD_DIRECTORY),
@@ -125,6 +137,7 @@ pub fn run() -> Result<(), RunError> {
         app.set_spawn(spawn);
     }
     app.config = config;
+    app.detail_chunks = detail_chunks;
     app.streaming = setup.streaming;
     app.seed = setup.seed;
     if let Some(directory) = app.save_directory.clone() {
@@ -436,7 +449,12 @@ struct App {
     auto_walk: bool,
     auto_strafe: bool,
     hierarchy: bool,
-    section_uploaded: bool,
+    detail_chunks: i32,
+    hierarchy_generator: Option<Generator>,
+    hierarchy_center: Option<IVec2>,
+    section_targets: Vec<SectionKey>,
+    section_cursor: usize,
+    sections_uploaded: HashSet<SectionKey>,
     horizon: horizon::Horizon,
     horizon_at: Instant,
     overlay_fps: f64,
@@ -538,7 +556,12 @@ impl App {
             auto_walk: std::env::var("ENGINE_AUTO_WALK").is_ok_and(|value| value == "1"),
             auto_strafe: std::env::var("ENGINE_AUTO_STRAFE").is_ok_and(|value| value == "1"),
             hierarchy: std::env::var("ENGINE_HIERARCHY").is_ok_and(|value| value == "1"),
-            section_uploaded: false,
+            detail_chunks: DEFAULT_DETAIL_CHUNKS,
+            hierarchy_generator: None,
+            hierarchy_center: None,
+            section_targets: Vec::new(),
+            section_cursor: 0,
+            sections_uploaded: HashSet::new(),
             horizon: horizon::Horizon::disabled(),
             horizon_at: Instant::now(),
             overlay_fps: 0.0,
@@ -1060,7 +1083,7 @@ impl App {
         }
 
         if self.hierarchy {
-            self.ensure_section_demo();
+            self.ensure_hierarchy();
         }
 
         let overlay = self.show_overlay.then(|| {
@@ -1227,8 +1250,8 @@ impl App {
     fn apply_render_distance(&mut self) {
         let distance = self.config.render_distance_chunks as f32 * 32.0;
         if self.hierarchy {
-            self.camera.set_far_plane(2048.0);
-            self.camera.set_fog_end(2048.0);
+            self.camera.set_far_plane(2_304.0);
+            self.camera.set_fog_end(2_300.0);
         } else {
             self.camera.set_far_plane(distance + 64.0);
             self.camera.set_fog_end(distance);
@@ -1237,42 +1260,91 @@ impl App {
 
     /// Generates and uploads one far-level section for the first-slice demo.
     #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-    fn ensure_section_demo(&mut self) {
-        if !self.hierarchy || self.section_uploaded {
+    /// Selects and uploads coarse sections around the player, one per frame.
+    fn ensure_hierarchy(&mut self) {
+        if !self.hierarchy {
             return;
         }
         let Some(seed) = self.seed else {
             return;
         };
-        let forward = self.camera.forward();
-        let direction = Vec2::new(forward.x, forward.z).normalize_or_zero();
-        if direction == Vec2::ZERO {
-            return;
-        }
-        let target = self.player.position.truncate() + direction * 1200.0;
-        let generator = Generator::new(seed);
-        let x = target.x.floor() as i32;
-        let z = target.y.floor() as i32;
-        let surface = generator.height(x, z);
-        let level = 1_u8;
-        let extent = 32 * (1 << level);
-        let key = SectionKey::new(
-            level,
-            IVec3::new(
-                x.div_euclid(extent),
-                surface.div_euclid(extent),
-                z.div_euclid(extent),
-            ),
+        let player_section = IVec2::new(
+            (self.player.position.x.floor() as i32).div_euclid(64),
+            (self.player.position.z.floor() as i32).div_euclid(64),
         );
-        let section = generate_section(&generator, key, &SectionEdits::new());
-        let light = section.light();
-        let mesh = section.mesh(Some(&light));
-        let uploaded = self
-            .renderer
-            .as_mut()
-            .is_some_and(|renderer| renderer.upload_section(key, &mesh));
-        info!(?key, quads = mesh.quads.len(), uploaded, "section demo");
-        self.section_uploaded = uploaded || mesh.quads.is_empty();
+        if self.hierarchy_center != Some(player_section) {
+            self.hierarchy_center = Some(player_section);
+            self.section_targets = select_sections(self.player.position, self.detail_chunks);
+            self.section_cursor = 0;
+            let targets: HashSet<SectionKey> = self.section_targets.iter().copied().collect();
+            let stale: Vec<SectionKey> = self
+                .sections_uploaded
+                .difference(&targets)
+                .copied()
+                .collect();
+            if let Some(renderer) = &mut self.renderer {
+                for key in stale {
+                    renderer.remove_section(key);
+                }
+            }
+            self.sections_uploaded.retain(|key| targets.contains(key));
+            info!(
+                sections = self.section_targets.len(),
+                detail = self.detail_chunks,
+                "hierarchy targets"
+            );
+        }
+
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
+        let generator = self
+            .hierarchy_generator
+            .get_or_insert_with(|| Generator::new(seed));
+        let edits = SectionEdits::new();
+        let mut built = 0;
+        while built < MAX_SECTION_BUILDS_PER_FRAME
+            && self.section_cursor < self.section_targets.len()
+        {
+            let key = self.section_targets[self.section_cursor];
+            self.section_cursor += 1;
+            if self.sections_uploaded.contains(&key) {
+                continue;
+            }
+            let section = generate_section(generator, key, &edits);
+            if section.is_empty() {
+                self.sections_uploaded.insert(key);
+                continue;
+            }
+            let light = section.light();
+            let opaque = section.mesh(Some(&light));
+            let water = section.water_mesh(Some(&light));
+            if opaque.quads.is_empty() && water.quads.is_empty() {
+                self.sections_uploaded.insert(key);
+                continue;
+            }
+            let mut uploaded = true;
+            if !opaque.quads.is_empty() {
+                uploaded = renderer.upload_section(key, &opaque);
+            }
+            if uploaded && !water.quads.is_empty() {
+                uploaded = renderer.upload_section_water(key, &water);
+            }
+            if uploaded {
+                self.sections_uploaded.insert(key);
+                built += 1;
+                if self.sections_uploaded.len().is_multiple_of(100) {
+                    debug!(
+                        sections = self.sections_uploaded.len(),
+                        cursor = self.section_cursor,
+                        "hierarchy progress"
+                    );
+                }
+            } else {
+                self.section_cursor -= 1;
+                break;
+            }
+        }
     }
 
     /// Whether all four chunks of a column are lit and meshed.

@@ -13,7 +13,9 @@ use glam::IVec3;
 use crate::block::Block;
 use crate::generation::{Generator, SEA_LEVEL, WORLD_HEIGHT, surface_block};
 use crate::light::LightField;
-use crate::mesh::{BorderBlocks, ChunkSnapshot, MeshData, build_section_mesh};
+use crate::mesh::{
+    BorderBlocks, ChunkSnapshot, MeshData, build_section_mesh, build_section_water_mesh,
+};
 use crate::world::{CHUNK_SIZE, Chunk, ChunkCoord};
 
 /// Samples per section axis.
@@ -145,6 +147,18 @@ impl Section {
     pub(crate) fn mesh(&self, light: Option<&LightField>) -> MeshData {
         let snapshot = self.snapshot();
         build_section_mesh(
+            &snapshot,
+            &BorderBlocks::default(),
+            light,
+            self.key.scale() as f32,
+        )
+    }
+
+    /// Meshes the water samples at the section's spacing.
+    #[allow(clippy::cast_precision_loss)]
+    pub(crate) fn water_mesh(&self, light: Option<&LightField>) -> MeshData {
+        let snapshot = self.snapshot();
+        build_section_water_mesh(
             &snapshot,
             &BorderBlocks::default(),
             light,
