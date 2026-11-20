@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use glam::{IVec3, Vec3};
 use thiserror::Error;
+use tracing::warn;
 
 use crate::block::Block;
 use crate::light::{self, LightField};
@@ -684,10 +685,21 @@ pub(crate) fn load_or_create_seed(
     match fs::read_to_string(&seed_path) {
         Ok(text) => parse_seed(&text),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            if directory_has_chunks(&world_directory.join("chunks"))? {
-                return Err(SaveError::MissingSeed);
-            }
-            let seed = preferred.unwrap_or_else(fresh_seed);
+            let seed = if directory_has_chunks(&world_directory.join("chunks"))? {
+                // Do not guess a seed for existing saved chunks. An explicit
+                // `ENGINE_SEED` is the opt-in recovery path: the caller accepts
+                // that those edits are applied over a new generated world.
+                let Some(seed) = preferred else {
+                    return Err(SaveError::MissingSeed);
+                };
+                warn!(
+                    seed,
+                    "adopting saved chunks with ENGINE_SEED; unmodified terrain regenerates from this seed"
+                );
+                seed
+            } else {
+                preferred.unwrap_or_else(fresh_seed)
+            };
             fs::create_dir_all(world_directory)
                 .map_err(|error| SaveError::from_path(&error, world_directory))?;
             fs::write(&seed_path, format!("{seed}\n"))
@@ -748,6 +760,14 @@ fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_le_bytes(
         bytes.get(offset..offset + 4)?.try_into().ok()?,
     ))
+}
+
+/// The legacy world answers movement queries; the new terrain provides its own
+/// implementation so the player stays source-agnostic.
+impl crate::player::BlockSource for World {
+    fn solid_blocks_in(&self, min: IVec3, max: IVec3) -> Vec<IVec3> {
+        World::solid_blocks_in(self, min, max)
+    }
 }
 
 #[cfg(test)]
@@ -1265,6 +1285,13 @@ mod tests {
             Err(SaveError::MissingSeed)
         ));
         assert!(!directory.join("seed").exists());
+
+        assert_eq!(
+            load_or_create_seed(&directory, Some(7)).unwrap(),
+            7,
+            "an explicit ENGINE_SEED adopts orphaned chunks"
+        );
+        assert_eq!(fs::read_to_string(directory.join("seed")).unwrap(), "7\n");
         fs::remove_dir_all(directory).unwrap();
     }
 

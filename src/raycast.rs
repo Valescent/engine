@@ -21,12 +21,23 @@ pub(crate) fn raycast(
     direction: Vec3,
     max_distance: f32,
 ) -> Option<RaycastHit> {
+    raycast_where(|cell| world.is_solid(cell), origin, direction, max_distance)
+}
+
+/// [`raycast`] against any solidity source, so the new terrain and the legacy
+/// world share one traversal rule (`F1.5` keeps one baseline).
+pub(crate) fn raycast_where(
+    is_solid: impl Fn(IVec3) -> bool,
+    origin: Vec3,
+    direction: Vec3,
+    max_distance: f32,
+) -> Option<RaycastHit> {
     if max_distance < 0.0 || direction.length_squared() == 0.0 {
         return None;
     }
     let direction = direction.normalize();
     let mut cell = origin.floor().as_ivec3();
-    if world.is_solid(cell) {
+    if is_solid(cell) {
         return None;
     }
 
@@ -61,7 +72,7 @@ pub(crate) fn raycast(
 
         cell[axis] += step[axis];
         t_max[axis] += t_delta[axis];
-        if world.is_solid(cell) {
+        if is_solid(cell) {
             let mut normal = IVec3::ZERO;
             normal[axis] = -step[axis];
             return Some(RaycastHit {
