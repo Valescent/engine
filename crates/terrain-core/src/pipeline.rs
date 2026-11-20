@@ -7,7 +7,7 @@
 //! Order that must not change:
 //!
 //! 1. macro height from the lattice, bilinear to blocks,
-//! 2. per-block detail, then terrace, then river carve, one [`top_solid_y`],
+//! 2. per-block detail, then terrace, then river carve, one `top_solid_y`,
 //! 3. solid fill from the surface stack, strata resolved symbolically,
 //! 4. 3D detail and cave carve ([`Volume::apply`]),
 //! 5. water fill, which never floods a cave (`D7.1`).
@@ -191,9 +191,9 @@ const DEFAULT_VIEW_RADIUS: i32 = 16;
 /// The macro curves of `C1.1` and `C1.6`, normalised to `[0, 1]`.
 #[derive(Clone, Debug)]
 pub struct Curves {
-    /// `curve_base(continentalness)`, normalised between [`MIN_BASE`] and [`MAX_BASE`].
+    /// `curve_base(continentalness)`, normalised between `MIN_BASE` and `MAX_BASE`.
     pub base: Curve,
-    /// `curve_relief(roughness)`, normalised between 0 and [`MAX_RELIEF`].
+    /// `curve_relief(roughness)`, normalised between 0 and `MAX_RELIEF`.
     pub relief: Curve,
     /// `curve_shape(peaks)`.
     pub shape: Curve,

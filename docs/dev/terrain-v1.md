@@ -27,15 +27,18 @@ drawn as LOD1 beyond. Edits, saves, and repairs use `world/terrain-demo/`; the l
 
 ## Modules
 
+The headless terrain stack lives in the `terrain-core` crate; `engine` re-exports it so the
+demo can keep using `engine::pipeline`, `engine::section`, and the other module paths.
+
 | File | Responsibility |
 |---|---|
-| `src/description.rs`, `src/header.rs`, `src/section.rs` | World identity, header bytes, section records |
-| `src/graph/`, `src/pipeline.rs`, `src/height.rs`, `src/surface.rs`, `src/strata.rs`, `src/climate.rs`, `src/volume.rs` | Generation from description to columns |
-| `src/features/`, `src/hydro/` | Trees/ore/scatter and world-mode hydrology (`WorldHydro`, one solve shared by workers) |
-| `src/light2.rs`, `src/padded.rs` | Column light, incremental repair, shared padded scratch |
-| `src/mesher2.rs`, `src/lod.rs` | Greedy section meshing, coarse downsample, skirts |
-| `src/section.rs`, `src/lod.rs`, `src/revisions.rs`, `src/residency.rs`, `src/editlog.rs` | Section storage, LOD derivation, revisions, residency policy, edit journal |
-| `src/save.rs`, `src/world_save.rs` | Section files, backup rotation, journal file, `WorldSave`, save worker, repair, migration/report |
+| `crates/terrain-core/src/description.rs`, `header.rs`, `section.rs` | World identity, header bytes, section records |
+| `crates/terrain-core/src/graph/`, `pipeline.rs`, `height.rs`, `surface.rs`, `strata.rs`, `climate.rs`, `volume.rs` | Generation from description to columns |
+| `crates/terrain-core/src/features/`, `hydro/` | Trees/ore/scatter and world-mode hydrology (`WorldHydro`, one solve shared by workers) |
+| `crates/terrain-core/src/light2.rs`, `padded.rs` | Column light, incremental repair, shared padded scratch |
+| `crates/terrain-core/src/mesher2.rs`, `lod.rs` | Greedy section meshing, coarse downsample, skirts |
+| `crates/terrain-core/src/section.rs`, `lod.rs`, `revisions.rs`, `residency.rs`, `editlog.rs` | Section storage, LOD derivation, revisions, residency policy, edit journal |
+| `crates/terrain-core/src/save.rs`, `world_save.rs` | Section files, backup rotation, journal file, `WorldSave`, save worker, repair, migration/report |
 | `src/lib.rs` | Demo app, ring generation/light/mesh jobs, LOD selection, save/repair wiring |
 | `src/renderer.rs`, `src/terrain_draw.wgsl` | Packed-quad draw path, per-section scale, incremental upload |
 
@@ -188,10 +191,12 @@ cargo fmt --all -- --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo test --locked
 cargo run --locked --quiet --bin terrain-gen -- golden check
+cargo tree -p terrain-core -e normal --no-default-features
 ```
 
-Current local count: **645 lib tests** (2 ignored), **3** `light_preview`, **30** `terrain_gen`
-integration tests.
+`terrain-gen` is the `terrain-core` binary; its golden and counter baselines are in
+`crates/terrain-core/tests/golden/`. Current local count: **645 lib tests** across `engine` and
+`terrain-core` (2 ignored), **3** `light_preview`, **30** `terrain_gen` integration tests.
 
 ## Known gaps
 

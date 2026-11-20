@@ -22,7 +22,7 @@
 //! anchored to a chunk, a section, or a tile.
 //!
 //! A lattice cell whose four-block neighbourhood is entirely above
-//! `top_solid_y - CAVE_MIN_ROOF`, or entirely below [`CAVE_FLOOR_Y`] (`y = 8`),
+//! `top_solid_y - CAVE_MIN_ROOF`, or entirely below `CAVE_FLOOR_Y` (`y = 8`),
 //! is never sampled ([`skippable_band`], [`cell_skipped`]). That is what lets a
 //! column stop at the roof instead of walking 96 cells through air above the
 //! terrain.
@@ -308,7 +308,7 @@ pub fn skippable_band(top: i32) -> SpanSkip {
 ///
 /// `top` is the column's highest solid block after the detail pass. A cell is
 /// skipped when its four-block neighbourhood is entirely above the cave roof or
-/// entirely below [`CAVE_FLOOR_Y`] (the `F2.3` floor, `y = 8`).
+/// entirely below `CAVE_FLOOR_Y` (the `F2.3` floor, `y = 8`).
 #[must_use]
 pub fn cell_skipped(cell: i32, top: i32) -> bool {
     let first = cell.saturating_mul(MACRO_CELL);

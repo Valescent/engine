@@ -32,12 +32,15 @@ cargo fmt --all -- --check
 cargo clippy --all-targets --locked --no-default-features -- -D warnings
 cargo test --locked --no-default-features
 cargo run --locked --quiet --no-default-features --bin terrain-gen -- golden check
+cargo tree -p terrain-core -e normal --no-default-features
 cargo doc --no-deps --no-default-features
 typos
 mdbook build
 ```
 
 CI also runs dependency licence and advisory checks, commit message checks, and the documentation build. The `pool_sim` benchmark is not part of CI. `--no-default-features` is required in CI because `tracy` is a default feature that builds a C++ client; use `cargo test --locked` locally to test the profiled build.
+
+`terrain-core` has no `wgpu`, `winit`, `wgpu-profiler`, or `tracy-client` in its normal dependency tree; the CI crate-graph step fails with a clear message if one appears. Run `cargo tree -p terrain-core -e normal --no-default-features` and look for those four names locally.
 
 ## Writing tests
 
@@ -53,8 +56,9 @@ CI also runs dependency licence and advisory checks, commit message checks, and 
 
 ## Current coverage
 
-The headless suite covers **645 library tests** (2 ignored), **3** `light_preview`, and **30**
-`terrain_gen` integration tests. Highlights:
+The headless suite covers **645 library tests** across `engine` and `terrain-core` (2 ignored),
+**3** `light_preview`, and **30** `terrain_gen` integration tests. The terrain integration test
+and its goldens live under `crates/terrain-core/tests/`; `light_preview` stays with `engine`.
 
 - Camera look direction, yaw/pitch clamping, and angle wrapping.
 - Mouse-look gating on capture and focus.

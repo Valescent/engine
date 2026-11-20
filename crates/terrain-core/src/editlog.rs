@@ -613,7 +613,7 @@ pub enum FlushOutcome {
 ///
 /// # Errors
 ///
-/// Every sink failure is [`ErrorKind::IoError`](crate::error::ErrorKind::IoError)
+/// Every sink failure is [`ErrorKind::IoError`]
 /// with `op` set to the sink method that failed (`"write_all"` or
 /// `"sync_data"`) and the OS error code, or `0` when the sink reported a
 /// non-OS error.

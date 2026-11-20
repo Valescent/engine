@@ -4,7 +4,7 @@
 //!
 //! A tree is a template over a closed primitive set (`H3.2`):
 //! [`Part::Trunk`], [`Part::Branch`], [`Part::Canopy`] with a
-//! [`CanopyShape`], and [`Part::RootFlare`]. Species are data in [`SPECIES`];
+//! [`CanopyShape`], and [`Part::RootFlare`]. Species are data in `SPECIES`;
 //! the per-tree variant comes from `hash64(seed, "tree:<species>", id)`, so a
 //! tree is identical wherever it is applied.
 //!
@@ -44,7 +44,7 @@
 //!
 //! Trees are generated once and never simulated (`H3.6`). This module exposes no
 //! sapling, growth tick, leaf decay, or per-tree runtime state: the only entry
-//! points are the generation-time [`discover`], [`place`], and the apply pass
+//! points are the generation-time `discover`, `place`, and the apply pass
 //! driven from [`crate::features::apply`]. After generation a tree is ordinary
 //! log and leaf blocks; later placement is an ordinary edit through the edit
 //! path, not growth.

@@ -84,6 +84,17 @@ jobs:
       - name: Cache
         uses: Swatinem/rust-cache@v2
 
+      - name: Crate graph (terrain-core is headless)
+        run: |
+          set -euo pipefail
+          tree=$(cargo tree -p terrain-core -e normal --locked --no-default-features)
+          if printf '%s\n' "$tree" | grep -Eq 'wgpu|winit|tracy-client'; then
+            printf '%s\n' "$tree" | grep -E 'wgpu|winit|tracy-client' >&2
+            echo "::error::terrain-core must not resolve wgpu, winit, wgpu-profiler, or tracy-client; terrain-gen would inherit a window, GPU, or profiler dependency" >&2
+            exit 1
+          fi
+          echo "terrain-core resolves no wgpu, winit, wgpu-profiler, or tracy-client"
+
       - name: Golden hashes
         run: cargo run --locked --quiet --no-default-features --bin terrain-gen -- golden check
 

@@ -1460,8 +1460,10 @@ contradict a MUST elsewhere in this document.
   paths. The spec's `f64` camera and entity positions are not implemented, so very large worlds
   still depend on the `f32` camera's block-aligned precision; see
   [Terrain v1 runtime](../dev/terrain-v1.md#camera-relative-rendering).
-- **The headless tool links the engine crate**, so it also links `wgpu`. The crate split that would
-  let CI enforce "no GPU in `terrain-gen`" is deferred (§19).
+- **The headless tool is split out of the engine crate.** `terrain-gen` is a binary of the
+  `terrain-core` library, which has no window, GPU, audio, or renderer dependency. CI enforces
+  this by checking that `cargo tree -p terrain-core -e normal --no-default-features` resolves no
+  `wgpu`, `winit`, `wgpu-profiler`, or `tracy-client` (§19).
 - **`pipeline::AIR`/`WATER`** remain as tool-facing constants, pinned by a test; generation reads ids
   from `TerrainMaterials` (§2.6).
 

@@ -6,50 +6,28 @@
 
 mod block;
 mod camera;
-pub mod climate;
 mod config;
-pub mod content;
-pub mod curve;
-pub mod description;
-pub mod editlog;
-pub mod error;
-pub mod features;
 mod frustum;
 mod generation;
-pub mod graph;
-pub mod hash;
-pub mod header;
 mod headless;
-pub mod height;
-pub mod hydro;
-pub mod lattice;
 mod light;
-pub mod light2;
-pub mod lod;
 mod mesh;
 mod mesher;
-pub mod mesher2;
 mod metrics;
-pub mod metrics2;
-pub mod noise;
 mod overlay;
-pub mod padded;
-pub mod pipeline;
 mod player;
 mod raycast;
 mod renderer;
-pub mod residency;
-pub mod revisions;
-pub mod save;
-pub mod section;
 mod sky;
-pub mod strata;
 mod streaming;
-pub mod surface;
-pub mod volume;
 mod voxel;
 mod world;
-pub mod world_save;
+
+pub use terrain_core::{
+    climate, content, curve, description, editlog, error, features, graph, hash, header, height,
+    hydro, lattice, light2, lod, mesher2, metrics2, noise, padded, pipeline, residency, revisions,
+    save, section, strata, surface, volume, world_save,
+};
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};

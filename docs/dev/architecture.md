@@ -2,12 +2,23 @@
 
 The engine is a small `winit` and `wgpu` application. This page describes the current modules, ownership, and frame flow. Update it when module boundaries or resource ownership change.
 
+## Workspace crates
+
+The repository is a two-package workspace rooted at the `engine` package:
+
+| Crate | Responsibility |
+|---|---|
+| `engine` | `winit` application, renderer, camera, player, legacy v0 world/chunk stack, and re-exports of the terrain stack. It depends on `terrain-core`. |
+| `terrain-core` (`crates/terrain-core`) | Headless terrain description, generation, storage, lighting, meshing, and save stack, plus the `terrain-gen` binary. It has no window, GPU, audio, or renderer dependency. |
+
+`terrain-core` is a normal dependency (not a dev-dependency). `engine` re-exports its modules with `pub use terrain_core::{...}`, so existing paths such as `engine::pipeline::Terrain`, `engine::light2`, and `engine::section` keep working. The `terrain-gen` binary lives in `terrain-core`; CI checks that its normal dependency tree contains no `wgpu`, `winit`, `wgpu-profiler`, or `tracy-client`.
+
 ## Modules
 
 | Path | Responsibility |
 |---|---|
 | `src/main.rs` | Thin binary entry point; calls `engine::run()`. |
-| `src/lib.rs` | Public entry point, `winit` application handler, input, interaction, frame loop, save-on-exit, and error aggregation. See [Public API](public-api.md). |
+| `src/lib.rs` | Public entry point, `winit` application handler, input, interaction, frame loop, save-on-exit, error aggregation, and `terrain-core` re-exports. See [Public API](public-api.md). |
 | `src/camera.rs` | Look state, yaw/pitch math, view-projection, and tests. Position comes from the player eye. |
 | `src/block.rs` | Block types, stable IDs, hotbar mapping, and face texture layers. |
 | `src/player.rs` | Player physics, gravity, jumping, swept AABB collision, and tests. |
@@ -23,14 +34,27 @@ The engine is a small `winit` and `wgpu` application. This page describes the cu
 | `src/streaming.rs` | Player-centred load rings, forward-first ordering, unload hysteresis, readiness, and the movement guard. |
 | `src/config.rs` | `config.toml` parsing for the render distance. |
 | `src/headless.rs` | Windowless fixed-step run selected by `ENGINE_HEADLESS=1`; drives generation, streaming, light, and meshing, then prints one `HEADLESS` summary line. |
-| `src/save.rs`, `src/world_save.rs` | Section files, backup rotation, journal file, replay/trimming, `WorldSave`, save worker, repair, migration/report. See [Terrain v1 runtime](terrain-v1.md) and [Save format](save-format.md). |
-| `src/light2.rs`, `src/mesher2.rs`, `src/lod.rs`, `src/section.rs`, `src/terrain_draw.wgsl` | v1 column light, greedy mesher, coarse LOD, section storage, packed-quad shader. |
+| `crates/terrain-core/src/save.rs`, `crates/terrain-core/src/world_save.rs` | Section files, backup rotation, journal file, replay/trimming, `WorldSave`, save worker, repair, migration/report. See [Terrain v1 runtime](terrain-v1.md) and [Save format](save-format.md). |
+| `crates/terrain-core/src/light2.rs`, `crates/terrain-core/src/mesher2.rs`, `crates/terrain-core/src/lod.rs`, `crates/terrain-core/src/section.rs`, `src/terrain_draw.wgsl` | v1 column light, greedy mesher, coarse LOD, section storage, packed-quad shader. The shader stays with the renderer. |
 | `src/sky.rs` | Day/night cycle, sun direction, sky/ambient/sun colours, and the CPU fog formula. |
 | `src/voxel.rs` | The packed 12-byte chunk vertex, the highlight mesh, and the v0.0.4 face-culled mesher kept as a test reference. |
 | `src/renderer.rs` | `wgpu` device/surface setup, pipelines, block texture array, buffers, depth texture, resizing, and draw submission. |
 | `src/shader.wgsl` | Chunk vertex transform, lit/fogged opaque shading, and the animated water fragment. See [Shader authoring](shaders.md). |
 | `src/highlight.wgsl` | Line-list block outline. |
 | `src/overlay.wgsl` | Screen-space overlay quads. |
+
+### `terrain-core` modules
+
+| Path | Responsibility |
+|---|---|
+| `description.rs`, `header.rs`, `section.rs`, `content.rs` | World description, header bytes, section records, and the v1 content pack. |
+| `hash.rs`, `error.rs`, `metrics2.rs` | Deterministic hashing, typed errors, and pipeline counters/overlays. |
+| `lattice.rs`, `noise.rs`, `curve.rs`, `graph/` | Macro lattice, noise fields, curves, and the generation graph. |
+| `climate.rs`, `height.rs`, `surface.rs`, `strata.rs`, `volume.rs`, `features/`, `hydro/` | Column generation from climate through surface, strata, caves, features, and water. |
+| `pipeline.rs` | The fixed-order column pipeline and its world hydrology handle. |
+| `light2.rs`, `padded.rs`, `mesher2.rs`, `lod.rs`, `revisions.rs`, `residency.rs` | Column light, padded scratch, greedy meshing, coarse LOD, revisions, and residency policy. |
+| `editlog.rs`, `save.rs`, `world_save.rs` | Edit journal, section store, backup/repair, migration, and save workers. |
+| `src/terrain_gen.rs` (binary `terrain-gen`) | Headless acceptance harness; goldens live in `crates/terrain-core/tests/golden/`. |
 
 ## Ownership
 

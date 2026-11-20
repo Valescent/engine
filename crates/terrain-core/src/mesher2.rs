@@ -1507,13 +1507,7 @@ fn boundary_span(quad: Quad, side: Side) -> Option<(u8, u8)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::block::Block;
     use crate::description::SECTION_VOLUME;
-
-    /// The runtime id of a stable block.
-    fn id(block: Block) -> BlockId {
-        BlockId::from(block.id())
-    }
 
     /// A section holding the given sparse cells in air.
     fn section_with(cells: &[([u32; 3], BlockId)]) -> Section {
@@ -1539,7 +1533,7 @@ mod tests {
         let mut section = Section::uniform(0);
         for x in 0..SECTION_SIZE {
             for z in 0..SECTION_SIZE {
-                section.set(x, 0, z, id(Block::Stone));
+                section.set(x, 0, z, 1);
             }
         }
         section
@@ -1553,13 +1547,13 @@ mod tests {
     /// The default material table, asserting it resolves the stable ids.
     fn props() -> MaterialProps {
         let props = MaterialProps::default_table();
-        assert_eq!(props.material(id(Block::Air)), Material::AIR);
-        assert!(props.material(id(Block::Stone)).opaque);
-        assert!(props.material(id(Block::Grass)).cross_quad);
-        assert!(props.material(id(Block::Leaves)).solid);
-        assert!(!props.material(id(Block::Leaves)).opaque);
-        assert!(props.material(id(Block::Water)).water);
-        assert!(props.material(id(Block::Sand)).opaque);
+        assert_eq!(props.material(0), Material::AIR);
+        assert!(props.material(1).opaque);
+        assert!(props.material(3).cross_quad);
+        assert!(props.material(5).solid);
+        assert!(!props.material(5).opaque);
+        assert!(props.material(7).water);
+        assert!(props.material(8).opaque);
         props
     }
 
@@ -1583,7 +1577,7 @@ mod tests {
         let mut section = Section::uniform(0);
         for x in 0..SECTION_SIZE {
             for z in 0..SECTION_SIZE {
-                section.set(x, SECTION_SIZE - 1, z, id(Block::Stone));
+                section.set(x, SECTION_SIZE - 1, z, 1);
             }
         }
         section
@@ -1680,7 +1674,7 @@ mod tests {
 
     #[test]
     fn single_block_emits_six_faces() {
-        let section = section_with(&[([5, 5, 5], id(Block::Stone))]);
+        let section = section_with(&[([5, 5, 5], 1)]);
         let blocks = padded(&section);
         let result = mesh(&section, &blocks, &lit(), &props(), MeshLod::Lod0);
 
@@ -1788,7 +1782,7 @@ mod tests {
         let section = slab();
         let mut blocks = padded(&section);
         for x in -1..=LOCAL_MAX {
-            blocks.set(x, 1, -1, id(Block::Stone));
+            blocks.set(x, 1, -1, 1);
         }
         let result = mesh(&section, &blocks, &lit(), &props(), MeshLod::Lod0);
 
@@ -1807,7 +1801,7 @@ mod tests {
 
     #[test]
     fn corner_ao_reads_the_diagonal_neighbour() {
-        let stone = id(Block::Stone);
+        let stone = 1;
         let section = section_with(&[([0, 31, 0], stone)]);
         let air = Section::uniform(0);
         let corner = section_with(&[([31, 0, 31], stone)]);
@@ -1856,7 +1850,7 @@ mod tests {
 
     #[test]
     fn diagonal_neighbour_darkens_a_corner_but_a_face_neighbour_does_not() {
-        let stone = id(Block::Stone);
+        let stone = 1;
         let section = section_with(&[([0, 31, 0], stone)]);
         let air = Section::uniform(0);
         let material = props();
@@ -1909,17 +1903,13 @@ mod tests {
 
     #[test]
     fn only_opaque_full_cubes_occlude_ao() {
-        let stone = id(Block::Stone);
+        let stone = 1;
         let section = section_with(&[([5, 5, 5], stone)]);
         let base = padded(&section);
         let material = props();
         let light = lit();
 
-        for (block, why) in [
-            (id(Block::Water), "water"),
-            (id(Block::Leaves), "cutout leaves"),
-            (id(Block::Grass), "cross quads"),
-        ] {
+        for (block, why) in [(7, "water"), (5, "cutout leaves"), (3, "cross quads")] {
             let mut blocks = base.clone();
             // Corner 0 of the `+Y` face samples this cell.
             blocks.set(4, 6, 4, block);
@@ -1953,8 +1943,8 @@ mod tests {
 
     #[test]
     fn water_emits_only_against_air() {
-        let water = id(Block::Water);
-        let stone = id(Block::Stone);
+        let water = 7;
+        let stone = 1;
 
         let section = section_with(&[([0, 0, 0], water), ([0, 1, 0], stone), ([1, 0, 0], stone)]);
         let blocks = padded(&section);
@@ -2010,7 +2000,7 @@ mod tests {
 
     #[test]
     fn cutout_is_never_merged() {
-        let leaves = id(Block::Leaves);
+        let leaves = 5;
         let section = section_with(&[
             ([0, 0, 0], leaves),
             ([1, 0, 0], leaves),
@@ -2043,8 +2033,8 @@ mod tests {
 
     #[test]
     fn cross_quads_are_two_quads_and_never_occlude() {
-        let grass = id(Block::Grass);
-        let stone = id(Block::Stone);
+        let grass = 3;
+        let stone = 1;
         let section = section_with(&[([0, 0, 0], grass), ([1, 0, 0], stone)]);
         let blocks = padded(&section);
         let result = mesh(&section, &blocks, &lit(), &props(), MeshLod::Lod0);
@@ -2078,8 +2068,8 @@ mod tests {
 
     #[test]
     fn output_order_is_deterministic() {
-        let stone = id(Block::Stone);
-        let leaves = id(Block::Leaves);
+        let stone = 1;
+        let leaves = 5;
 
         let mut data: Box<[BlockId; SECTION_VOLUME]> = vec![0_u16; SECTION_VOLUME]
             .into_boxed_slice()
@@ -2130,7 +2120,7 @@ mod tests {
 
     #[test]
     fn coarse_skips_ao_and_block_light() {
-        let stone = id(Block::Stone);
+        let stone = 1;
         let mut floor = PaddedBlocks::new();
         for x in 0..LOCAL_SIZE {
             for z in 0..LOCAL_SIZE {
@@ -2167,7 +2157,7 @@ mod tests {
 
     #[test]
     fn no_face_between_two_opaque_blocks() {
-        let stone = id(Block::Stone);
+        let stone = 1;
         let section = section_with(&[([0, 0, 0], stone), ([1, 0, 0], stone)]);
         let blocks = padded(&section);
         let result = mesh(&section, &blocks, &lit(), &props(), MeshLod::Lod0);
@@ -2335,7 +2325,7 @@ mod tests {
     fn skirt_closes_a_one_block_step_at_the_edge() {
         // A single exposed block on the east boundary, one cell above the
         // section floor: the strip has exactly one cell of room below it.
-        let section = section_with(&[([31, 1, 10], id(Block::Stone))]);
+        let section = section_with(&[([31, 1, 10], 1)]);
         let blocks = padded(&section);
         let mut mesh = mesh(&section, &blocks, &lit(), &props(), MeshLod::Lod0);
         let top = top_quad(&mesh, (31, 1, 10));
@@ -2366,7 +2356,7 @@ mod tests {
 
     #[test]
     fn step_skirt_fills_a_one_block_drop() {
-        let stone = id(Block::Stone);
+        let stone = 1;
         let section = section_with(&[([31, 4, 10], stone), ([31, 5, 10], stone)]);
         let plus_x = section_with(&[([0, 4, 10], stone)]);
         let air = Section::uniform(0);
@@ -2409,7 +2399,7 @@ mod tests {
 
     #[test]
     fn step_skirt_is_empty_on_a_flush_edge() {
-        let stone = id(Block::Stone);
+        let stone = 1;
         let section = section_with(&[([31, 5, 10], stone)]);
         let air = Section::uniform(0);
         let material = props();
@@ -2439,7 +2429,7 @@ mod tests {
 
     #[test]
     fn step_skirts_never_appear_on_interior_edges() {
-        let stone = id(Block::Stone);
+        let stone = 1;
 
         let interior = section_with(&[([10, 10, 10], stone)]);
         let blocks = padded(&interior);
@@ -2479,7 +2469,7 @@ mod tests {
 
     #[test]
     fn step_skirts_are_deterministic_and_append_once() {
-        let stone = id(Block::Stone);
+        let stone = 1;
         let section = section_with(&[([31, 4, 10], stone), ([31, 5, 10], stone)]);
         let plus_x = section_with(&[([0, 4, 10], stone)]);
         let air = Section::uniform(0);
@@ -2550,7 +2540,7 @@ mod tests {
     fn interior_edges_never_get_a_skirt() {
         // A block in the middle of the section has no face on any boundary
         // plane, so no side can hang a skirt from it.
-        let interior = section_with(&[([10, 10, 10], id(Block::Stone))]);
+        let interior = section_with(&[([10, 10, 10], 1)]);
         let blocks = padded(&interior);
         let mut middle = mesh(&interior, &blocks, &lit(), &props(), MeshLod::Lod0);
         let before = middle.opaque.len();
@@ -2559,7 +2549,7 @@ mod tests {
 
         // A west-edge block asked for an east skirt emits nothing: the
         // requested edge has no boundary face.
-        let west = section_with(&[([0, 10, 15], id(Block::Stone))]);
+        let west = section_with(&[([0, 10, 15], 1)]);
         let blocks = padded(&west);
         let mut east_only = mesh(&west, &blocks, &lit(), &props(), MeshLod::Lod0);
         let before = east_only.opaque.len();
@@ -2603,7 +2593,7 @@ mod tests {
 
         // A block in the middle of the section has six faces, none of them on a
         // boundary plane.
-        let stone = section_with(&[([10, 10, 10], id(Block::Stone))]);
+        let stone = section_with(&[([10, 10, 10], 1)]);
         let blocks = padded(&stone);
         let mut interior = mesh(&stone, &blocks, &lit(), &props(), MeshLod::Lod0);
         let before = interior.opaque.len();
@@ -2612,7 +2602,7 @@ mod tests {
         assert_eq!(interior.opaque.len(), before);
 
         // A section buried in solid rock emits no face at all.
-        let solid = Section::uniform(id(Block::Stone));
+        let solid = Section::uniform(1);
         let buried = PaddedBlocks::from_sections(&solid, &[Some(&solid); 26]);
         let mut buried_mesh = mesh(&solid, &buried, &lit(), &props(), MeshLod::Lod0);
         assert_eq!(quad_count(&buried_mesh), 0);

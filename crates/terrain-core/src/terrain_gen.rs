@@ -1,8 +1,8 @@
 //! `terrain-gen`: the headless, CPU-only acceptance harness for the terrain
 //! pipeline (`Q1.9`).
 //!
-//! The binary drives only `engine::pipeline`, `engine::section`, and
-//! `engine::hash`: no window, GPU, audio, or renderer code is referenced here.
+//! The binary drives only `terrain_core::pipeline`, `terrain_core::section`, and
+//! `terrain_core::hash`: no window, GPU, audio, or renderer code is referenced here.
 //! It exists so every other workstream has one command that says whether the
 //! generator is still deterministic.
 //!
@@ -42,20 +42,20 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::thread;
 
-use engine::climate::smoothstep01;
-use engine::content;
-use engine::description::{
+use terrain_core::climate::smoothstep01;
+use terrain_core::content;
+use terrain_core::description::{
     self, Description, HYDRO_TILE, MACRO_CELL, MAX_TERRAIN_Y, SEA, SECTIONS_PER_COLUMN, TILE_BLOCKS,
 };
-use engine::error::{ErrorKind, Stage, TerrainError};
-use engine::hash::sha256;
-use engine::header::{self, Header};
-use engine::hydro;
-use engine::lattice::floor_div;
-use engine::pipeline::{AIR, Terrain, WATER};
-use engine::save::{RepairAction, RepairOutcome, SectionStore};
-use engine::section::{self, BlockId, Section, SectionKey};
-use engine::world_save::{MigrationReport, WorldSave, write_migration_report};
+use terrain_core::error::{ErrorKind, Stage, TerrainError};
+use terrain_core::hash::sha256;
+use terrain_core::header::{self, Header};
+use terrain_core::hydro;
+use terrain_core::lattice::floor_div;
+use terrain_core::pipeline::{AIR, Terrain, WATER};
+use terrain_core::save::{RepairAction, RepairOutcome, SectionStore};
+use terrain_core::section::{self, BlockId, Section, SectionKey};
+use terrain_core::world_save::{MigrationReport, WorldSave, write_migration_report};
 
 /// Blocks in a generated column. Mirrors `description::WORLD_HEIGHT`.
 const COLUMN: usize = 384;
@@ -70,12 +70,16 @@ const SECTION_BLOCKS: i32 = 32;
 fn max_known_block() -> BlockId {
     static MAX: std::sync::OnceLock<BlockId> = std::sync::OnceLock::new();
     *MAX.get_or_init(|| {
-        let pack = engine::content::v1_default();
+        let pack = terrain_core::content::v1_default();
         BlockId::try_from(pack.len().saturating_sub(1)).unwrap_or(BlockId::MAX)
     })
 }
-/// Default golden file, relative to the crate root.
-const GOLDEN_PATH: &str = "tests/golden/terrain-v1.golden";
+/// Default golden file, anchored to the crate root so the command works from
+/// any working directory.
+const GOLDEN_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/golden/terrain-v1.golden"
+);
 /// Default `gen` square side.
 const DEFAULT_GEN_SIZE: i32 = 16;
 /// Default `seams` window side.
@@ -420,9 +424,9 @@ fn shuffle(indices: &mut [usize], key: u64) {
     if indices.len() < 2 {
         return;
     }
-    let mut state = engine::hash::mix(key);
+    let mut state = terrain_core::hash::mix(key);
     for slot in (1..indices.len()).rev() {
-        state = engine::hash::mix(state ^ u64::try_from(slot).unwrap_or(0));
+        state = terrain_core::hash::mix(state ^ u64::try_from(slot).unwrap_or(0));
         // `slot + 1 <= len <= usize::MAX`, so the cast is in range on every
         // supported target.
         let offset = (state % u64::try_from(slot + 1).unwrap_or(u64::MAX)) as usize;
@@ -1572,8 +1576,12 @@ fn print_sweep(outcome: &SweepOutcome, json: bool) {
 // counters
 // ---------------------------------------------------------------------------
 
-/// Default path of the checked-in PR counter baseline.
-const COUNTER_BASELINE_PATH: &str = "tests/golden/terrain-counters.json";
+/// Default path of the checked-in PR counter baseline, anchored to the crate
+/// root so the command works from any working directory.
+const COUNTER_BASELINE_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/golden/terrain-counters.json"
+);
 /// Relative drift, in percent, at which the counter comparison fails.
 const COUNTER_DRIFT_PERCENT: u64 = 5;
 /// Schema tag written to and required from a counter baseline.
@@ -2784,7 +2792,7 @@ fn print_describe_diff(outcome: &DescribeDiffOutcome, json: bool) {
 // Saved sections
 // ---------------------------------------------------------------------------
 //
-// The record itself is canonical and owned by `engine::section`:
+// The record itself is canonical and owned by `terrain_core::section`:
 // `section::encode_record` and `section::decode_record` are the only framing
 // in the engine (`J4.4`). A world stores one record per file under
 // `world/sections/`, named `c.<column x>.<column z>.<section y>.sect`. The

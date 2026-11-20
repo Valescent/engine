@@ -9,15 +9,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use engine::content::{self, ContentPack};
-use engine::description;
-use engine::error::{ErrorKind, SectionFault};
-use engine::hash::sha256;
-use engine::header::{self, HASH_ALGORITHM, HEADER_FORMAT_VERSION, Header, MigrationState};
-use engine::pipeline::Terrain;
-use engine::save::SectionStore;
-use engine::section::{self, BlockId, Section, SectionKey};
-use engine::world_save::WorldSave;
+use terrain_core::content::{self, ContentPack};
+use terrain_core::description;
+use terrain_core::error::{ErrorKind, SectionFault};
+use terrain_core::hash::sha256;
+use terrain_core::header::{self, HASH_ALGORITHM, HEADER_FORMAT_VERSION, Header, MigrationState};
+use terrain_core::pipeline::Terrain;
+use terrain_core::save::SectionStore;
+use terrain_core::section::{self, BlockId, Section, SectionKey};
+use terrain_core::world_save::WorldSave;
 
 const BIN: &str = env!("CARGO_BIN_EXE_terrain-gen");
 /// The vertical section index a fixture uses: it contains the sea-level surface.
