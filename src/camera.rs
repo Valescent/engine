@@ -335,5 +335,20 @@ mod tests {
         assert!((player.position.y - 64.0).abs() < 1e-3);
         assert!((player.position.x - (BASE_F + 0.5)).abs() < 1e-3);
         assert!((player.position.z - (BASE_F + 0.5)).abs() < 1e-3);
+
+        // (d) The render convention subtracts the frame origin in integer
+        // space. At 2^30 one block is smaller than an f32 ULP, so an absolute
+        // cast would lose it, but the relative delta is still exact.
+        let far = 1_i32 << 30;
+        let delta = relative_origin([far + 32, 0, far - 32], IVec3::new(far, 0, far));
+        assert_eq!(delta, F32Vec3::new(32.0, 0.0, -32.0));
+        let one_block = relative_origin([far + 1, 0, 0], IVec3::new(far, 0, 0));
+        assert_eq!(one_block, F32Vec3::X);
+        // The same subtraction on absolute f32 values collapses to zero.
+        assert_eq!(
+            (far + 1) as f32 - far as f32,
+            0.0,
+            "the fixture must lie beyond f32's exact-integer range"
+        );
     }
 }

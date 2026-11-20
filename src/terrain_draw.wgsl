@@ -27,16 +27,18 @@ struct Camera {
     settings: vec4<f32>,
     // Camera is relative to the frame origin.
     camera_position: vec4<f32>,
-    // The world-space render origin; the terrain water pass does not use it.
-    render_origin: vec4<f32>,
+    // The frame's absolute world-block render origin. Section origins are
+    // absolute integers too; vertices subtract this in integer space.
+    render_origin: vec4<i32>,
+    // The frame origin's water-wave phase, wrapped to [0, 2*pi).
+    wave_anchor: vec4<f32>,
 };
 
 struct Section {
-    // Section origin relative to the frame's render origin, the same
-    // convention as the legacy chunk origin uniform and `camera_position`.
-    origin: vec3<f32>,
-    // World blocks per cell: 1 for fine, 2 or 4 for a coarse LOD section.
-    scale: f32,
+    // Absolute world-block section origin in `xyz`; `w` is the world blocks
+    // per cell (1 fine, 2 LOD1, 4 LOD2). Subtracting the frame origin in
+    // integer space keeps every relative delta exact in f32.
+    origin: vec4<i32>,
 };
 
 @group(0) @binding(0)
@@ -69,6 +71,7 @@ struct Quad {
 };
 
 fn load_quad(index: u32) -> Quad {
+    let scale = f32(section.origin.w);
     let lo = quads[index * 2u];
     let hi = quads[index * 2u + 1u];
     var quad: Quad;
@@ -76,9 +79,9 @@ fn load_quad(index: u32) -> Quad {
         f32(lo & 0x1Fu),
         f32((lo >> 5u) & 0x1Fu),
         f32((lo >> 10u) & 0x1Fu),
-    ) * section.scale;
-    quad.width = f32(((lo >> 15u) & 0x1Fu) + 1u) * section.scale;
-    quad.height = f32(((lo >> 20u) & 0x1Fu) + 1u) * section.scale;
+    ) * scale;
+    quad.width = f32(((lo >> 15u) & 0x1Fu) + 1u) * scale;
+    quad.height = f32(((lo >> 20u) & 0x1Fu) + 1u) * scale;
     quad.normal = (lo >> 25u) & 0x7u;
     // The AO byte straddles the two words: low four bits in `lo`, high in `hi`.
     quad.ao = ((lo >> 28u) & 0xFu) | ((hi & 0xFu) << 4u);
@@ -141,6 +144,7 @@ fn corner_uv(slot: u32, width: f32, height: f32) -> vec2<f32> {
 
 fn corner_geometry(quad: Quad, slot: u32) -> Corner {
     var corner: Corner;
+    let scale = f32(section.origin.w);
     let x = quad.origin.x;
     let y = quad.origin.y;
     let z = quad.origin.z;
@@ -149,21 +153,21 @@ fn corner_geometry(quad: Quad, slot: u32) -> Corner {
         // Cutout cross quad (`M2.4`): a vertical diagonal through the cell.
         // Slot 0..3 runs bottom `p0`, top `p0`, top `p1`, bottom `p1`.
         var p0 = vec2<f32>(x, z);
-        var p1 = vec2<f32>(x + section.scale, z + section.scale);
+        var p1 = vec2<f32>(x + scale, z + scale);
         if (quad.normal == 7u) {
-            p0 = vec2<f32>(x + section.scale, z);
-            p1 = vec2<f32>(x, z + section.scale);
+            p0 = vec2<f32>(x + scale, z);
+            p1 = vec2<f32>(x, z + scale);
         }
         var position = vec3<f32>(p0.x, y, p0.y);
         if (slot == 1u) {
-            position = vec3<f32>(p0.x, y + section.scale, p0.y);
+            position = vec3<f32>(p0.x, y + scale, p0.y);
         } else if (slot == 2u) {
-            position = vec3<f32>(p1.x, y + section.scale, p1.y);
+            position = vec3<f32>(p1.x, y + scale, p1.y);
         } else if (slot == 3u) {
             position = vec3<f32>(p1.x, y, p1.y);
         }
         corner.position = position;
-        corner.uv = corner_uv(slot, section.scale, section.scale);
+        corner.uv = corner_uv(slot, scale, scale);
         return corner;
     }
 
@@ -178,15 +182,15 @@ fn corner_geometry(quad: Quad, slot: u32) -> Corner {
     let v = duv.y * (quad.height + 2.0 * overlap) - overlap;
     var position = vec3<f32>(x + u, y + v, z);
     if (quad.normal == 0u) {
-        position = vec3<f32>(x + section.scale, y + v, z + u);
+        position = vec3<f32>(x + scale, y + v, z + u);
     } else if (quad.normal == 1u) {
         position = vec3<f32>(x, y + v, z + u);
     } else if (quad.normal == 2u) {
-        position = vec3<f32>(x + u, y + section.scale, z + v);
+        position = vec3<f32>(x + u, y + scale, z + v);
     } else if (quad.normal == 3u) {
         position = vec3<f32>(x + u, y, z + v);
     } else if (quad.normal == 4u) {
-        position = vec3<f32>(x + u, y + v, z + section.scale);
+        position = vec3<f32>(x + u, y + v, z + scale);
     }
     corner.position = position;
     corner.uv = corner_uv(slot, quad.width, quad.height);
@@ -256,7 +260,10 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOut {
     }
 
     let corner = corner_geometry(quad, slot);
-    let world_position = section.origin + corner.position;
+    // Integer subtraction first: the difference is at most a few hundred
+    // blocks, so the f32 cast is exact even when the world coordinate is not.
+    let relative_origin = vec3<f32>(section.origin.xyz - camera.render_origin.xyz);
+    let world_position = relative_origin + corner.position;
 
     var output: VertexOut;
     output.clip_position = camera.view_projection * vec4<f32>(world_position, 1.0);
