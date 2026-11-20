@@ -181,6 +181,44 @@ impl RenderLayer {
     }
 }
 
+/// Per-face texture references (ADR-0015).
+///
+/// Presentation only: a record's textures are **not** part of [`record_hash`]
+/// or [`ContentPack::pack_hash`], so re-texturing a block never invalidates a
+/// saved world or a pinned generation description. Empty strings are invalid;
+/// every record names all three faces even when they are the same texture.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FaceTextures {
+    /// Texture seen from above (`+Y`).
+    pub top: String,
+    /// Texture seen from the four sides (`±X`, `±Z`) and cross quads.
+    pub side: String,
+    /// Texture seen from below (`-Y`).
+    pub bottom: String,
+}
+
+impl FaceTextures {
+    /// One texture on every face.
+    #[must_use]
+    pub fn uniform(name: &str) -> Self {
+        Self {
+            top: name.to_owned(),
+            side: name.to_owned(),
+            bottom: name.to_owned(),
+        }
+    }
+
+    /// Distinct top, side, and bottom textures.
+    #[must_use]
+    pub fn faces(top: &str, side: &str, bottom: &str) -> Self {
+        Self {
+            top: top.to_owned(),
+            side: side.to_owned(),
+            bottom: bottom.to_owned(),
+        }
+    }
+}
+
 /// One block definition from the content pack (`A5.2`).
 ///
 /// Field order **is** the canonical hash order; see [`record_hash`]. Every
@@ -214,6 +252,9 @@ pub struct BlockRecord {
     /// Drop name → count, sorted by name by construction. Empty means nothing
     /// drops, as for air and water.
     pub drops: BTreeMap<String, u8>,
+    /// Per-face texture references. Presentation only; excluded from
+    /// [`record_hash`] by ADR-0015.
+    pub textures: FaceTextures,
 }
 
 /// A parsed content pack, indexed by stable name and by runtime id.
@@ -397,6 +438,10 @@ impl ContentPack {
 /// 6. `hardness`: `f32` bit pattern, `-0.0` normalised to `+0.0`.
 /// 7. `drops`: `u32` entry count, then each `(name, count)` in name order.
 ///
+/// Texture references are **not** hashed (ADR-0015): they are presentation
+/// state, so a re-texture cannot change [`Self`], [`ContentPack::pack_hash`],
+/// or a saved section's baseline.
+///
 /// The function is total: a record that `load` would reject still hashes its
 /// bytes (a non-finite `hardness` hashes its bit pattern) rather than panicking.
 /// Ids are deliberately absent; they are runtime state.
@@ -420,6 +465,22 @@ pub fn record_hash(record: &BlockRecord) -> [u8; 32] {
         push_name(&mut out, name);
         out.push(*dropped);
     }
+    sha256(&out)
+}
+
+/// Hashes a record's presentation state, which [`record_hash`] deliberately
+/// excludes (`ADR-0015`).
+///
+/// Layout: each of `textures.top`, `textures.side`, `textures.bottom` as a
+/// `u32` byte length followed by UTF-8 bytes. The result changes when a block
+/// is re-textured and is stable across everything [`record_hash`] covers, so
+/// visual baselines can track appearance without forking world identity.
+#[must_use]
+pub fn render_hash(record: &BlockRecord) -> [u8; 32] {
+    let mut out = Vec::with_capacity(96);
+    push_name(&mut out, &record.textures.top);
+    push_name(&mut out, &record.textures.side);
+    push_name(&mut out, &record.textures.bottom);
     sha256(&out)
 }
 
@@ -451,7 +512,10 @@ pub fn v1_default() -> ContentPack {
         self_dropping(opaque("core:boulder", 2.5)),
         self_dropping(opaque("core:clay", 0.6)),
         self_dropping(opaque("core:dirt", 0.5)),
-        self_dropping(opaque("core:grass", 0.6)),
+        self_dropping(with_textures(
+            opaque("core:grass", 0.6),
+            FaceTextures::faces("core:grass_top", "core:grass_side", "core:dirt"),
+        )),
         self_dropping(opaque("core:gravel", 0.6)),
         self_dropping(opaque("core:ice", 0.5)),
         lamp("core:lamp"),
@@ -463,7 +527,10 @@ pub fn v1_default() -> ContentPack {
         self_dropping(opaque("core:snow", 0.2)),
         self_dropping(opaque("core:stone", 1.5)),
         water("core:water"),
-        self_dropping(opaque("core:wood", 2.0)),
+        self_dropping(with_textures(
+            opaque("core:wood", 2.0),
+            FaceTextures::faces("core:wood_top", "core:wood_side", "core:wood_top"),
+        )),
     ];
     ContentPack::load(records).expect("the built-in v1 placeholder pack is valid")
 }
@@ -486,7 +553,14 @@ fn opaque(name: &str, hardness: f32) -> BlockRecord {
         liquid: false,
         hardness,
         drops: BTreeMap::new(),
+        textures: FaceTextures::uniform(name),
     }
+}
+
+/// Replaces a record's per-face textures (presentation only, ADR-0015).
+fn with_textures(mut record: BlockRecord, textures: FaceTextures) -> BlockRecord {
+    record.textures = textures;
+    record
 }
 
 /// Air: clear, walk-through, replaceable.
@@ -585,6 +659,9 @@ fn validate(record: &BlockRecord) -> Result<(), TerrainError> {
             return Err(content_error("drop count"));
         }
     }
+    validate_name(&record.textures.top)?;
+    validate_name(&record.textures.side)?;
+    validate_name(&record.textures.bottom)?;
     Ok(())
 }
 
@@ -860,6 +937,58 @@ mod tests {
 
         // The check is directional: a subset accepts the full pack.
         assert!(pinned.check_compatible(&subset).is_ok());
+    }
+
+    #[test]
+    fn texture_references_are_presentation_only() {
+        let pack = v1_default();
+        let base = pack
+            .props(pack.id("core:grass").expect("core:grass is in the pack"))
+            .expect("the id resolves")
+            .clone();
+        assert_eq!(base.textures.top, "core:grass_top");
+        assert_eq!(base.textures.side, "core:grass_side");
+        assert_eq!(base.textures.bottom, "core:dirt");
+
+        let retextured = BlockRecord {
+            textures: FaceTextures::uniform("test:retextured"),
+            ..base.clone()
+        };
+        assert_eq!(
+            record_hash(&retextured),
+            record_hash(&base),
+            "ADR-0015: textures must not enter the record hash"
+        );
+        assert_ne!(
+            render_hash(&retextured),
+            render_hash(&base),
+            "the render hash tracks appearance"
+        );
+
+        let mut records = pack.records().to_vec();
+        for record in &mut records {
+            record.textures = FaceTextures::uniform("test:retextured");
+        }
+        let changed = ContentPack::load(records).unwrap();
+        assert_eq!(
+            changed.pack_hash(),
+            pack.pack_hash(),
+            "ADR-0015: a re-texture must not change the pack hash"
+        );
+        assert!(changed.check_compatible(&pack).is_ok());
+    }
+
+    #[test]
+    fn invalid_texture_references_are_rejected() {
+        let mut records = v1_default().records().to_vec();
+        records[0].textures.bottom = String::new();
+        let error = ContentPack::load(records).unwrap_err();
+        assert_eq!(error_parts(&error), ("CONTENT", "missing name"));
+
+        let mut records = v1_default().records().to_vec();
+        records[0].textures.side = "Not A Name".to_owned();
+        let error = ContentPack::load(records).unwrap_err();
+        assert_eq!(error_parts(&error), ("CONTENT", "name charset"));
     }
 
     #[test]

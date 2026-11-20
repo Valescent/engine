@@ -109,6 +109,14 @@ pub enum ErrorKind {
     /// The world names a generator version this build does not know.
     #[error("unknown generator version {0}")]
     UnknownGeneratorVersion(u16),
+    /// The world was created with another seed.
+    #[error("world seed {found} differs from the requested seed {expected}")]
+    SeedMismatch {
+        /// Seed the caller asked to open with.
+        expected: u64,
+        /// Seed recorded in the world header.
+        found: u64,
+    },
     /// The world was written by a newer engine.
     #[error("world needs generator version {found}, this build has {engine}")]
     NewerThanEngine {
@@ -213,6 +221,7 @@ impl ErrorKind {
             Self::CorruptSection { .. }
             | Self::DescriptionHashMismatch { .. }
             | Self::UnknownGeneratorVersion(_)
+            | Self::SeedMismatch { .. }
             | Self::NewerThanEngine { .. }
             | Self::ManifestIncompatible { .. } => Severity::Fatal,
             Self::IoError { .. } | Self::JobPanicked { .. } => Severity::SessionFailed,
@@ -234,6 +243,7 @@ impl ErrorKind {
             Self::CorruptSection { .. }
             | Self::DescriptionHashMismatch { .. }
             | Self::UnknownGeneratorVersion(_)
+            | Self::SeedMismatch { .. }
             | Self::NewerThanEngine { .. }
             | Self::DescriptionInvalid { .. }
             | Self::ManifestIncompatible { .. } => Disposition::RefuseLoad,

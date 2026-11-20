@@ -199,6 +199,8 @@ order, and asserts identical block hashes.
 - Each record is hashed over its canonical parsed bytes; `pack_hash` is over the sorted
   `(kind, name, record_version, record_hash)` list. Render-only fields use a separate
   `render_hash`, so retexturing never forks identity. A generated `pack.lock` is checked in.
+  Implemented as `textures.top|side|bottom` per record plus `content::render_hash` (`ADR-0015`);
+  the mesher resolves each face's reference to a texture layer.
 - To **generate**, every record pinned by the description MUST match exactly
   (`ManifestIncompatible` otherwise); extra unpinned records are ignored. To **open saved
   terrain**, a valid header/description/journal is enough, and saved names missing from the pack
@@ -978,6 +980,9 @@ tile:16            texture-array layer
 tint:4             biome tint index
 ```
 
+`tile` is resolved from the face's own texture reference: top for `+y`, bottom for `-y`, side for the
+four sides and cross quads (`ADR-0015`).
+
 The vertex shader emits 6 vertices per quad from a corner table, offsets `+face` planes by 1 along
 the normal, computes UV from local position with a repeat sampler, and derives the triangulation flip
 from the AO values. The section origin is per draw or indirect data, never per quad. Separate quad
@@ -1435,8 +1440,8 @@ contradict a MUST elsewhere in this document.
   `src/world_save.rs`. See [Save format](../dev/save-format.md). Section-record migration for an
   older record format has no normative format yet.
 - **`TERRAIN_DEMO` is a demo, not the product**: a tile-streamed 128x128 patch with real per-column
-  lighting (sky, block, water attenuation), name-mapped procedural textures, collision, edits,
-  per-edit saves, distance LOD1, and prefetched tile paging. Texture references, LOD2, and
+  lighting (sky, block, water attenuation), per-face texture references resolved to procedural
+  layers, collision, edits, per-edit saves, distance LOD1, and prefetched tile paging. LOD2 and
   residency-driven ring streaming remain; the world model behind it is the shipped one.
 - **`terrain-gen map` is ASCII-only** for now: `--seed --from --size --cell` prints a height/water grid and `--json` rows. PNG modes, `tEXt` metadata, legends, and `--ndjson` are deferred.
 - **The full tooling bundle is deferred.** `verify --report <dir>` writes a manifest plus JSON/text; the zip bundle, `calibrate-blend`, and the PR counter gate are not implemented.

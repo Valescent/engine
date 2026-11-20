@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Section persistence under a v2 world header: per-section files with one-generation backup rotation, an append-only journal replayed on open, prefix trimming after a save, a save worker on its own IO thread, `migrate` with a JSON report, and `repair` (`restore`, `quarantine`, `salvage`).
 - `terrain-gen`: `gen`, `golden check|update`, `seams`, `sweep`, `describe`, `describe-diff`, `verify --report`, `replay`, `map`, `repair`, and `migrate`, with pinned `--json` output.
 - `TERRAIN_DEMO=1`: a 128x128 tile with real column light, collision, asynchronous incremental light and mesh repair (~24 ms in release), distance LOD1, tile paging with prefetch, and saves under `world/terrain-demo/`.
+- Per-face texture references on content-pack records (`textures.top|side|bottom`, `ADR-0015`): the mesher writes the layer of each face, grass and wood draw distinct top/side/bottom tiles, and a separate `render_hash` tracks appearance without changing `record_hash` or `pack_hash`.
 
 ### Changed
 

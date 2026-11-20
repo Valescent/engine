@@ -116,8 +116,12 @@ pub struct Material {
     pub water: bool,
     /// A scatter block drawn as two crossed quads.
     pub cross_quad: bool,
-    /// Texture-array layer.
-    pub texture_tile: u16,
+    /// Texture-array layer for `+Y`.
+    pub texture_top: u16,
+    /// Texture-array layer for the four sides and cross quads.
+    pub texture_side: u16,
+    /// Texture-array layer for `-Y`.
+    pub texture_bottom: u16,
     /// Biome tint index.
     pub tint: u8,
     /// Emits block light. Not encoded in the quad record; carried for `light2`.
@@ -131,7 +135,9 @@ impl Material {
         opaque: false,
         water: false,
         cross_quad: false,
-        texture_tile: 0,
+        texture_top: 0,
+        texture_side: 0,
+        texture_bottom: 0,
         tint: 0,
         emissive: false,
     };
@@ -142,10 +148,22 @@ impl Material {
         opaque: true,
         water: false,
         cross_quad: false,
-        texture_tile: 0,
+        texture_top: 0,
+        texture_side: 0,
+        texture_bottom: 0,
         tint: 0,
         emissive: false,
     };
+
+    /// Texture layer for a packed normal code (`ADR-0015`).
+    #[must_use]
+    pub const fn tile_for(&self, normal: u8) -> u16 {
+        match normal {
+            NORMAL_POS_Y => self.texture_top,
+            NORMAL_NEG_Y => self.texture_bottom,
+            _ => self.texture_side,
+        }
+    }
 }
 
 /// Per-block material table, resolved by the caller before meshing.
@@ -163,8 +181,8 @@ pub struct MaterialProps {
     water: Vec<bool>,
     /// Cross-quad flag per id.
     cross_quad: Vec<bool>,
-    /// Texture layer per id.
-    texture_tile: Vec<u16>,
+    /// Texture layer per id and face.
+    textures: Vec<[u16; 3]>,
     /// Tint index per id.
     tint: Vec<u8>,
     /// Emissive flag per id.
@@ -196,7 +214,9 @@ impl MaterialProps {
                     opaque: true,
                     water: false,
                     cross_quad: false,
-                    texture_tile: 0,
+                    texture_top: 0,
+                    texture_side: 0,
+                    texture_bottom: 0,
                     tint: 0,
                     emissive: false,
                 },
@@ -208,7 +228,9 @@ impl MaterialProps {
                     opaque: true,
                     water: false,
                     cross_quad: false,
-                    texture_tile: 1,
+                    texture_top: 1,
+                    texture_side: 1,
+                    texture_bottom: 1,
                     tint: 0,
                     emissive: false,
                 },
@@ -220,7 +242,9 @@ impl MaterialProps {
                     opaque: false,
                     water: false,
                     cross_quad: true,
-                    texture_tile: 3,
+                    texture_top: 2,
+                    texture_side: 3,
+                    texture_bottom: 4,
                     tint: 1,
                     emissive: false,
                 },
@@ -232,7 +256,9 @@ impl MaterialProps {
                     opaque: true,
                     water: false,
                     cross_quad: false,
-                    texture_tile: 6,
+                    texture_top: 5,
+                    texture_side: 6,
+                    texture_bottom: 5,
                     tint: 0,
                     emissive: false,
                 },
@@ -244,7 +270,9 @@ impl MaterialProps {
                     opaque: false,
                     water: false,
                     cross_quad: false,
-                    texture_tile: 7,
+                    texture_top: 7,
+                    texture_side: 7,
+                    texture_bottom: 7,
                     tint: 1,
                     emissive: false,
                 },
@@ -256,7 +284,9 @@ impl MaterialProps {
                     opaque: true,
                     water: false,
                     cross_quad: false,
-                    texture_tile: 8,
+                    texture_top: 8,
+                    texture_side: 8,
+                    texture_bottom: 8,
                     tint: 0,
                     emissive: true,
                 },
@@ -268,7 +298,9 @@ impl MaterialProps {
                     opaque: false,
                     water: true,
                     cross_quad: false,
-                    texture_tile: 9,
+                    texture_top: 9,
+                    texture_side: 9,
+                    texture_bottom: 9,
                     tint: 0,
                     emissive: false,
                 },
@@ -280,7 +312,9 @@ impl MaterialProps {
                     opaque: true,
                     water: false,
                     cross_quad: false,
-                    texture_tile: 10,
+                    texture_top: 10,
+                    texture_side: 10,
+                    texture_bottom: 10,
                     tint: 0,
                     emissive: false,
                 },
@@ -302,7 +336,7 @@ impl MaterialProps {
             self.opaque.resize(length, false);
             self.water.resize(length, false);
             self.cross_quad.resize(length, false);
-            self.texture_tile.resize(length, 0);
+            self.textures.resize(length, [0; 3]);
             self.tint.resize(length, 0);
             self.emissive.resize(length, false);
         }
@@ -310,7 +344,11 @@ impl MaterialProps {
         self.opaque[slot] = material.opaque;
         self.water[slot] = material.water;
         self.cross_quad[slot] = material.cross_quad;
-        self.texture_tile[slot] = material.texture_tile;
+        self.textures[slot] = [
+            material.texture_top,
+            material.texture_side,
+            material.texture_bottom,
+        ];
         self.tint[slot] = material.tint;
         self.emissive[slot] = material.emissive;
     }
@@ -326,7 +364,9 @@ impl MaterialProps {
             opaque: self.opaque[slot],
             water: self.water[slot],
             cross_quad: self.cross_quad[slot],
-            texture_tile: self.texture_tile[slot],
+            texture_top: self.textures[slot][0],
+            texture_side: self.textures[slot][1],
+            texture_bottom: self.textures[slot][2],
             tint: self.tint[slot],
             emissive: self.emissive[slot],
         }
@@ -856,7 +896,7 @@ fn collect_cross(
                         0,
                         sky,
                         blk,
-                        material.texture_tile,
+                        material.texture_side,
                         material.tint,
                     ));
                 }
@@ -927,7 +967,7 @@ fn quad_from(
         key.ao,
         key.sky,
         key.blk,
-        material.texture_tile,
+        material.tile_for(face.code()),
         material.tint,
     )
 }
@@ -1647,6 +1687,61 @@ mod tests {
         assert_eq!(result.opaque.len(), 6);
         assert_eq!(result.cutout.len(), 0);
         assert_eq!(result.water.len(), 0);
+    }
+
+    #[test]
+    fn faces_take_the_texture_of_their_own_direction() {
+        let mut props = MaterialProps::new();
+        props.set(
+            BlockId::from(1_u16),
+            Material {
+                texture_top: 20,
+                texture_side: 21,
+                texture_bottom: 22,
+                ..Material::UNKNOWN
+            },
+        );
+        let section = section_with(&[([5, 5, 5], BlockId::from(1_u16))]);
+        let blocks = padded(&section);
+        let result = mesh(&section, &blocks, &lit(), &props, MeshLod::Lod0);
+
+        let expected = |normal: u8| match normal {
+            NORMAL_POS_Y => 20,
+            NORMAL_NEG_Y => 22,
+            _ => 21,
+        };
+        for quad in &result.opaque {
+            assert_eq!(
+                quad.tile(),
+                expected(quad.normal()),
+                "normal {} must use its own face texture",
+                quad.normal()
+            );
+        }
+        assert_eq!(result.opaque.len(), 6);
+    }
+
+    #[test]
+    fn cross_quads_use_the_side_texture() {
+        let mut props = MaterialProps::new();
+        props.set(
+            BlockId::from(9_u16),
+            Material {
+                cross_quad: true,
+                texture_top: 20,
+                texture_side: 21,
+                texture_bottom: 22,
+                ..Material::UNKNOWN
+            },
+        );
+        let section = section_with(&[([5, 5, 5], BlockId::from(9_u16))]);
+        let blocks = padded(&section);
+        let result = mesh(&section, &blocks, &lit(), &props, MeshLod::Lod0);
+
+        assert_eq!(result.cutout.len(), 2);
+        for quad in &result.cutout {
+            assert_eq!(quad.tile(), 21);
+        }
     }
 
     #[test]

@@ -68,6 +68,9 @@ keyed and sorted, so worker order cannot change the patch.
 ## Meshing and LOD
 
 - Fine sections are greedy-meshed with `MeshLod::Lod0`.
+- Each quad takes the layer of the face it belongs to: the block's top reference for `+Y`, bottom
+  for `-Y`, and side for `±X`/`±Z` and cross quads (`ADR-0015`). `Textures` are presentation-only,
+  so changing one never invalidates a saved section.
 - `demo_coarse` downsamples every complete 2x2x2 fine group with `lod::downsample`, meshes with
   `mesh_coarse` at Lod1, and appends skirts on all sides.
 - The active set replaces a complete coarse region with one coarse section per 2x2x2 group when the
@@ -133,8 +136,9 @@ integration tests.
 
 ## Known gaps
 
-- Texture references are still the renderer's name-mapped procedural layers; the content pack does
-  not carry per-face texture identities.
+- The renderer's texture array is still placeholder art: per-face references resolve to the eleven
+  procedural layers by name, and an unknown name falls back to stone. Skirts on coarse meshes inherit
+  the boundary face's layer rather than the side layer.
 - Residency-driven ring streaming (16-column view radius) is not wired; the demo pages tiles.
 - No normative older section record exists, so migration fixtures cannot be added yet.
 - Camera-relative rendering (spec 14.3) is not applied.

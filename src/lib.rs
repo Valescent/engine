@@ -189,7 +189,15 @@ pub fn run() -> Result<(), RunError> {
                     }
                 }
                 Err(error) => {
-                    warn!(%error, "terrain world unavailable; running without saves");
+                    if matches!(error.kind, error::ErrorKind::SeedMismatch { .. }) {
+                        warn!(
+                            %error,
+                            path = TERRAIN_SAVE_DIR,
+                            "terrain demo world belongs to another seed; move that directory aside to start a new demo world"
+                        );
+                    } else {
+                        warn!(%error, "terrain world unavailable; running without saves");
+                    }
                     (Vec::new(), None, 0, Vec::new(), None)
                 }
             };
@@ -1190,7 +1198,9 @@ fn demo_materials() -> mesher2::MaterialProps {
                 opaque: record.opacity >= content::LIGHT_LEVELS,
                 water: record.liquid,
                 cross_quad: record.render_shape == content::RenderShape::CrossQuad,
-                texture_tile: demo_texture_layer(&record.name),
+                texture_top: demo_texture_layer(&record.textures.top),
+                texture_side: demo_texture_layer(&record.textures.side),
+                texture_bottom: demo_texture_layer(&record.textures.bottom),
                 tint: 0,
                 emissive: record.emission > 0,
             },
@@ -1574,11 +1584,18 @@ fn demo_light_table() -> light2::LightTable {
 ///
 /// The v1 pack carries no texture refs (W22 note), so this is the only place the
 /// demo maps names onto `renderer.rs`'s eleven procedural layers.
+/// Maps a stable texture reference onto the renderer's procedural array.
+///
+/// The array is still placeholder art (`ADR-0007`, `ADR-0015`): a reference is
+/// resolved by name, and an unknown name falls back to stone. Grass and wood
+/// are the only blocks with three distinct faces today.
 fn demo_texture_layer(name: &str) -> u16 {
     match name {
-        "core:dirt" | "core:clay" => 1,
-        "core:grass" => 2,
-        "core:wood" => 6,
+        "core:dirt" | "core:clay" | "core:grass_bottom" => 1,
+        "core:grass_top" => 2,
+        "core:grass_side" => 3,
+        "core:wood_top" => 5,
+        "core:wood_side" => 6,
         "core:leaves" | "core:plant" => 7,
         "core:lamp" => 8,
         "core:water" | "core:ice" => 9,
@@ -3170,6 +3187,25 @@ mod tests {
     use crate::generation::GenResult;
     use crate::player::BlockSource;
     use mesher::{Job, JobResult, MeshResult};
+
+    #[test]
+    fn demo_materials_map_each_face_from_the_pack() {
+        let pack = content::v1_default();
+        let props = demo_materials();
+        let tiles = |name: &str| {
+            let material = props.material(pack.id(name).expect("the pack holds the block"));
+            (
+                material.texture_top,
+                material.texture_side,
+                material.texture_bottom,
+            )
+        };
+
+        assert_eq!(tiles("core:grass"), (2, 3, 1));
+        assert_eq!(tiles("core:wood"), (5, 6, 5));
+        assert_eq!(tiles("core:stone"), (0, 0, 0));
+        assert_eq!(tiles("core:sand"), (10, 10, 10));
+    }
 
     #[test]
     fn mesher_reads_an_identity_light_field() {

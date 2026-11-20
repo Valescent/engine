@@ -58,7 +58,8 @@ derived state, runtime config, or per-section data.
 3. `description.toml` must exist and parse.
 4. Recompute `description_hash` and compare.
 5. `generator_version` must be shipped (or the world opens only through the migration dialog).
-6. Validate the content pack against the pinned records.
+6. Validate the content pack against the pinned records. Textures are excluded from
+   `record_hash`, so a re-texture never fails this check (`ADR-0015`).
 7. Recover the journal (below).
 
 Any failure aborts the load and leaves the directory byte-identical.

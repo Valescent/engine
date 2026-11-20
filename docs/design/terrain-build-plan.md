@@ -107,7 +107,7 @@ still unimplemented, in dependency order. Nothing here blocks the terrain engine
 | 2 | Persistence tests: migration fixtures (v1/v2/v3), corruption fuzz, kill-and-resume | Section round trip, rotation, temp recovery, torn tail, corrupt frame, world load order, worker ordering, revision advancement, journal replay, prefix trimming, repair actions, v1 header upgrade, migration resume/report, corruption fuzz, journal truncation at every byte, and repeated crash/save/reopen pass | Add migration fixtures for older record formats |
 | 3 | Frozen `versions.toml` + deprecation dialog | Policy specified (T1.12); no table or UI | Needed before the first generator bump |
 | 4 | Panic/deadline wrapper around jobs (`S1.2`, `S1.3`) | Jobs are plain functions; no watchdog | Wrap with `catch_unwind` and the soft deadline |
-| 5 | Demo integration: real light, texture refs, collision, streaming, LOD | `TERRAIN_DEMO` uses real column light, collision, edits, per-edit saves, and distance LOD1; tiles stream with prefetched neighbours and texture refs are name-mapped | Real texture refs when the pack carries them |
+| 5 | Demo integration: real light, texture refs, collision, streaming, LOD | `TERRAIN_DEMO` uses real column light, collision, edits, per-edit saves, and distance LOD1; tiles stream with prefetched neighbours; per-face texture references resolve to procedural layers (`ADR-0015`) | An asset pipeline to replace the placeholder layers |
 | 6 | World-mode hydrology wiring | `WorldHydro` + `tile_view` implemented and tested | Type/ownership change in `pipeline.rs` |
 | 7 | Camera-relative rendering (§14.3) | Specified; camera is world-space | Camera-wide change; the draw path already matches the current convention |
 | 8 | `terrain-gen map`, report bundle, `calibrate-blend`, PR counter gate | `map --seed --from --size --cell` (ASCII surface map, `--json`); `verify --report <dir>` writes `manifest.json`, `verify.json`, and `verify.txt` | Add `calibrate-blend`, then the PR counter gate |
@@ -165,15 +165,15 @@ gates pass on a tree that compiles.
 | W21 | Journal commit policy + writer | `src/editlog.rs` | **done** — 19 tests |
 | W22 | Block-id resolution + surface stack wiring | `src/pipeline.rs`, `tests/golden/terrain-v1.golden` | **done** — `TerrainMaterials`, `with_pack`, seabed/snow/bedrock wired, goldens regenerated once |
 | W23 | Canonical section record encode/decode | `src/section.rs` | **done** — v2 `TSEC` layout, 22 tests; bin adoption in progress |
-| W24 | Terrain demo wiring (`TERRAIN_DEMO=1`) | `src/lib.rs`, `src/renderer.rs` | **done** — 128x128 patch, real column light, collision, async edits, per-edit saves; tile streaming with prefetched neighbours; texture refs pending; distance LOD1 is wired; ~0.9 s parallel startup build; ~24 ms edit rebuild (one remeshed section) |
+| W24 | Terrain demo wiring (`TERRAIN_DEMO=1`) | `src/lib.rs`, `src/renderer.rs` | **done** — 128x128 patch, real column light, collision, async edits, per-edit saves; tile streaming with prefetched neighbours; per-face texture refs (`ADR-0015`); distance LOD1 is wired; ~0.9 s parallel startup build; ~24 ms edit rebuild (one remeshed section) |
 
 Queued next:
 
 1. **Wire world-mode hydrology.** `Terrain::hydro_tile` still calls `HydroTile::solve` with zero
    inflow; `WorldHydro` + `tile_view` exists and is tested. Type/ownership change only.
 2. **Residency-driven ring streaming.** Tiles stream in 128x128 units with prefetched neighbours; residency and the streaming ring are not the caller yet.
-3. **Real texture references** once the content pack carries them; `demo_texture_layer` is a
-   placeholder map.
+3. **Texture art.** Per-face references and the mesher wiring are done (`ADR-0015`);
+   `demo_texture_layer` still maps names onto eleven procedural placeholder layers.
 4. **Persistence follow-ups:** a decoder for an older section record format, and a richer world-repair dialog.
 5. `terrain-gen calibrate-blend`; then the PR counter gate (R1.8).
 
@@ -195,7 +195,7 @@ prove; none is silently accepted.
 | W20 | `uniform_writable` is now the pipeline gate (the lead applied the call-site change), so a canopy crossing a section top and an ore entering uniform stone both work | None; covered by tests |
 | W14 renderer | Draw path is additive and naga-validated; `TERRAIN_DEMO=1` now builds a 96×96 patch (45 emitting sections, ~2.35 s) and submits it once. Opaque culling is off (cross-quads); origins are world-space because the camera has no floating origin | Review on a real run; revisit camera-relative when §14.3 lands |
 | W19 cracks | White specks in caves were **T-junction rasterisation cracks**, not lighting and not the highlight. Cell coverage is exact (`every_exposed_face_is_covered_once`: 0 holes, 0 overlaps per face plane); the gap was sub-cell. Fixed by expanding quads 0.001 blocks in the vertex shader (`M3.1` note) | Do not remove the overlap; a future shadow pass must account for it |
-| W24 demo | Real `light2` per column (pack-driven `sky_atten`/`opacity`/emission), collision against the patch, spawn on the patch surface; texture layers are still name-mapped onto the renderer's 11 procedural layers; distance LOD1 and tile streaming are wired | Textures and residency-driven ring streaming are the follow-ups |
+| W24 demo | Real `light2` per column (pack-driven `sky_atten`/`opacity`/emission), collision against the patch, spawn on the patch surface; per-face texture references resolve to the renderer's 11 procedural layers; distance LOD1 and tile streaming are wired | Texture art and residency-driven ring streaming are the follow-ups |
 | W15 CLI | `verify`/`replay` are real and use the canonical record; unknown names are warnings, corrupt records are per-section drift, exit codes unchanged. `MAX_KNOWN_BLOCK` was hardcoded to 8 and rejected ids ≥15; it now derives from the pack | None |
 | Goldens | All six fixtures changed when ids were resolved (expected: `Section::content_hash` is over ids); two updates produced identical bytes | One more regeneration only if a later change alters output |
 | W23 section record | Re-encoding a **degraded** section would replace original unknown names with `?unknown:<id>` (`T1.6`) | Papered over by policy, not code: a world with unknown names loaded is **read-only** (no edits, no journal, no saves), so the round trip stays lossless. A name-override map is optional polish, not required |
@@ -216,7 +216,7 @@ what the first safe step is.
 
 | Item | Why it is not a small change | First safe step |
 |---|---|---|
-| Real texture references | The content pack has one `texture_tile` per block, and textures are presentation, not generation identity. Per-face references (top/side/bottom) need a `BlockRecord` field, a parser/emitter change, a decision on whether texture names enter the content hash, a texture atlas, and golden regeneration. | Write an ADR: texture refs are presentation-only and excluded from `record_hash`, or bump the content manifest. Then add `texture_top/side/bottom` names and one atlas layer set. |
+| Texture art pipeline | `ADR-0015` and the per-face references are done; the renderer still builds eleven procedural placeholder layers, and a real pack needs an atlas format, mipmap policy, and visual baselines. | Define the atlas/mipmap policy, then generate layers from authored tiles. |
 | Residency-driven ring streaming | `VIEW_RADIUS` is 16 columns (1,369 resident columns). Whole-tile paging cannot express that: an 8-tile ring held no measurable extra working set but retained far more terrain, and the active patch is 4x4 columns. | Build a column-level ring over the existing `columns` map: generate missing columns, relight new columns and their 8 neighbours, mesh only new and boundary sections, and evict by `residency::membership`. Keep the tile pager until this lands. |
 | Migration fixtures for older section formats | There is no normative older section record. Inventing v1 bytes would contradict `docs/dev/save-format.md`, whose version 2 record is the only layout the decoder knows. | Add a format bump + ADR defining v1, then fixtures and `migration.journal` transforms against it. Until then, `terrain-gen migrate` canonicalises v2 records and upgrades headers. |
 | World-mode hydrology | `WorldHydro` solves the finite world continuously, but `Terrain` caches per-tile `HydroTile` values and is built once per worker. A full-world solve is ~512^2 macro cells and would run per worker, and rivers change goldens. | Measure `WorldHydro` at side 512; if acceptable, store one `Arc<WorldHydro>` in `Terrain` and return `WorldTileView`s. Regenerate goldens once. |

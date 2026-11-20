@@ -89,7 +89,8 @@
   - [0011 — Voxel lighting with baked AO](decisions/0011-voxel-light-and-baked-ao.md)
   - [0012 — fastnoise-lite with OpenSimplex2](decisions/0012-fastnoise-lite-and-opensimplex2.md)
   - [0013 — Finite player-centred chunk streaming](decisions/0013-player-centred-chunk-streaming.md)
-  - [0014 — Seed-native multi-level LOD sections](decisions/0014-seed-native-lod-hierarchy.md)
+  - [0014 - Seed-native multi-level LOD sections](decisions/0014-seed-native-lod-hierarchy.md)
+- [0015 - Per-face texture references are presentation-only](decisions/0015-texture-references-are-presentation.md)
   - [Template](decisions/0000-template.md)
 
 # Contributing

@@ -111,7 +111,7 @@ impl WorldSave {
     ///
     /// `CorruptSection` for a bad header, `DescriptionHashMismatch` when the
     /// description changed since the world was created, `UnknownGeneratorVersion`
-    /// for a version this build does not read, or `InvariantViolated` when the
+    /// for a version this build does not read, or `SeedMismatch` when the
     /// caller's seed differs from the header's.
     pub fn open(root: impl Into<PathBuf>, seed: u64) -> Result<Self, TerrainError> {
         let root = root.into();
@@ -139,9 +139,9 @@ impl WorldSave {
         if header.seed != seed {
             return Err(TerrainError::new(
                 Stage::Persistence,
-                ErrorKind::InvariantViolated {
-                    check: "header_seed",
-                    coord: None,
+                ErrorKind::SeedMismatch {
+                    expected: seed,
+                    found: header.seed,
                 },
             ));
         }
@@ -1048,13 +1048,13 @@ mod tests {
         drop(WorldSave::create(world.path(), 7, "Test world").expect("the world creates"));
 
         let error = WorldSave::open(world.path(), 8).expect_err("the seed mismatch is refused");
-        assert!(matches!(
+        assert_eq!(
             error.kind,
-            ErrorKind::InvariantViolated {
-                check: "header_seed",
-                ..
+            ErrorKind::SeedMismatch {
+                expected: 8,
+                found: 7
             }
-        ));
+        );
     }
 
     #[test]
