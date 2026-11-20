@@ -103,10 +103,17 @@ const STRESS_FLAT_CHUNKS: i32 = 4;
 const TERRAIN_DEMO_ENV: &str = "TERRAIN_DEMO";
 /// Directory for the v1 terrain demo's saved world (`A16`).
 const TERRAIN_SAVE_DIR: &str = "world/terrain-demo";
-/// Number of columns on one side of the demo's generation tile.
-const TERRAIN_DEMO_TILE_COLUMNS: i32 = 4;
 /// Seed for the stress scene, which has no generated world seed.
 const TERRAIN_DEMO_STRESS_SEED: u64 = 0x7E44_5EED;
+/// Fine LOD radius in columns. Columns beyond this ring are drawn as LOD1.
+const TERRAIN_DEMO_FINE_RADIUS: i32 = 2;
+/// Fine meshes are kept one ring beyond the fine radius, so a column change
+/// does not leave a gap while the new fine mesh builds.
+const TERRAIN_DEMO_FINE_MARGIN: i32 = 1;
+/// Minimum interval between coarse LOD uploads, in milliseconds.
+const TERRAIN_DEMO_UPLOAD_MS: u64 = 100;
+/// Minimum interval between whole-ring coarse rebuilds, in milliseconds.
+const TERRAIN_DEMO_COARSE_MS: u64 = 250;
 
 /// Sections per column as a `usize`, for array types (`K1.5`).
 const COLUMN_SECTIONS: usize = description::SECTIONS_PER_COLUMN as usize;
@@ -147,7 +154,7 @@ pub fn run() -> Result<(), RunError> {
         Path::new(WORLD_DIRECTORY),
         config.render_distance_chunks,
     )?;
-    let (terrain_demo, terrain_save, repair) = if terrain_demo_requested() {
+    let (terrain_demo, terrain_ring, terrain_save, repair) = if terrain_demo_requested() {
         let seed = setup.seed.unwrap_or(TERRAIN_DEMO_STRESS_SEED);
         let spawn = setup.spawn.unwrap_or_else(|| Vec3::new(16.5, 3.0, 16.5));
         let (saved, mut world, last_saved, recovered, repair) =
@@ -202,78 +209,61 @@ pub fn run() -> Result<(), RunError> {
                 }
             };
         let player_column = Streaming::column_at(spawn);
-        let base_x = player_column.x - player_column.x.rem_euclid(TERRAIN_DEMO_TILE_COLUMNS);
-        let base_z = player_column.y - player_column.y.rem_euclid(TERRAIN_DEMO_TILE_COLUMNS);
-        let (demo, replay) = build_terrain_demo_extent(
-            seed,
-            player_column,
-            base_x,
-            base_x + TERRAIN_DEMO_TILE_COLUMNS - 1,
-            base_z,
-            base_z + TERRAIN_DEMO_TILE_COLUMNS - 1,
-            &saved,
-            &recovered,
-            last_saved,
-        )?;
+        let world_hydro = pipeline::Terrain::new(seed)?.solve_world_hydro()?;
+        let replay_terrain =
+            pipeline::Terrain::new(seed)?.with_world_hydro(Arc::clone(&world_hydro));
+        let mut demo = TerrainDemo::empty(seed, player_column, world_hydro);
+        demo.revision = last_saved;
         let save = match world.take() {
-            Some(mut world) => {
-                if !demo.read_only {
-                    for key in &replay.keys {
-                        let section = demo
-                            .columns
-                            .get(&(key.column[0], key.column[1]))
-                            .and_then(|stack| stack.get(usize::from(key.section)))
-                            .cloned();
-                        let Some(section) = section else {
-                            continue;
-                        };
-                        let baseline = demo.baselines.get(key).copied().unwrap_or([0; 32]);
-                        if let Err(error) = world.sections.write(*key, baseline, true, &section) {
-                            warn!(%error, "replayed terrain section could not be saved");
-                        }
-                    }
+            Some(world) => match world_save::SaveWorker::start(world, 64) {
+                Ok(worker) => Some(worker),
+                Err(error) => {
+                    warn!(%error, "terrain save worker unavailable; edits will not persist");
+                    None
                 }
-                if let Err(error) = world.advance_revision(replay.revision) {
-                    warn!(%error, "terrain header revision could not be advanced");
-                }
-                match world_save::SaveWorker::start(world, 64) {
-                    Ok(worker) => Some(worker),
-                    Err(error) => {
-                        warn!(%error, "terrain save worker unavailable; edits will not persist");
-                        None
-                    }
-                }
-            }
+            },
             None => None,
         };
+        let replayed = replay_saved_sections(
+            saved,
+            &recovered,
+            last_saved,
+            &demo.pack,
+            save.as_ref(),
+            Some(&replay_terrain),
+        );
+        let read_only = replayed.read_only;
+        let saved_count = replayed.sections;
+        let applied_count = replayed.applied;
+        demo.revision = replayed.revision;
+        demo.read_only = read_only;
+        let ring = RingStream::new(&demo, replayed.saved, worker_count().min(12));
         info!(
             seed = demo.seed,
             column = ?demo.origin_column,
-            sections = demo.sections.len(),
-            quads = demo.quads,
-            min_y = demo.min_y,
-            max_y = demo.max_y,
-            saved_sections = saved.len(),
-            replayed_sections = replay.keys.len(),
+            view_radius = demo.view_radius,
+            fine_radius = demo.fine_radius,
+            saved_sections = saved_count,
+            replayed_edits = applied_count,
             read_only = demo.read_only,
             repair_needed = repair.is_some(),
-            build_ms = demo.build_time.as_secs_f64() * 1000.0,
-            "TERRAIN_DEMO=1: new-pipeline terrain patch ready"
+            "TERRAIN_DEMO=1: column ring streaming starts"
         );
-        (Some(demo), save, repair)
+        (Some(demo), Some(ring), save, repair)
     } else {
-        (None, None, None)
+        (None, None, None, None)
     };
     let mut app = App::with_world(setup.world, stress);
     app.terrain_demo = terrain_demo;
+    app.terrain_ring = terrain_ring;
     app.terrain_save = terrain_save;
     app.repair_prompt = repair;
     if let Some(spawn) = setup.spawn {
         app.set_spawn(spawn);
     }
-    if let Some(demo) = &app.terrain_demo {
-        // Stand on the new terrain, facing level; the legacy world stays underneath.
-        app.set_spawn(demo.spawn);
+    if app.terrain_demo.is_some() {
+        // The centre column is generated by the ring; the player is moved onto
+        // its measured surface when the first build pass lands.
         app.camera.look(0.0, 0.0);
     }
     app.config = config;
@@ -466,16 +456,26 @@ struct TerrainDemo {
     seed: u64,
     /// Column the patch is centred on, `Streaming` column coordinates.
     origin_column: IVec2,
+    /// Chebyshev radius of the resident column ring.
+    view_radius: i32,
+    /// Chebyshev radius meshed at LOD0; beyond it, complete 2x2 groups are LOD1.
+    fine_radius: i32,
     /// Every generated column, kept for collision and relighting.
-    columns: BTreeMap<(i32, i32), [section::Section; COLUMN_SECTIONS]>,
+    columns: BTreeMap<(i32, i32), Arc<[section::Section; COLUMN_SECTIONS]>>,
     /// Per-column light, recomputed after an edit (`L1.2`).
     light: BTreeMap<(i32, i32), light2::ColumnLight>,
+    /// LOD0 sections, keyed by the column they belong to.
+    fine: BTreeMap<(i32, i32), Vec<DemoSection>>,
+    /// LOD1 sections for every complete coarse region in the ring.
+    coarse: Vec<DemoSection>,
     /// Mesher and light material tables, resolved once from the pack.
     materials: mesher2::MaterialProps,
     /// The content pack, for resolving stable names on save (`A5.1`).
     pack: content::ContentPack,
     /// Generated baselines for sections that were loaded or edited (`J4.1`).
     baselines: BTreeMap<section::SectionKey, [u8; 32]>,
+    /// Columns edited since their last queued save. Never evicted.
+    unsaved: BTreeSet<(i32, i32)>,
     /// Next committed edit revision (`J1.2`).
     revision: u64,
     /// A world that loaded an unknown name is read-only (`A16`).
@@ -484,21 +484,21 @@ struct TerrainDemo {
     air: section::BlockId,
     /// `solid[id]` mirrors the content pack's collision flag.
     solid: Vec<bool>,
-    /// Feet position on the patch's surface at the centre column.
+    /// Feet position on the patch's surface at the centre column. Valid once
+    /// the centre column has light (`spawn_ready`).
     spawn: Vec3,
+    /// Whether the centre column has been generated, lit, and measured.
+    spawn_ready: bool,
     /// Active sections submitted to the renderer (fine and coarse by distance).
     sections: Vec<DemoSection>,
-    /// Full-detail sections for every generated column.
-    fine_sections: Vec<DemoSection>,
-    /// Coarse sections derived from complete 2x2x2 octant groups.
-    coarse_sections: Vec<DemoSection>,
     /// Column the current LOD selection was made for.
     lod_column: (i32, i32),
     quads: usize,
     /// World block range covered by emitting sections, for the startup log.
     min_y: i32,
     max_y: i32,
-    build_time: Duration,
+    /// One solve shared by every worker's `Terrain` (`A7.1`).
+    world_hydro: Arc<crate::hydro::WorldHydro>,
 }
 
 impl crate::player::BlockSource for TerrainDemo {
@@ -522,6 +522,45 @@ impl crate::player::BlockSource for TerrainDemo {
 }
 
 impl TerrainDemo {
+    /// An empty ring centred on `column`, ready to stream columns into.
+    #[allow(clippy::cast_precision_loss)]
+    fn empty(seed: u64, column: IVec2, world_hydro: Arc<crate::hydro::WorldHydro>) -> Self {
+        let pack = content::v1_default();
+        let solid = solid_table(&pack);
+        let air = pack.id("core:air").unwrap_or(0);
+        let section_blocks = i32::try_from(description::SECTION_SIZE).unwrap_or(32);
+        Self {
+            seed,
+            origin_column: column,
+            view_radius: residency::DEMO_VIEW_RADIUS,
+            fine_radius: TERRAIN_DEMO_FINE_RADIUS,
+            columns: BTreeMap::new(),
+            light: BTreeMap::new(),
+            fine: BTreeMap::new(),
+            coarse: Vec::new(),
+            materials: demo_materials(),
+            pack,
+            baselines: BTreeMap::new(),
+            unsaved: BTreeSet::new(),
+            revision: 0,
+            read_only: false,
+            air,
+            solid,
+            spawn: Vec3::new(
+                (column.x * section_blocks) as f32 + 16.5,
+                64.0,
+                (column.y * section_blocks) as f32 + 16.5,
+            ),
+            spawn_ready: false,
+            sections: Vec::new(),
+            lod_column: (column.x, column.y),
+            quads: 0,
+            min_y: 0,
+            max_y: 0,
+            world_hydro,
+        }
+    }
+
     /// The block at a world cell, or `None` outside the patch.
     fn block_at(&self, cell: IVec3) -> Option<section::BlockId> {
         if cell.y < 0 {
@@ -549,6 +588,34 @@ impl TerrainDemo {
         matches!(self.block_at(cell), Some(id) if id == self.air)
     }
 
+    /// Whether a column has light, which is the readiness gate for physics.
+    fn column_ready(&self, column: (i32, i32)) -> bool {
+        self.light.contains_key(&column)
+    }
+
+    /// Whether a player AABB at `position` overlaps only ready columns.
+    #[allow(clippy::cast_possible_truncation)]
+    fn aabb_ready(&self, position: Vec3) -> bool {
+        let half = player::PLAYER_WIDTH / 2.0;
+        let min = IVec2::new(
+            (position.x - half).floor() as i32,
+            (position.z - half).floor() as i32,
+        );
+        let max = IVec2::new(
+            (position.x + half).floor() as i32,
+            (position.z + half).floor() as i32,
+        );
+        let size = i32::try_from(description::SECTION_SIZE).unwrap_or(32);
+        for x in min.x.div_euclid(size)..=max.x.div_euclid(size) {
+            for z in min.y.div_euclid(size)..=max.y.div_euclid(size) {
+                if !self.column_ready((x, z)) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     /// The generated baseline for a section, computed once (`J4.1`).
     ///
     /// Callers compute this **before** mutating the section, or it would hash
@@ -566,17 +633,106 @@ impl TerrainDemo {
         hash
     }
 
-    /// Layers saved sections over the generated patch and refreshes light and
-    /// meshes. Used after a `world-repair` action or a late load.
+    /// Inserts a generated column. Replacing a column also drops its light and
+    /// fine mesh, so the next build pass recomputes them.
+    fn insert_column(&mut self, column: (i32, i32), stack: [section::Section; COLUMN_SECTIONS]) {
+        self.columns.insert(column, Arc::new(stack));
+        self.light.remove(&column);
+        self.fine.remove(&column);
+    }
+
+    /// Drops a column and everything derived from it.
+    fn remove_column(&mut self, column: (i32, i32)) {
+        self.columns.remove(&column);
+        self.light.remove(&column);
+        self.fine.remove(&column);
+    }
+
+    /// Installs computed light for the columns a build job returned.
+    fn apply_light(&mut self, light: BTreeMap<(i32, i32), light2::ColumnLight>) {
+        for (column, value) in light {
+            if self.columns.contains_key(&column) {
+                self.light.insert(column, value);
+            }
+        }
+    }
+
+    /// Installs fine-section replacements, keeping each column's list sorted.
+    fn apply_patches(&mut self, patches: BTreeMap<(i32, i32), Vec<DemoPatch>>) {
+        for (column, patches) in patches {
+            if !self.columns.contains_key(&column) {
+                continue;
+            }
+            let sections = self.fine.entry(column).or_default();
+            for patch in patches {
+                match patch.mesh {
+                    Some(mesh) => {
+                        let section = DemoSection {
+                            origin: patch.origin,
+                            scale: 1,
+                            mesh,
+                        };
+                        match sections.binary_search_by_key(&patch.origin, |s| s.origin) {
+                            Ok(index) => sections[index] = section,
+                            Err(index) => sections.insert(index, section),
+                        }
+                    }
+                    None => {
+                        if let Ok(index) =
+                            sections.binary_search_by_key(&patch.origin, |s| s.origin)
+                        {
+                            sections.remove(index);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Measures the surface of the centre column and remembers the spawn.
+    #[allow(clippy::cast_precision_loss)]
+    fn settle_spawn(&mut self) {
+        let column = (self.origin_column.x, self.origin_column.y);
+        let Some(stack) = self.columns.get(&column).cloned() else {
+            return;
+        };
+        let section_blocks = i32::try_from(description::SECTION_SIZE).unwrap_or(32);
+        let bx = self.origin_column.x * section_blocks + section_blocks / 2;
+        let bz = self.origin_column.y * section_blocks + section_blocks / 2;
+        let height = i32::try_from(description::WORLD_HEIGHT).unwrap_or(384);
+        let top = (0..height).rev().find(|&y| {
+            let sy = usize::try_from(y.div_euclid(section_blocks)).unwrap_or(0);
+            let Some(section) = stack.get(sy) else {
+                return false;
+            };
+            let id = section.get(
+                u32::try_from(bx.rem_euclid(section_blocks)).unwrap_or(0),
+                u32::try_from(y.rem_euclid(section_blocks)).unwrap_or(0),
+                u32::try_from(bz.rem_euclid(section_blocks)).unwrap_or(0),
+            );
+            self.solid.get(usize::from(id)).copied().unwrap_or(false)
+        });
+        self.spawn = Vec3::new(
+            bx as f32 + 0.5,
+            top.map_or(description::SEA, |y| y + 1) as f32,
+            bz as f32 + 0.5,
+        );
+        self.spawn_ready = true;
+    }
+
+    /// Layers saved sections over the resident columns and refreshes light,
+    /// fine meshes, and coarse regions. Used after `world-repair`.
     fn apply_saved(&mut self, saved: &[section::SavedSection]) -> bool {
         let mut changed = false;
         for record in saved {
             let key = record.key;
-            let generated = self
-                .columns
-                .get(&(key.column[0], key.column[1]))
-                .and_then(|stack| stack.get(usize::from(key.section)))
-                .map_or([0; 32], section::baseline_hash);
+            let Some(stack) = self.columns.get_mut(&(key.column[0], key.column[1])) else {
+                continue;
+            };
+            let Some(slot) = Arc::make_mut(stack).get_mut(usize::from(key.section)) else {
+                continue;
+            };
+            let generated = section::baseline_hash(slot);
             if generated != record.baseline_hash {
                 warn!(
                     column = ?key.column,
@@ -588,41 +744,15 @@ impl TerrainDemo {
             if !record.unknown_names.is_empty() {
                 self.read_only = true;
             }
-            let Some(stack) = self.columns.get_mut(&(key.column[0], key.column[1])) else {
-                continue;
-            };
-            let Some(slot) = stack.get_mut(usize::from(key.section)) else {
-                continue;
-            };
             *slot = record.section.clone();
             self.baselines.insert(key, record.baseline_hash);
             changed = true;
         }
         if changed {
-            let light = demo_column_light(&self.columns);
-            let (sections, _, _, _) = demo_mesh(&self.columns, &light, &self.materials);
-            self.light = light;
-            self.fine_sections = sections;
-            self.coarse_sections = demo_coarse(&self.columns, &self.materials, &self.pack);
+            self.light = demo_column_light(&self.columns);
+            self.fine = demo_fine_all(&self.columns, &self.light, &self.materials);
+            self.coarse = demo_coarse(&self.columns, &self.materials, &self.pack);
             self.select_lod(self.lod_column);
-            self.quads = self
-                .sections
-                .iter()
-                .map(|section| mesher2::quad_count(&section.mesh))
-                .sum();
-            let block = i32::try_from(description::SECTION_SIZE).unwrap_or(32);
-            self.min_y = self
-                .sections
-                .iter()
-                .map(|section| section.origin[1])
-                .min()
-                .unwrap_or(i32::MAX);
-            self.max_y = self
-                .sections
-                .iter()
-                .map(|section| section.origin[1] + block)
-                .max()
-                .unwrap_or(i32::MIN);
         }
         changed
     }
@@ -643,6 +773,7 @@ impl TerrainDemo {
         let Ok(sy) = usize::try_from(cell.y.div_euclid(size)) else {
             return false;
         };
+        let stack = Arc::make_mut(stack);
         let Some(section) = stack.get_mut(sy) else {
             return false;
         };
@@ -661,35 +792,81 @@ impl TerrainDemo {
     /// Installs a finished background rebuild.
     fn apply_rebuild(&mut self, rebuild: DemoRebuild) {
         self.light = rebuild.light;
-        for patch in rebuild.patches {
-            let origin = patch.origin;
-            match patch.mesh {
-                Some(mesh) => {
-                    let section = DemoSection {
-                        origin,
-                        scale: 1,
-                        mesh,
-                    };
-                    match self
-                        .fine_sections
-                        .binary_search_by_key(&origin, |section| section.origin)
-                    {
-                        Ok(index) => self.fine_sections[index] = section,
-                        Err(index) => self.fine_sections.insert(index, section),
-                    }
-                }
-                None => {
-                    if let Ok(index) = self
-                        .fine_sections
-                        .binary_search_by_key(&origin, |section| section.origin)
-                    {
-                        self.fine_sections.remove(index);
-                    }
+        self.apply_patches(rebuild.patches);
+        // Coarse regions are disposable: refresh the ones an edit can reach.
+        self.refresh_coarse_around(&rebuild.columns);
+        self.select_lod(self.lod_column);
+    }
+
+    /// Rebuilds every coarse region whose 2x2 column group touches `columns`.
+    fn refresh_coarse_around(&mut self, columns: &BTreeSet<(i32, i32)>) {
+        let mut regions = BTreeSet::new();
+        for &(cx, cz) in columns {
+            let bx = cx - cx.rem_euclid(2);
+            let bz = cz - cz.rem_euclid(2);
+            for dx in -1..=1_i32 {
+                for dz in -1..=1_i32 {
+                    regions.insert((bx + 2 * dx, bz + 2 * dz));
                 }
             }
         }
-        self.coarse_sections = demo_coarse(&self.columns, &self.materials, &self.pack);
-        self.select_lod(self.lod_column);
+        if regions.is_empty() {
+            return;
+        }
+        let rebuilt = demo_coarse_regions(&self.columns, &self.materials, &self.pack, &regions);
+        self.coarse
+            .retain(|section| !regions.contains(&(section.origin[0] / 32, section.origin[2] / 32)));
+        for (&region, sections) in &rebuilt {
+            if regions.contains(&region) {
+                self.coarse.extend(sections.iter().cloned());
+            }
+        }
+        self.coarse.sort_by_key(|section| section.origin);
+    }
+
+    /// Chooses LOD0 near the player and LOD1 for complete regions beyond.
+    ///
+    /// Fine meshes are kept one ring beyond the fine radius as a transition
+    /// buffer. A coarse region is active only when all four of its columns are
+    /// outside that buffer, so fine and coarse never overlap.
+    fn select_lod(&mut self, player_column: (i32, i32)) {
+        self.lod_column = player_column;
+        let cutoff = self.fine_radius + TERRAIN_DEMO_FINE_MARGIN;
+        let ring = |column: (i32, i32)| {
+            (column.0 - player_column.0)
+                .abs()
+                .max((column.1 - player_column.1).abs())
+        };
+        let mut active: Vec<DemoSection> = self
+            .fine
+            .iter()
+            .filter(|&(&column, _)| ring(column) <= cutoff)
+            .flat_map(|(_, sections)| sections.iter().cloned())
+            .collect();
+        for section in &self.coarse {
+            let region = (section.origin[0] / 32, section.origin[2] / 32);
+            let near = [
+                region,
+                (region.0 + 1, region.1),
+                (region.0, region.1 + 1),
+                (region.0 + 1, region.1 + 1),
+            ]
+            .into_iter()
+            .any(|column| ring(column) <= cutoff);
+            if !near {
+                active.push(section.clone());
+            }
+        }
+        active.sort_by_key(|section| section.origin);
+        self.sections = active;
+        // Drop fine meshes that fell out of the transition buffer. Added
+        // columns are rebuilt when the player returns.
+        self.fine.retain(|&column, _| ring(column) <= cutoff);
+        self.refresh_stats();
+    }
+
+    /// Recomputes the renderer-facing counters from the active section set.
+    fn refresh_stats(&mut self) {
         self.quads = self
             .sections
             .iter()
@@ -705,56 +882,34 @@ impl TerrainDemo {
         self.max_y = self
             .sections
             .iter()
-            .map(|section| section.origin[1] + section_blocks)
+            .map(|section| {
+                section.origin[1] + section_blocks * i32::try_from(section.scale).unwrap_or(1)
+            })
             .max()
             .unwrap_or(i32::MIN);
     }
 
-    /// Chooses fine or coarse sections for each complete octant region.
-    ///
-    /// A region containing the player's fine column stays at full detail; every
-    /// other complete region is drawn as one coarse section per 2x2x2 group.
-    /// Columns outside any complete region are always fine.
-    fn select_lod(&mut self, player_column: (i32, i32)) {
-        self.lod_column = player_column;
-        if self.coarse_sections.is_empty() {
-            self.sections.clone_from(&self.fine_sections);
-            return;
-        }
-        let mut far_regions = BTreeSet::new();
-        for section in &self.coarse_sections {
-            let x = section.origin[0] / 32;
-            let z = section.origin[2] / 32;
-            // Keep one fine column around the player so the resolution change
-            // is never at the player's feet.
-            let near = player_column.0 >= x - 1
-                && player_column.0 <= x + 2
-                && player_column.1 >= z - 1
-                && player_column.1 <= z + 2;
-            if !near {
-                far_regions.insert((x, z));
-            }
-        }
-        let far_fine: BTreeSet<(i32, i32)> = far_regions
-            .iter()
-            .flat_map(|&(x, z)| [(x, z), (x + 1, z), (x, z + 1), (x + 1, z + 1)])
-            .collect();
-        let mut active: Vec<DemoSection> = self
-            .fine_sections
-            .iter()
-            .filter(|section| !far_fine.contains(&(section.origin[0] / 32, section.origin[2] / 32)))
-            .cloned()
-            .collect();
-        active.extend(
-            self.coarse_sections
-                .iter()
-                .filter(|section| {
-                    far_regions.contains(&(section.origin[0] / 32, section.origin[2] / 32))
-                })
-                .cloned(),
-        );
-        active.sort_by_key(|section| section.origin);
-        self.sections = active;
+    /// Approximate heap footprint of resident blocks, light, and meshes.
+    fn footprint_bytes(&self) -> usize {
+        let sections: usize = self
+            .columns
+            .values()
+            .flat_map(|stack| stack.iter())
+            .map(section_bytes)
+            .sum();
+        let light: usize = self
+            .light
+            .values()
+            .map(light2::ColumnLight::packed_bytes)
+            .sum();
+        let meshes: usize = self
+            .fine
+            .values()
+            .flatten()
+            .chain(&self.coarse)
+            .map(mesh_bytes)
+            .sum();
+        sections + light + meshes
     }
 
     /// Synchronous rebuild, used by tests and by the startup path.
@@ -768,6 +923,27 @@ impl TerrainDemo {
         self.apply_rebuild(rebuild);
         true
     }
+}
+
+/// `solid[id]` from the pack's collision flag (`A5.2`).
+fn solid_table(pack: &content::ContentPack) -> Vec<bool> {
+    let mut solid = vec![false; pack.len()];
+    for record in pack.records() {
+        if let Some(id) = pack.id(&record.name) {
+            solid[id as usize] = record.collision;
+        }
+    }
+    solid
+}
+
+/// Heap bytes held by one section's palette data.
+fn section_bytes(section: &section::Section) -> usize {
+    std::mem::size_of_val(section.words()) + section.palette().len() * 2
+}
+
+/// Heap bytes held by one mesh's quad lists.
+fn mesh_bytes(section: &DemoSection) -> usize {
+    mesher2::quad_count(&section.mesh) * std::mem::size_of::<mesher2::Quad>()
 }
 
 /// One block change fed to an incremental rebuild.
@@ -784,7 +960,9 @@ struct DemoPatch {
 /// One finished background rebuild of the patch (`L3.3`).
 struct DemoRebuild {
     light: BTreeMap<(i32, i32), light2::ColumnLight>,
-    patches: Vec<DemoPatch>,
+    patches: BTreeMap<(i32, i32), Vec<DemoPatch>>,
+    /// Columns the edits touched, for the coarse-region refresh.
+    columns: BTreeSet<(i32, i32)>,
     light_time: std::time::Duration,
     mesh_time: std::time::Duration,
 }
@@ -795,8 +973,9 @@ struct DemoRebuild {
 /// around an edit are relit; within a column the edit's vertical span is
 /// repaired by [`light2::ColumnLight::relight_column`]. A section is remeshed
 /// when its light changed or when the edit touched its geometry.
+#[allow(clippy::too_many_lines)]
 fn demo_rebuild(
-    columns: &BTreeMap<(i32, i32), [section::Section; COLUMN_SECTIONS]>,
+    columns: &BTreeMap<(i32, i32), Arc<[section::Section; COLUMN_SECTIONS]>>,
     previous_light: &BTreeMap<(i32, i32), light2::ColumnLight>,
     materials: &mesher2::MaterialProps,
     edits: &[DemoEdit],
@@ -840,7 +1019,7 @@ fn demo_rebuild(
                 if dx == 0 && dz == 0 {
                     continue;
                 }
-                borders[slot] = columns.get(&(sx + dx, sz + dz));
+                borders[slot] = columns.get(&(sx + dx, sz + dz)).map(|stack| &**stack);
                 slot += 1;
             }
         }
@@ -887,7 +1066,7 @@ fn demo_rebuild(
     }
 
     let mesh_started = std::time::Instant::now();
-    let mut patches = Vec::with_capacity(queued.len());
+    let mut patches: BTreeMap<(i32, i32), Vec<DemoPatch>> = BTreeMap::new();
     for &(sx, sy, sz) in &queued {
         let Ok(sy) = usize::try_from(sy) else {
             continue;
@@ -897,11 +1076,18 @@ fn demo_rebuild(
         }
         let origin = [sx * size, i32::try_from(sy).unwrap_or(0) * size, sz * size];
         let mesh = demo_section(columns, &light, materials, sx, sz, sy).map(|section| section.mesh);
-        patches.push(DemoPatch { origin, mesh });
+        patches
+            .entry((sx, sz))
+            .or_default()
+            .push(DemoPatch { origin, mesh });
+    }
+    for list in patches.values_mut() {
+        list.sort_by_key(|patch| patch.origin);
     }
     DemoRebuild {
         light,
         patches,
+        columns: affected_columns,
         light_time,
         mesh_time: mesh_started.elapsed(),
     }
@@ -931,6 +1117,7 @@ fn build_terrain_demo(
 }
 
 /// What a load had to replay from the journal.
+#[cfg(test)]
 struct DemoReplay {
     /// Sections the replay changed, to be written before the header advances.
     keys: Vec<section::SectionKey>,
@@ -971,9 +1158,8 @@ fn build_terrain_demo_saved(
 
 /// [`build_terrain_demo_saved`] over an explicit inclusive column rectangle.
 ///
-/// A rectangle inside one 128-block generation tile costs one tile of work;
-/// crossing a tile boundary costs four. The demo uses a 4x4 rectangle aligned
-/// to a tile so the larger LOD patch still builds in one tile.
+/// Test-only: the live demo streams a ring instead of building a rectangle.
+#[cfg(test)]
 #[allow(clippy::cast_precision_loss, clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 fn build_terrain_demo_extent(
@@ -987,13 +1173,11 @@ fn build_terrain_demo_extent(
     recovered: &[editlog::EditBatch],
     last_saved: u64,
 ) -> Result<(TerrainDemo, DemoReplay), error::TerrainError> {
-    let started = Instant::now();
-    let world_hydro = std::sync::Arc::new(pipeline::Terrain::new(seed)?.solve_world_hydro()?);
+    let world_hydro = pipeline::Terrain::new(seed)?.solve_world_hydro()?;
     let terrain =
         pipeline::Terrain::new(seed)?.with_world_hydro(std::sync::Arc::clone(&world_hydro));
     let materials = demo_materials();
     let pack = content::v1_default();
-    let section_blocks = i32::try_from(description::SECTION_SIZE).expect("SECTION_SIZE fits i32");
 
     let mut columns = demo_columns_extent(seed, min_x, max_x, min_z, max_z, &world_hydro)?;
     let mut baselines = BTreeMap::new();
@@ -1084,95 +1268,25 @@ fn build_terrain_demo_extent(
     }
 
     // `L1.1`/`L2.4`: light from the content pack, one job per column.
-    let column_light = demo_column_light(&columns);
-
-    let (sections, quads, min_y, max_y) = demo_mesh(&columns, &column_light, &materials);
-
-    debug_assert!(quads > 0, "the spawn patch emits no geometry");
-
-    // `A5.2`: solidity comes from the pack, not from a hardcoded id list.
-    let solid = {
-        let mut solid = vec![false; pack.len()];
-        for record in pack.records() {
-            if let Some(id) = pack.id(&record.name) {
-                solid[id as usize] = record.collision;
-            }
-        }
-        solid
-    };
-    let air = pack.id("core:air").unwrap_or(0);
-
-    // Stand on the patch surface at the centre column, not on the legacy world.
-    let spawn = {
-        let bx = column.x * section_blocks + section_blocks / 2;
-        let bz = column.y * section_blocks + section_blocks / 2;
-        let height = i32::try_from(description::WORLD_HEIGHT).unwrap_or(384);
-        let top = (0..height).rev().find(|&y| {
-            let column_key = (bx.div_euclid(section_blocks), bz.div_euclid(section_blocks));
-            let Some(stack) = columns.get(&column_key) else {
-                return false;
-            };
-            let Some(section) =
-                stack.get(usize::try_from(y.div_euclid(section_blocks)).unwrap_or(0))
-            else {
-                return false;
-            };
-            let id = section.get(
-                u32::try_from(bx.rem_euclid(section_blocks)).unwrap_or(0),
-                u32::try_from(y.rem_euclid(section_blocks)).unwrap_or(0),
-                u32::try_from(bz.rem_euclid(section_blocks)).unwrap_or(0),
-            );
-            solid.get(id as usize).copied().unwrap_or(false)
-        });
-        Vec3::new(
-            bx as f32 + 0.5,
-            top.map_or(description::SEA, |y| y + 1) as f32,
-            bz as f32 + 0.5,
-        )
-    };
-
-    let coarse_sections = demo_coarse(&columns, &materials, &pack);
-    let mut demo = TerrainDemo {
-        seed,
-        origin_column: column,
-        columns,
-        light: column_light,
-        materials,
-        pack,
-        baselines,
-        revision: replay_revision,
-        read_only,
-        air,
-        solid,
-        spawn,
-        sections: Vec::new(),
-        fine_sections: sections,
-        coarse_sections,
-        lod_column: (column.x, column.y),
-        quads,
-        min_y,
-        max_y,
-        build_time: started.elapsed(),
-    };
+    let mut demo = TerrainDemo::empty(seed, column, std::sync::Arc::clone(&world_hydro));
+    demo.materials = materials;
+    demo.pack = pack;
+    demo.solid = solid_table(&demo.pack);
+    demo.air = demo.pack.id("core:air").unwrap_or(0);
+    demo.baselines = baselines;
+    demo.revision = replay_revision;
+    demo.read_only = read_only;
+    demo.columns = columns
+        .into_iter()
+        .map(|(key, stack)| (key, std::sync::Arc::new(stack)))
+        .collect();
+    demo.light = demo_column_light(&demo.columns);
+    demo.fine = demo_fine_all(&demo.columns, &demo.light, &demo.materials);
+    demo.coarse = demo_coarse(&demo.columns, &demo.materials, &demo.pack);
+    demo.settle_spawn();
     demo.select_lod((column.x, column.y));
-    demo.quads = demo
-        .sections
-        .iter()
-        .map(|section| mesher2::quad_count(&section.mesh))
-        .sum();
-    let block = i32::try_from(description::SECTION_SIZE).unwrap_or(32);
-    demo.min_y = demo
-        .sections
-        .iter()
-        .map(|section| section.origin[1])
-        .min()
-        .unwrap_or(i32::MAX);
-    demo.max_y = demo
-        .sections
-        .iter()
-        .map(|section| section.origin[1] + block)
-        .max()
-        .unwrap_or(i32::MIN);
+
+    debug_assert!(demo.quads > 0, "the spawn patch emits no geometry");
     Ok((
         demo,
         DemoReplay {
@@ -1213,9 +1327,9 @@ fn demo_materials() -> mesher2::MaterialProps {
 
 /// Generates every column in an inclusive rectangle.
 ///
-/// Each worker builds its own synthesizer because `Terrain` caches behind
-/// `RefCell`. A field tile is ~18 ms, so duplicating it per worker is far
-/// cheaper than serialising 3.5 s of per-column work.
+/// Test-only: the live demo generates one column per worker job.
+#[cfg(test)]
+#[allow(clippy::too_many_lines)]
 fn demo_columns_extent(
     seed: u64,
     min_x: i32,
@@ -1333,7 +1447,7 @@ fn demo_section_light(
 
 /// One `light2` job per column (`L1.2`), using the 8 horizontal neighbours.
 fn demo_column_light(
-    columns: &BTreeMap<(i32, i32), [section::Section; COLUMN_SECTIONS]>,
+    columns: &BTreeMap<(i32, i32), Arc<[section::Section; COLUMN_SECTIONS]>>,
 ) -> BTreeMap<(i32, i32), light2::ColumnLight> {
     let table = demo_light_table();
     // One job per column, fanned out across the pool. Output is keyed, so the
@@ -1362,11 +1476,12 @@ fn demo_column_light(
                                 if dx == 0 && dz == 0 {
                                     continue;
                                 }
-                                borders[slot] = columns.get(&(sx + dx, sz + dz));
+                                borders[slot] =
+                                    columns.get(&(sx + dx, sz + dz)).map(|stack| &**stack);
                                 slot += 1;
                             }
                         }
-                        let blocks = light2::ColumnBlocks::new(stack.clone(), &borders);
+                        let blocks = light2::ColumnBlocks::new((**stack).clone(), &borders);
                         out.push(((sx, sz), light2::compute_column(&blocks, table)));
                     }
                     out
@@ -1387,78 +1502,98 @@ fn worker_count() -> usize {
     std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
 }
 
-/// Meshes every section of the patch (`M3.2`), returning the emitting sections
-/// and their world `y` extent. Used at startup and after an edit.
-fn demo_mesh(
-    columns: &BTreeMap<(i32, i32), [section::Section; COLUMN_SECTIONS]>,
+/// Meshes LOD0 sections for every column (`M3.2`), keyed by column.
+///
+/// Every column gets an entry, even an empty one, so the streamer can tell a
+/// meshed column from a column that has not been visited.
+fn demo_fine_all(
+    columns: &BTreeMap<(i32, i32), Arc<[section::Section; COLUMN_SECTIONS]>>,
     light: &BTreeMap<(i32, i32), light2::ColumnLight>,
     materials: &mesher2::MaterialProps,
-) -> (Vec<DemoSection>, usize, i32, i32) {
-    let mut tasks = Vec::with_capacity(columns.len() * COLUMN_SECTIONS);
-    for &(sx, sz) in columns.keys() {
-        for sy in 0..COLUMN_SECTIONS {
-            tasks.push((sx, sz, sy));
-        }
-    }
+) -> BTreeMap<(i32, i32), Vec<DemoSection>> {
+    let tasks: Vec<(i32, i32)> = columns.keys().copied().collect();
     if tasks.is_empty() {
-        return (Vec::new(), 0, i32::MAX, i32::MIN);
+        return BTreeMap::new();
     }
     let workers = worker_count().min(tasks.len());
     let chunk = tasks.len().div_ceil(workers);
-    let mut sections = Vec::new();
+    let mut fine = BTreeMap::new();
     std::thread::scope(|scope| {
         let handles: Vec<_> = tasks
             .chunks(chunk)
             .map(|chunk| {
                 scope.spawn(move || {
-                    let mut out = Vec::new();
-                    for &(sx, sz, sy) in chunk {
-                        if let Some(section) = demo_section(columns, light, materials, sx, sz, sy) {
-                            out.push(section);
-                        }
+                    let mut out = Vec::with_capacity(chunk.len());
+                    for &(sx, sz) in chunk {
+                        out.push((sx, sz, demo_fine_column(columns, light, materials, sx, sz)));
                     }
                     out
                 })
             })
             .collect();
         for handle in handles {
-            sections.extend(handle.join().expect("a mesh job panicked"));
+            for (sx, sz, sections) in handle.join().expect("a mesh job panicked") {
+                fine.insert((sx, sz), sections);
+            }
         }
     });
-    // Sorting by origin keeps the section list deterministic regardless of which
-    // worker finished first (`P1.9`).
-    sections.sort_by_key(|section| section.origin);
-    let section_blocks = i32::try_from(description::SECTION_SIZE).unwrap_or(32);
-    let quads = sections
-        .iter()
-        .map(|section| mesher2::quad_count(&section.mesh))
-        .sum();
-    let min_y = sections
-        .iter()
-        .map(|section| section.origin[1])
-        .min()
-        .unwrap_or(i32::MAX);
-    let max_y = sections
-        .iter()
-        .map(|section| section.origin[1] + section_blocks)
-        .max()
-        .unwrap_or(i32::MIN);
-    (sections, quads, min_y, max_y)
+    fine
+}
+
+/// Meshes every LOD0 section of one column.
+fn demo_fine_column(
+    columns: &BTreeMap<(i32, i32), Arc<[section::Section; COLUMN_SECTIONS]>>,
+    light: &BTreeMap<(i32, i32), light2::ColumnLight>,
+    materials: &mesher2::MaterialProps,
+    sx: i32,
+    sz: i32,
+) -> Vec<DemoSection> {
+    let mut out = Vec::new();
+    for sy in 0..COLUMN_SECTIONS {
+        if let Some(section) = demo_section(columns, light, materials, sx, sz, sy) {
+            out.push(section);
+        }
+    }
+    out.sort_by_key(|section| section.origin);
+    out
 }
 
 /// Derives and meshes every complete `2x2x2` coarse group (`N1.4`, `N3.2`).
-///
-/// A coarse section exists only where all eight fine octants are present, so a
-/// patch edge strip stays fine. Skirts go on every coarse side: the coarse mesh
-/// may sit beside a fine neighbour at the selection boundary.
 fn demo_coarse(
-    columns: &BTreeMap<(i32, i32), [section::Section; COLUMN_SECTIONS]>,
+    columns: &BTreeMap<(i32, i32), Arc<[section::Section; COLUMN_SECTIONS]>>,
     materials: &mesher2::MaterialProps,
     pack: &content::ContentPack,
 ) -> Vec<DemoSection> {
-    let Some((&(base_x, base_z), _)) = columns.iter().next() else {
-        return Vec::new();
-    };
+    let mut regions = BTreeSet::new();
+    for &(x, z) in columns.keys() {
+        if x.rem_euclid(2) == 0 && z.rem_euclid(2) == 0 {
+            regions.insert((x, z));
+        }
+    }
+    let mut out: Vec<DemoSection> = demo_coarse_regions(columns, materials, pack, &regions)
+        .into_values()
+        .flatten()
+        .collect();
+    out.sort_by_key(|section| section.origin);
+    out
+}
+
+/// Meshes the coarse sections of `regions`.
+///
+/// A coarse region is the 2x2 column group whose base is even; its sections are
+/// `64` blocks tall, so six cover the column. Only regions with all four columns
+/// produce sections. Every region in `regions` is rebuilt; the surrounding ring
+/// is derived too, so a coarse mesh culls against a real neighbour when present
+/// and falls back to air at the ring edge.
+fn demo_coarse_regions(
+    columns: &BTreeMap<(i32, i32), Arc<[section::Section; COLUMN_SECTIONS]>>,
+    materials: &mesher2::MaterialProps,
+    pack: &content::ContentPack,
+    regions: &BTreeSet<(i32, i32)>,
+) -> BTreeMap<(i32, i32), Vec<DemoSection>> {
+    if regions.is_empty() {
+        return BTreeMap::new();
+    }
     let water = pack.id("core:water").unwrap_or(0);
     let scatter: Vec<section::BlockId> = pack
         .records()
@@ -1467,14 +1602,21 @@ fn demo_coarse(
         .filter_map(|record| pack.id(&record.name))
         .collect();
 
-    let mut derived: BTreeMap<(i32, i32, i32), section::Section> = BTreeMap::new();
-    for &(x, z) in columns.keys() {
-        if (x - base_x).rem_euclid(2) != 0 || (z - base_z).rem_euclid(2) != 0 {
-            continue;
+    let mut expanded = BTreeSet::new();
+    for &(x, z) in regions {
+        for dx in -1..=1_i32 {
+            for dz in -1..=1_i32 {
+                expanded.insert((x + 2 * dx, z + 2 * dz));
+            }
         }
+    }
+
+    let mut derived: BTreeMap<(i32, i32, i32), section::Section> = BTreeMap::new();
+    for &(x, z) in &expanded {
         if !columns.contains_key(&(x + 1, z))
             || !columns.contains_key(&(x, z + 1))
             || !columns.contains_key(&(x + 1, z + 1))
+            || !columns.contains_key(&(x, z))
         {
             continue;
         }
@@ -1491,37 +1633,48 @@ fn demo_coarse(
         }
     }
 
-    let mut out = Vec::new();
     let air = section::Section::uniform(0);
-    for (&(x, j, z), coarse) in &derived {
-        // A missing coarse neighbour is drawn as air, so the coarse region's
-        // boundary wall is emitted instead of culled against a section that is
-        // not on screen. Skirts still continue the top face downward.
-        let neighbours: [Option<&section::Section>; 26] =
-            padded::NEIGHBOUR_ORDER.map(|(dx, dy, dz)| {
-                derived
-                    .get(&(x + dx * 2, j + dy, z + dz * 2))
-                    .or(Some(&air))
+    let mut out: BTreeMap<(i32, i32), Vec<DemoSection>> = BTreeMap::new();
+    for &(x, z) in regions {
+        let mut sections = Vec::new();
+        for j in 0..(COLUMN_SECTIONS / 2) {
+            let j = i32::try_from(j).unwrap_or(0);
+            let Some(coarse) = derived.get(&(x, j, z)) else {
+                continue;
+            };
+            // A missing coarse neighbour is drawn as air, so the coarse region's
+            // boundary wall is emitted instead of culled against a section that is
+            // not on screen. Skirts still continue the top face downward.
+            let neighbours: [Option<&section::Section>; 26] =
+                padded::NEIGHBOUR_ORDER.map(|(dx, dy, dz)| {
+                    derived
+                        .get(&(x + dx * 2, j + dy, z + dz * 2))
+                        .or(Some(&air))
+                });
+            let blocks = padded::PaddedBlocks::from_sections(coarse, &neighbours);
+            let mut mesh = mesher2::mesh_coarse(&blocks, materials, mesher2::MeshLod::Lod1, 0);
+            mesher2::add_skirts(&mut mesh, mesher2::SkirtEdges::ALL, mesher2::MeshLod::Lod1);
+            if mesher2::quad_count(&mesh) == 0 {
+                continue;
+            }
+            sections.push(DemoSection {
+                origin: [x * 32, j * 64, z * 32],
+                scale: 2,
+                mesh,
             });
-        let blocks = padded::PaddedBlocks::from_sections(coarse, &neighbours);
-        let mut mesh = mesher2::mesh_coarse(&blocks, materials, mesher2::MeshLod::Lod1, 0);
-        mesher2::add_skirts(&mut mesh, mesher2::SkirtEdges::ALL, mesher2::MeshLod::Lod1);
-        if mesher2::quad_count(&mesh) == 0 {
-            continue;
         }
-        out.push(DemoSection {
-            origin: [x * 32, j * 64, z * 32],
-            scale: 2,
-            mesh,
-        });
+        sections.sort_by_key(|section| section.origin);
+        out.insert((x, z), sections);
     }
-    out.sort_by_key(|section| section.origin);
     out
 }
 
 /// Meshes one section, or `None` when it emits nothing.
+///
+/// A missing neighbour column contributes `None` to the 26-neighbour array,
+/// which keeps `mesher2`'s `I2.3` world-edge mirror rule while a ring fills.
 fn demo_section(
-    columns: &BTreeMap<(i32, i32), [section::Section; COLUMN_SECTIONS]>,
+    columns: &BTreeMap<(i32, i32), Arc<[section::Section; COLUMN_SECTIONS]>>,
     light: &BTreeMap<(i32, i32), light2::ColumnLight>,
     materials: &mesher2::MaterialProps,
     sx: i32,
@@ -1625,6 +1778,473 @@ fn upload_terrain_demo(renderer: &mut Renderer, demo: &TerrainDemo) -> Result<()
     renderer.submit_terrain(&sections)
 }
 
+/// A column index to its generated sections. Shared with build jobs by `Arc`.
+type ColumnMap = BTreeMap<(i32, i32), Arc<[section::Section; COLUMN_SECTIONS]>>;
+
+/// Tables every ring job needs, cloned by `Arc`.
+#[derive(Clone)]
+struct RingAssets {
+    materials: Arc<mesher2::MaterialProps>,
+    light_table: Arc<light2::LightTable>,
+    pack: Arc<content::ContentPack>,
+}
+
+impl RingAssets {
+    fn from_demo(demo: &TerrainDemo) -> Self {
+        Self {
+            materials: Arc::new(demo.materials.clone()),
+            light_table: Arc::new(demo_light_table()),
+            pack: Arc::new(demo.pack.clone()),
+        }
+    }
+}
+
+/// One background column generation job.
+struct GenerateJob {
+    column: (i32, i32),
+    /// Saved sections for this column, already replayed.
+    saved: Vec<section::SavedSection>,
+}
+
+/// One background light/mesh job for a generated column.
+struct BuildJob {
+    centre: (i32, i32),
+    /// Recompute light for the centre and every present neighbour.
+    full: bool,
+    /// Mesh the centre column at LOD0.
+    detailed: bool,
+    /// Columns within the build window, borrowed by `Arc`.
+    columns: ColumnMap,
+    /// Light the caller already had, for the section-diff test.
+    previous_light: BTreeMap<(i32, i32), light2::ColumnLight>,
+    /// Columns that currently have a fine mesh (or want one).
+    fine_columns: BTreeSet<(i32, i32)>,
+    materials: Arc<mesher2::MaterialProps>,
+    light_table: Arc<light2::LightTable>,
+}
+
+/// One whole-ring coarse LOD rebuild.
+struct CoarseJob {
+    columns: ColumnMap,
+    materials: Arc<mesher2::MaterialProps>,
+    pack: Arc<content::ContentPack>,
+}
+
+/// A finished generated column.
+struct GeneratedColumn {
+    column: (i32, i32),
+    stack: [section::Section; COLUMN_SECTIONS],
+    applied: Vec<(section::SectionKey, [u8; 32])>,
+    read_only: bool,
+}
+
+/// A finished light/mesh pass.
+struct BuiltColumn {
+    centre: (i32, i32),
+    snapshot: ColumnMap,
+    light: BTreeMap<(i32, i32), light2::ColumnLight>,
+    /// Whole-column replacements (the centre when it was meshed).
+    replace: BTreeMap<(i32, i32), Vec<DemoSection>>,
+    /// Per-section replacements for neighbours whose border changed.
+    patches: BTreeMap<(i32, i32), Vec<DemoPatch>>,
+    light_ms: f64,
+    mesh_ms: f64,
+}
+
+/// A finished coarse rebuild.
+struct CoarseBuilt {
+    snapshot: ColumnMap,
+    sections: Vec<DemoSection>,
+}
+
+enum PoolJob {
+    Generate(GenerateJob),
+    Build(BuildJob),
+    Coarse(CoarseJob),
+}
+
+enum PoolResult {
+    Generated(
+        (i32, i32),
+        Box<Result<GeneratedColumn, error::TerrainError>>,
+    ),
+    Built(BuiltColumn),
+    Coarse(CoarseBuilt),
+}
+
+/// A fixed fan-out of workers, one `Terrain` each (`F1.5`, `A7.1`).
+struct ColumnPool {
+    jobs: std::sync::mpsc::Sender<PoolJob>,
+    results: std::sync::mpsc::Receiver<PoolResult>,
+}
+
+impl ColumnPool {
+    fn new(seed: u64, world_hydro: &Arc<crate::hydro::WorldHydro>, workers: usize) -> Self {
+        let (job_sender, job_receiver) = std::sync::mpsc::channel();
+        let (result_sender, result_receiver) = std::sync::mpsc::channel();
+        let job_receiver = Arc::new(std::sync::Mutex::new(job_receiver));
+        for index in 0..workers.max(1) {
+            let job_receiver = Arc::clone(&job_receiver);
+            let result_sender = result_sender.clone();
+            let world_hydro = Arc::clone(world_hydro);
+            let _ = std::thread::Builder::new()
+                .name(format!("terrain-column-{index}"))
+                .spawn(move || {
+                    let terrain = pipeline::Terrain::new(seed)
+                        .ok()
+                        .map(|terrain| terrain.with_world_hydro(world_hydro));
+                    loop {
+                        let Ok(job) = job_receiver.lock().expect("pool lock").recv() else {
+                            break;
+                        };
+                        let result = match job {
+                            PoolJob::Generate(job) => {
+                                let column = job.column;
+                                PoolResult::Generated(
+                                    column,
+                                    Box::new(generate_column(terrain.as_ref(), &job)),
+                                )
+                            }
+                            PoolJob::Build(job) => PoolResult::Built(build_column(job)),
+                            PoolJob::Coarse(job) => PoolResult::Coarse(build_coarse(job)),
+                        };
+                        if result_sender.send(result).is_err() {
+                            break;
+                        }
+                    }
+                });
+        }
+        Self {
+            jobs: job_sender,
+            results: result_receiver,
+        }
+    }
+
+    fn submit(&self, job: PoolJob) -> bool {
+        self.jobs.send(job).is_ok()
+    }
+
+    fn try_recv(&self) -> Option<PoolResult> {
+        self.results.try_recv().ok()
+    }
+}
+
+/// Generates one column and layers saved sections over the generated baseline.
+fn generate_column(
+    terrain: Option<&pipeline::Terrain>,
+    job: &GenerateJob,
+) -> Result<GeneratedColumn, error::TerrainError> {
+    let Some(terrain) = terrain else {
+        return Err(error::TerrainError::new(
+            error::Stage::Height,
+            error::ErrorKind::InvariantViolated {
+                check: "worker_terrain",
+                coord: None,
+            },
+        ));
+    };
+    let section_count = i32::try_from(description::SECTIONS_PER_COLUMN).unwrap_or(12);
+    let mut stack = Vec::with_capacity(COLUMN_SECTIONS);
+    for sy in 0..section_count {
+        stack.push(terrain.section(job.column.0, sy, job.column.1)?);
+    }
+    let Ok(mut stack) = <[section::Section; COLUMN_SECTIONS]>::try_from(stack) else {
+        return Err(error::TerrainError::new(
+            error::Stage::Height,
+            error::ErrorKind::InvariantViolated {
+                check: "column_section_count",
+                coord: None,
+            },
+        ));
+    };
+    let mut applied = Vec::new();
+    let mut read_only = false;
+    for record in &job.saved {
+        let key = record.key;
+        if key.column != [job.column.0, job.column.1] {
+            continue;
+        }
+        let Some(slot) = stack.get_mut(usize::from(key.section)) else {
+            continue;
+        };
+        if section::baseline_hash(slot) != record.baseline_hash {
+            warn!(
+                column = ?key.column,
+                section = key.section,
+                "saved terrain section does not match this generator; ignored"
+            );
+            continue;
+        }
+        if !record.unknown_names.is_empty() {
+            read_only = true;
+        }
+        *slot = record.section.clone();
+        applied.push((key, record.baseline_hash));
+    }
+    Ok(GeneratedColumn {
+        column: job.column,
+        stack,
+        applied,
+        read_only,
+    })
+}
+
+/// The eight horizontal neighbours, in `ColumnView` order.
+const COLUMN_NEIGHBOURS: [(i32, i32); 8] = [
+    (-1, -1),
+    (0, -1),
+    (1, -1),
+    (-1, 0),
+    (1, 0),
+    (-1, 1),
+    (0, 1),
+    (1, 1),
+];
+
+/// Recomputes light and meshes the sections a new column can change.
+fn build_column(job: BuildJob) -> BuiltColumn {
+    let started = Instant::now();
+    let mut light = job.previous_light.clone();
+    let centre = job.centre;
+    let mut targets = vec![centre];
+    if job.full {
+        for (dx, dz) in COLUMN_NEIGHBOURS {
+            let column = (centre.0 + dx, centre.1 + dz);
+            if job.columns.contains_key(&column) {
+                targets.push(column);
+            }
+        }
+        for &target in &targets {
+            let stack = &job.columns[&target];
+            let mut borders: [Option<&[section::Section; COLUMN_SECTIONS]>; 8] = [None; 8];
+            for (slot, (dx, dz)) in COLUMN_NEIGHBOURS.into_iter().enumerate() {
+                borders[slot] = job
+                    .columns
+                    .get(&(target.0 + dx, target.1 + dz))
+                    .map(|stack| &**stack);
+            }
+            let blocks = light2::ColumnBlocks::new((**stack).clone(), &borders);
+            light.insert(target, light2::compute_column(&blocks, &job.light_table));
+        }
+    }
+    let light_ms = started.elapsed().as_secs_f64() * 1000.0;
+
+    let mesh_started = Instant::now();
+    let mut replace = BTreeMap::new();
+    if job.detailed {
+        let sections = demo_fine_column(&job.columns, &light, &job.materials, centre.0, centre.1);
+        replace.insert(centre, sections);
+    }
+    let mut patches: BTreeMap<(i32, i32), Vec<DemoPatch>> = BTreeMap::new();
+    if job.full {
+        for &neighbour in &targets[1..] {
+            if !job.fine_columns.contains(&neighbour) {
+                continue;
+            }
+            let before = job.previous_light.get(&neighbour);
+            let after = light.get(&neighbour);
+            let delta = (centre.0 - neighbour.0, centre.1 - neighbour.1);
+            let mut list = Vec::new();
+            for sy in 0..COLUMN_SECTIONS {
+                let light_changed = before
+                    .zip(after)
+                    .is_some_and(|(before, after)| before.section_differs(after, sy));
+                let geometry_changed = border_section_changed(
+                    &job.columns[&neighbour],
+                    &job.columns[&centre],
+                    delta,
+                    sy,
+                );
+                if !light_changed && !geometry_changed {
+                    continue;
+                }
+                let size = i32::try_from(description::SECTION_SIZE).unwrap_or(32);
+                let origin = [
+                    neighbour.0 * size,
+                    i32::try_from(sy).unwrap_or(0) * size,
+                    neighbour.1 * size,
+                ];
+                let mesh = demo_section(
+                    &job.columns,
+                    &light,
+                    &job.materials,
+                    neighbour.0,
+                    neighbour.1,
+                    sy,
+                )
+                .map(|section| section.mesh);
+                list.push(DemoPatch { origin, mesh });
+            }
+            if !list.is_empty() {
+                patches.insert(neighbour, list);
+            }
+        }
+    }
+    let mesh_ms = mesh_started.elapsed().as_secs_f64() * 1000.0;
+
+    BuiltColumn {
+        centre,
+        snapshot: job.columns,
+        light,
+        replace,
+        patches,
+        light_ms,
+        mesh_ms,
+    }
+}
+
+/// Builds the coarse LOD set for the whole resident ring.
+fn build_coarse(job: CoarseJob) -> CoarseBuilt {
+    let mut regions = BTreeSet::new();
+    for &(x, z) in job.columns.keys() {
+        if x.rem_euclid(2) == 0 && z.rem_euclid(2) == 0 {
+            regions.insert((x, z));
+        }
+    }
+    let mut sections: Vec<DemoSection> =
+        demo_coarse_regions(&job.columns, &job.materials, &job.pack, &regions)
+            .into_values()
+            .flatten()
+            .collect();
+    sections.sort_by_key(|section| section.origin);
+    CoarseBuilt {
+        snapshot: job.columns,
+        sections,
+    }
+}
+
+/// Whether a section's block border toward `delta` differs from `a`'s mirror
+/// edge, which is what a newly generated column can change.
+fn border_section_changed(
+    a: &[section::Section; COLUMN_SECTIONS],
+    b: &[section::Section; COLUMN_SECTIONS],
+    delta: (i32, i32),
+    sy: usize,
+) -> bool {
+    let Some(a_section) = a.get(sy) else {
+        return false;
+    };
+    let Some(b_section) = b.get(sy) else {
+        return false;
+    };
+    let base_y = i32::try_from(sy).unwrap_or(0) * 32;
+    let diagonal = delta.0 != 0 && delta.1 != 0;
+    for y in 0..32 {
+        let world_y = u32::try_from(base_y + y).unwrap_or(0);
+        if diagonal {
+            let (ax, az, bx, bz) = match delta {
+                (1, 1) => (31, 31, 0, 0),
+                (1, -1) => (31, 0, 0, 31),
+                (-1, 1) => (0, 31, 31, 0),
+                _ => (0, 0, 31, 31),
+            };
+            if a_section.get(ax, world_y, az) != b_section.get(bx, world_y, bz) {
+                return true;
+            }
+            continue;
+        }
+        for u in 0..32 {
+            let (ax, az, bx, bz) = match delta {
+                (1, 0) => (31, u, 0, u),
+                (-1, 0) => (0, u, 31, u),
+                (0, 1) => (u, 31, u, 0),
+                _ => (u, 0, u, 31),
+            };
+            if a_section.get(ax, world_y, az) != b_section.get(bx, world_y, bz) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Copies the columns in `centre +- margin` for a background job.
+fn snapshot_around(columns: &ColumnMap, centre: (i32, i32), margin: i32) -> ColumnMap {
+    let mut map = ColumnMap::new();
+    for dx in -margin..=margin {
+        for dz in -margin..=margin {
+            let key = (centre.0 + dx, centre.1 + dz);
+            if let Some(stack) = columns.get(&key) {
+                map.insert(key, Arc::clone(stack));
+            }
+        }
+    }
+    map
+}
+
+/// Whether the 5x5 window around `centre` still matches a job's snapshot.
+fn neighbourhood_intact(columns: &ColumnMap, snapshot: &ColumnMap, centre: (i32, i32)) -> bool {
+    for dx in -2..=2 {
+        for dz in -2..=2 {
+            let key = (centre.0 + dx, centre.1 + dz);
+            match (columns.get(&key), snapshot.get(&key)) {
+                (Some(current), Some(snap)) if Arc::ptr_eq(current, snap) => {}
+                (None, None) => {}
+                _ => return false,
+            }
+        }
+    }
+    true
+}
+
+/// Whether every column a coarse snapshot read is still the same `Arc`.
+///
+/// New columns are allowed: the coarse set is disposable and the next job picks
+/// them up. A removed or edited column invalidates the result.
+fn coarse_snapshot_intact(columns: &ColumnMap, snapshot: &ColumnMap) -> bool {
+    snapshot
+        .iter()
+        .all(|(key, stack)| columns.get(key).is_some_and(|now| Arc::ptr_eq(now, stack)))
+}
+
+/// Streaming state for the column ring.
+#[allow(clippy::struct_excessive_bools)]
+struct RingStream {
+    pool: ColumnPool,
+    /// Every column with a generation or build job running.
+    in_flight: BTreeSet<(i32, i32)>,
+    /// Saved sections grouped by the column generation will need.
+    saved: BTreeMap<(i32, i32), Vec<section::SavedSection>>,
+    assets: RingAssets,
+    /// Coarse LOD needs a rebuild after a column or edit change.
+    coarse_dirty: bool,
+    /// A coarse job is running.
+    coarse_busy: bool,
+    last_coarse: Instant,
+    /// The renderer needs a terrain submission.
+    upload_dirty: bool,
+    last_upload: Instant,
+    /// Whether the player has been placed on the centre column.
+    spawned: bool,
+    /// Logs one line when the ring first fills.
+    announced_full: bool,
+}
+
+impl RingStream {
+    fn new(demo: &TerrainDemo, saved: Vec<section::SavedSection>, workers: usize) -> Self {
+        let mut grouped: BTreeMap<(i32, i32), Vec<section::SavedSection>> = BTreeMap::new();
+        for record in saved {
+            grouped
+                .entry((record.key.column[0], record.key.column[1]))
+                .or_default()
+                .push(record);
+        }
+        let now = Instant::now();
+        Self {
+            pool: ColumnPool::new(demo.seed, &demo.world_hydro, workers),
+            in_flight: BTreeSet::new(),
+            saved: grouped,
+            assets: RingAssets::from_demo(demo),
+            coarse_dirty: true,
+            coarse_busy: false,
+            last_coarse: now.checked_sub(Duration::from_secs(1)).unwrap_or(now),
+            upload_dirty: true,
+            last_upload: now.checked_sub(Duration::from_secs(1)).unwrap_or(now),
+            spawned: false,
+            announced_full: false,
+        }
+    }
+}
 /// Builds the deterministic 8x8 chunk stress fixture.
 ///
 /// Chunks sit at `(cx, 0, cz)` for `cx, cz` in `0..8`. The first four chunk
@@ -1764,6 +2384,154 @@ fn queue_demo_edit(
     }
 }
 
+/// The result of replaying recovered journal frames over the saved sections.
+struct ReplayOutcome {
+    saved: Vec<section::SavedSection>,
+    revision: u64,
+    read_only: bool,
+    /// Saved section records the world holds.
+    sections: usize,
+    /// Journal edits this replay applied.
+    applied: usize,
+}
+
+/// Replays recovered journal frames over saved sections before the ring opens.
+///
+/// Each frame is applied to the section record it covers, in revision order, so
+/// a section file is ahead of the journal exactly like the normal edit path.
+/// Frames for a column that has no saved record are left in the journal: the
+/// header does not advance past them. Unknown block names make the world
+/// read-only (`A16`).
+#[allow(clippy::too_many_lines)]
+fn replay_saved_sections(
+    mut saved: Vec<section::SavedSection>,
+    recovered: &[editlog::EditBatch],
+    last_saved: u64,
+    pack: &content::ContentPack,
+    save: Option<&world_save::SaveWorker>,
+    terrain: Option<&pipeline::Terrain>,
+) -> ReplayOutcome {
+    let mut revision = last_saved;
+    let mut read_only = false;
+    let mut applied = 0;
+    let mut index: BTreeMap<section::SectionKey, usize> = saved
+        .iter()
+        .enumerate()
+        .map(|(index, record)| (record.key, index))
+        .collect();
+    let mut batches: Vec<&editlog::EditBatch> = recovered
+        .iter()
+        .filter(|batch| batch.revision > last_saved)
+        .collect();
+    batches.sort_by_key(|batch| batch.revision);
+    'replay: for batch in batches {
+        let mut wanted = Vec::with_capacity(batch.edits.len());
+        for record in &batch.edits {
+            let (Some(old), Some(new)) = (pack.id(&record.old), pack.id(&record.new)) else {
+                read_only = true;
+                break 'replay;
+            };
+            let cell = IVec3::new(record.x, record.y, record.z);
+            let key = section_key(cell);
+            let slot = if let Some(&slot) = index.get(&key) {
+                slot
+            } else {
+                // The journal can be one write ahead of the section store. A
+                // crash there leaves a frame with no saved record; generate the
+                // section so the frame still lands and the header can advance.
+                let Some(terrain) = terrain else {
+                    break 'replay;
+                };
+                let section_count = i32::try_from(description::SECTIONS_PER_COLUMN).unwrap_or(12);
+                let mut stack = Vec::with_capacity(COLUMN_SECTIONS);
+                for sy in 0..section_count {
+                    match terrain.section(key.column[0], sy, key.column[1]) {
+                        Ok(section) => stack.push(section),
+                        Err(error) => {
+                            warn!(%error, "recovered section could not be regenerated");
+                            break 'replay;
+                        }
+                    }
+                }
+                let Some(section) = stack.get(usize::from(key.section)) else {
+                    break 'replay;
+                };
+                let record = section::SavedSection {
+                    key,
+                    edited: false,
+                    baseline_hash: section::baseline_hash(section),
+                    section: section.clone(),
+                    unknown_names: Vec::new(),
+                };
+                saved.push(record);
+                let slot = saved.len() - 1;
+                index.insert(key, slot);
+                slot
+            };
+            wanted.push((slot, key, cell, old, new));
+        }
+        if wanted.is_empty() {
+            continue;
+        }
+        let mut touched = BTreeSet::new();
+        for (slot, key, cell, old, new) in &wanted {
+            let size = i32::try_from(description::SECTION_SIZE).unwrap_or(32);
+            let x = u32::try_from(cell.x.rem_euclid(size)).unwrap_or(0);
+            let y = u32::try_from(cell.y.rem_euclid(size)).unwrap_or(0);
+            let z = u32::try_from(cell.z.rem_euclid(size)).unwrap_or(0);
+            let section = &mut saved[*slot];
+            let current = section.section.get(x, y, z);
+            if current == *old {
+                section.section.set(x, y, z, *new);
+                section.edited = true;
+                touched.insert(*key);
+                applied += 1;
+            } else if current != *new {
+                warn!(
+                    x = cell.x,
+                    y = cell.y,
+                    z = cell.z,
+                    "journal edit conflicts with the saved section; keeping the section"
+                );
+            }
+        }
+        if let Some(save) = save {
+            // Queue the whole frame's sections with no revision advance, then
+            // one more write advances the header: the trim happens only after
+            // every section the frame touches is on disk.
+            let keys: Vec<section::SectionKey> = wanted.iter().map(|edit| edit.1).collect();
+            for (position, key) in keys.iter().enumerate() {
+                let Some(&slot) = index.get(key) else {
+                    continue;
+                };
+                let record = &saved[slot];
+                let through = if position + 1 == keys.len() {
+                    batch.revision
+                } else {
+                    0
+                };
+                if let Err(error) = save.save_section(
+                    *key,
+                    record.baseline_hash,
+                    record.edited,
+                    record.section.clone(),
+                    through,
+                ) {
+                    warn!(%error, "replayed terrain section could not be saved");
+                }
+            }
+        }
+        revision = revision.max(batch.revision);
+    }
+    ReplayOutcome {
+        sections: saved.len(),
+        saved,
+        revision,
+        read_only,
+        applied,
+    }
+}
+
 /// The repair action a shortcut key selects.
 fn repair_action(code: KeyCode) -> Option<save::RepairAction> {
     match code {
@@ -1771,111 +2539,6 @@ fn repair_action(code: KeyCode) -> Option<save::RepairAction> {
         KeyCode::KeyQ => Some(save::RepairAction::Quarantine),
         KeyCode::KeyS => Some(save::RepairAction::Salvage),
         _ => None,
-    }
-}
-
-/// The base column of a demo patch, or `(0, 0)` when it has no columns.
-fn demo_tile(demo: &TerrainDemo) -> (i32, i32) {
-    demo.columns.keys().next().map_or((0, 0), |&(x, z)| (x, z))
-}
-
-/// Tiles to prefetch, in priority order, for a player at `local` in `base`.
-///
-/// Two columns of lead time keep a crossing covered while one tile builds at a
-/// time. When both axes are near an edge, the diagonal follows the two
-/// orthogonal neighbours so a corner crossing is also cached.
-fn prefetch_candidates(base: (i32, i32), local: (i32, i32), tile: i32) -> Vec<(i32, i32)> {
-    let left = local.0 <= 1;
-    let right = local.0 >= tile - 2;
-    let up = local.1 <= 1;
-    let down = local.1 >= tile - 2;
-    let mut candidates = Vec::new();
-    if left {
-        candidates.push((base.0 - tile, base.1));
-    }
-    if right {
-        candidates.push((base.0 + tile, base.1));
-    }
-    if up {
-        candidates.push((base.0, base.1 - tile));
-    }
-    if down {
-        candidates.push((base.0, base.1 + tile));
-    }
-    let x = if left {
-        Some(-tile)
-    } else if right {
-        Some(tile)
-    } else {
-        None
-    };
-    let z = if up {
-        Some(-tile)
-    } else if down {
-        Some(tile)
-    } else {
-        None
-    };
-    if let (Some(dx), Some(dz)) = (x, z) {
-        candidates.push((base.0 + dx, base.1 + dz));
-    }
-    candidates
-}
-
-/// What the tile streamer should do this frame.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct StreamPlan {
-    /// A cached tile to activate now.
-    swap: Option<(i32, i32)>,
-    /// A tile to generate now.
-    build: Option<(i32, i32)>,
-    /// Whether the player has ground data this frame.
-    ready: bool,
-}
-
-/// Decides tile swaps, urgent builds, and prefetches for one frame.
-fn plan_stream(
-    active: (i32, i32),
-    player_column: (i32, i32),
-    cached: &BTreeSet<(i32, i32)>,
-    pending: Option<(i32, i32)>,
-    tile: i32,
-) -> StreamPlan {
-    let player_base = (
-        player_column.0 - player_column.0.rem_euclid(tile),
-        player_column.1 - player_column.1.rem_euclid(tile),
-    );
-    if player_base != active {
-        if cached.contains(&player_base) {
-            return StreamPlan {
-                swap: Some(player_base),
-                build: None,
-                ready: true,
-            };
-        }
-        return StreamPlan {
-            swap: None,
-            build: (pending != Some(player_base)).then_some(player_base),
-            ready: false,
-        };
-    }
-    if pending.is_some() {
-        return StreamPlan {
-            swap: None,
-            build: None,
-            ready: true,
-        };
-    }
-    let local = (player_column.0 - active.0, player_column.1 - active.1);
-    let build = prefetch_candidates(active, local, tile)
-        .into_iter()
-        .find(|candidate| {
-            *candidate != active && !cached.contains(candidate) && pending != Some(*candidate)
-        });
-    StreamPlan {
-        swap: None,
-        build,
-        ready: true,
     }
 }
 
@@ -1909,12 +2572,8 @@ struct App {
     terrain_demo: Option<TerrainDemo>,
     /// Background writer for the v1 terrain world, when the demo has one.
     terrain_save: Option<world_save::SaveWorker>,
-    /// A tile being generated for the demo streamer.
-    terrain_stream: Option<std::sync::mpsc::Receiver<Result<TerrainDemo, error::TerrainError>>>,
-    /// Tile base column the in-flight stream build targets.
-    terrain_stream_base: Option<(i32, i32)>,
-    /// Ready neighbouring tiles, keyed by their base column.
-    terrain_cache: BTreeMap<(i32, i32), TerrainDemo>,
+    /// Column-ring streaming state and workers.
+    terrain_ring: Option<RingStream>,
     /// A corrupt section blocking saves until the player chooses an action.
     repair_prompt: Option<RepairPrompt>,
     /// In-flight background rebuild of the patch.
@@ -2004,9 +2663,7 @@ impl App {
             seed: None,
             terrain_demo: None,
             terrain_save: None,
-            terrain_stream: None,
-            terrain_stream_base: None,
-            terrain_cache: BTreeMap::new(),
+            terrain_ring: None,
             repair_prompt: None,
             demo_build: None,
             demo_edits: Vec::new(),
@@ -2306,6 +2963,19 @@ impl App {
                 if let Some(demo) = &mut self.terrain_demo {
                     demo.apply_saved(&saved);
                 }
+                if let Some(ring) = &mut self.terrain_ring {
+                    let mut grouped: BTreeMap<(i32, i32), Vec<section::SavedSection>> =
+                        BTreeMap::new();
+                    for record in saved {
+                        grouped
+                            .entry((record.key.column[0], record.key.column[1]))
+                            .or_default()
+                            .push(record);
+                    }
+                    ring.saved = grouped;
+                    ring.coarse_dirty = true;
+                    ring.upload_dirty = true;
+                }
                 match world_save::SaveWorker::start(world, 64) {
                     Ok(worker) => self.terrain_save = Some(worker),
                     Err(error) => {
@@ -2400,13 +3070,26 @@ impl App {
         if !demo.set_block(cell, id) {
             return;
         }
-        if let (false, Some(save), Some(old_name), Some(new_name)) = (
+        let size = i32::try_from(description::SECTION_SIZE).unwrap_or(32);
+        let column = (cell.x.div_euclid(size), cell.z.div_euclid(size));
+        demo.unsaved.insert(column);
+        let queued = if let (false, Some(save), Some(old_name), Some(new_name)) = (
             demo.read_only,
             self.terrain_save.as_ref(),
             old_name,
             new_name,
         ) {
             queue_demo_edit(save, demo, cell, key, baseline, old_name, new_name);
+            true
+        } else {
+            false
+        };
+        if queued {
+            demo.unsaved.remove(&column);
+        }
+        if let Some(ring) = &mut self.terrain_ring {
+            ring.coarse_dirty = true;
+            ring.upload_dirty = true;
         }
         self.demo_edits.push(DemoEdit { cell });
         self.rebuild_demo();
@@ -2496,125 +3179,303 @@ impl App {
         }
     }
 
-    /// Advances the demo streamer: receives a finished tile, swaps when the
-    /// player is inside it, and prefetches the tile beyond a near edge.
-    fn poll_stream(&mut self) -> bool {
-        if let Some(receiver) = &self.terrain_stream {
-            match receiver.try_recv() {
-                Ok(Ok(demo)) => {
-                    let base = demo_tile(&demo);
-                    debug!(?base, "terrain stream tile ready");
-                    self.terrain_cache.insert(base, demo);
-                    self.terrain_stream = None;
-                    self.terrain_stream_base = None;
-                }
-                Ok(Err(error)) => {
-                    warn!(%error, "terrain stream tile failed");
-                    self.terrain_stream = None;
-                    self.terrain_stream_base = None;
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {}
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.terrain_stream = None;
-                    self.terrain_stream_base = None;
-                }
-            }
-        }
-
-        let Some(active) = self.terrain_demo.as_ref() else {
+    /// Advances the column ring: applies finished jobs, then plans and starts a
+    /// bounded batch of generate, build, and evict work for this frame.
+    ///
+    /// Returns whether the player's current column has light, so the caller can
+    /// keep movement frozen while the centre column streams in.
+    #[allow(clippy::too_many_lines)]
+    fn poll_ring(&mut self) -> bool {
+        let Some(demo) = self.terrain_demo.as_ref() else {
             return true;
         };
-        let active_base = demo_tile(active);
         let player = Streaming::column_at(self.player.position);
         let player_column = (player.x, player.y);
-        let tile = TERRAIN_DEMO_TILE_COLUMNS;
-        let cached: BTreeSet<(i32, i32)> = self.terrain_cache.keys().copied().collect();
-        let plan = plan_stream(
-            active_base,
-            player_column,
-            &cached,
-            self.terrain_stream_base,
-            tile,
-        );
-        let mut ready = plan.ready;
-        if let Some(base) = plan.swap
-            && let Some(demo) = self.terrain_cache.remove(&base)
-        {
-            if let Some(old) = self.terrain_demo.take() {
-                self.terrain_cache.insert(active_base, old);
+        let centre_ready = demo.column_ready(player_column);
+
+        let mut results = Vec::new();
+        if let Some(ring) = &self.terrain_ring {
+            while results.len() < 16 {
+                let Some(result) = ring.pool.try_recv() else {
+                    break;
+                };
+                results.push(result);
             }
-            self.terrain_demo = Some(demo);
-            self.upload_demo();
-            debug!(?base, "terrain stream tile swapped");
-            ready = true;
         }
-        if let Some(base) = plan.build
-            && self.terrain_stream_base != Some(base)
-        {
-            self.terrain_stream = None;
-            self.terrain_stream_base = None;
-            self.start_stream_build(base);
+        for result in results {
+            self.apply_ring_result(result);
         }
 
-        let active_base = self.terrain_demo.as_ref().map_or(active_base, demo_tile);
-        while self.terrain_cache.len() > 3 {
-            let farthest = self
-                .terrain_cache
-                .keys()
-                .max_by_key(|(x, z)| (x - active_base.0).abs() + (z - active_base.1).abs())
-                .copied();
-            let Some(farthest) = farthest else {
-                break;
-            };
-            self.terrain_cache.remove(&farthest);
+        let (Some(demo), Some(ring)) = (self.terrain_demo.as_ref(), self.terrain_ring.as_ref())
+        else {
+            return centre_ready;
+        };
+        let resident: BTreeSet<[i32; 2]> = demo.columns.keys().map(|&(x, z)| [x, z]).collect();
+        let needs_build: BTreeSet<[i32; 2]> = resident
+            .iter()
+            .copied()
+            .filter(|&column| {
+                let ring = (column[0] - player_column.0)
+                    .abs()
+                    .max((column[1] - player_column.1).abs());
+                let key = (column[0], column[1]);
+                !demo.light.contains_key(&key)
+                    || (ring <= demo.fine_radius && !demo.fine.contains_key(&key))
+            })
+            .collect();
+        let in_flight: BTreeSet<[i32; 2]> = ring.in_flight.iter().map(|&(x, z)| [x, z]).collect();
+        let protected: BTreeSet<[i32; 2]> = demo.unsaved.iter().map(|&(x, z)| [x, z]).collect();
+        let plan = residency::plan_ring(
+            [player_column.0, player_column.1],
+            demo.view_radius,
+            &resident,
+            &in_flight,
+            &needs_build,
+            &protected,
+            residency::RingBudget::v1(),
+        );
+        let assets = ring.assets.clone();
+        let saved = ring.saved.clone();
+        let mut jobs = Vec::new();
+        for &column in &plan.generate {
+            let column = (column[0], column[1]);
+            jobs.push((
+                column,
+                PoolJob::Generate(GenerateJob {
+                    column,
+                    saved: saved.get(&column).cloned().unwrap_or_default(),
+                }),
+            ));
         }
-        ready
+        for &column in &plan.build {
+            let column = (column[0], column[1]);
+            let full = !demo.light.contains_key(&column);
+            let ring_distance = (column.0 - player_column.0)
+                .abs()
+                .max((column.1 - player_column.1).abs());
+            let detailed = !full || ring_distance <= demo.fine_radius;
+            let mut previous_light = BTreeMap::new();
+            let mut fine_columns = BTreeSet::new();
+            for (dx, dz) in COLUMN_NEIGHBOURS {
+                let key = (column.0 + dx, column.1 + dz);
+                if let Some(light) = demo.light.get(&key) {
+                    previous_light.insert(key, light.clone());
+                }
+                if demo.fine.contains_key(&key) {
+                    fine_columns.insert(key);
+                }
+            }
+            if let Some(light) = demo.light.get(&column) {
+                previous_light.insert(column, light.clone());
+            }
+            if demo.fine.contains_key(&column) {
+                fine_columns.insert(column);
+            }
+            jobs.push((
+                column,
+                PoolJob::Build(BuildJob {
+                    centre: column,
+                    full,
+                    detailed,
+                    columns: snapshot_around(&demo.columns, column, 2),
+                    previous_light,
+                    fine_columns,
+                    materials: Arc::clone(&assets.materials),
+                    light_table: Arc::clone(&assets.light_table),
+                }),
+            ));
+        }
+        let mut evicted = Vec::new();
+        for &column in &plan.evict {
+            evicted.push((column[0], column[1]));
+        }
+        if let Some(ring) = self.terrain_ring.as_mut() {
+            for (column, job) in jobs {
+                if ring.in_flight.contains(&column) {
+                    continue;
+                }
+                ring.in_flight.insert(column);
+                if !ring.pool.submit(job) {
+                    ring.in_flight.remove(&column);
+                    warn!(?column, "terrain ring job could not be submitted");
+                }
+            }
+        }
+        if let Some(demo) = self.terrain_demo.as_mut() {
+            for &column in &evicted {
+                debug!(?column, "evicting terrain column");
+                demo.remove_column(column);
+            }
+            if let Some(ring) = self.terrain_ring.as_mut()
+                && !evicted.is_empty()
+            {
+                ring.coarse_dirty = true;
+                ring.upload_dirty = true;
+                demo.select_lod(player_column);
+            }
+        }
+
+        // Coarse LOD is disposable and rebuilt whole; keep one job in flight and
+        // let it lag a frame behind the fine ring.
+        let now = Instant::now();
+        let (dirty, busy, elapsed, changed) =
+            self.terrain_ring
+                .as_ref()
+                .map_or((false, true, Duration::ZERO, false), |ring| {
+                    let changed = self
+                        .terrain_demo
+                        .as_ref()
+                        .is_some_and(|demo| demo.lod_column != player_column);
+                    (
+                        ring.coarse_dirty,
+                        ring.coarse_busy,
+                        now.saturating_duration_since(ring.last_coarse),
+                        changed,
+                    )
+                });
+        if changed {
+            self.upload_demo();
+        }
+        if dirty && !busy && elapsed >= Duration::from_millis(TERRAIN_DEMO_COARSE_MS) {
+            let (Some(demo), Some(ring)) = (self.terrain_demo.as_ref(), self.terrain_ring.as_mut())
+            else {
+                return centre_ready;
+            };
+            let job = PoolJob::Coarse(CoarseJob {
+                columns: demo.columns.clone(),
+                materials: Arc::clone(&ring.assets.materials),
+                pack: Arc::clone(&ring.assets.pack),
+            });
+            ring.coarse_busy = true;
+            ring.last_coarse = Instant::now();
+            if !ring.pool.submit(job) {
+                ring.coarse_busy = false;
+                warn!("terrain coarse job could not be submitted");
+            }
+        }
+        if let Some(ring) = self.terrain_ring.as_mut()
+            && ring.upload_dirty
+            && now.saturating_duration_since(ring.last_upload)
+                >= Duration::from_millis(TERRAIN_DEMO_UPLOAD_MS)
+        {
+            ring.upload_dirty = false;
+            ring.last_upload = now;
+            self.upload_demo();
+        }
+        centre_ready
     }
 
-    /// Generates one 4x4 tile in the background, applying its saved sections.
-    fn start_stream_build(&mut self, base: (i32, i32)) {
-        let seed = self
-            .terrain_demo
-            .as_ref()
-            .map_or(TERRAIN_DEMO_STRESS_SEED, |demo| demo.seed);
-        let (sender, receiver) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let store = save::SectionStore::new(TERRAIN_SAVE_DIR, content::v1_default());
-            let saved = match store.read_all() {
-                Ok(sections) => sections
-                    .into_iter()
-                    .filter(|record| {
-                        (base.0..base.0 + TERRAIN_DEMO_TILE_COLUMNS).contains(&record.key.column[0])
-                            && (base.1..base.1 + TERRAIN_DEMO_TILE_COLUMNS)
-                                .contains(&record.key.column[1])
-                    })
-                    .collect(),
-                Err(error) => {
-                    warn!(%error, "saved tile sections could not be read");
-                    Vec::new()
+    /// Installs one finished ring job.
+    #[allow(clippy::too_many_lines)]
+    fn apply_ring_result(&mut self, result: PoolResult) {
+        let player = Streaming::column_at(self.player.position);
+        let player_column = (player.x, player.y);
+        match result {
+            PoolResult::Generated(column, result) => {
+                if let Some(ring) = &mut self.terrain_ring {
+                    ring.in_flight.remove(&column);
                 }
-            };
-            let spawn = IVec2::new(
-                base.0 + TERRAIN_DEMO_TILE_COLUMNS / 2,
-                base.1 + TERRAIN_DEMO_TILE_COLUMNS / 2,
-            );
-            let result = build_terrain_demo_extent(
-                seed,
-                spawn,
-                base.0,
-                base.0 + TERRAIN_DEMO_TILE_COLUMNS - 1,
-                base.1,
-                base.1 + TERRAIN_DEMO_TILE_COLUMNS - 1,
-                &saved,
-                &[],
-                0,
-            )
-            .map(|(demo, _)| demo);
-            let _ = sender.send(result);
-        });
-        self.terrain_stream = Some(receiver);
-        self.terrain_stream_base = Some(base);
-        debug!(?base, "terrain stream tile build started");
+                match *result {
+                    Ok(generated) => {
+                        if let Some(demo) = &mut self.terrain_demo {
+                            let radius = demo.view_radius + residency::UNLOAD_MARGIN;
+                            let ring_position = (generated.column.0 - player_column.0)
+                                .abs()
+                                .max((generated.column.1 - player_column.1).abs());
+                            if ring_position > radius {
+                                debug!(?generated.column, "late column is outside the ring");
+                                return;
+                            }
+                            for (key, baseline) in generated.applied {
+                                demo.baselines.insert(key, baseline);
+                            }
+                            demo.read_only |= generated.read_only;
+                            demo.insert_column(generated.column, generated.stack);
+                            if generated.column == (demo.origin_column.x, demo.origin_column.y) {
+                                demo.settle_spawn();
+                            }
+                        }
+                        if let Some(ring) = &mut self.terrain_ring {
+                            ring.coarse_dirty = true;
+                            ring.upload_dirty = true;
+                        }
+                    }
+                    Err(error) => {
+                        warn!(%error, "terrain column generation failed");
+                    }
+                }
+            }
+            PoolResult::Built(built) => {
+                if let Some(ring) = &mut self.terrain_ring {
+                    ring.in_flight.remove(&built.centre);
+                }
+                let mut spawn = None;
+                if let Some(demo) = &mut self.terrain_demo {
+                    if neighbourhood_intact(&demo.columns, &built.snapshot, built.centre) {
+                        demo.apply_light(built.light);
+                        for (column, sections) in built.replace {
+                            demo.fine.insert(column, sections);
+                        }
+                        demo.apply_patches(built.patches);
+                        // A new or repaired fine mesh must join the active set
+                        // immediately; otherwise it waits for the next coarse
+                        // rebuild even though the player may be standing on it.
+                        demo.select_lod(demo.lod_column);
+                        if built.centre == (demo.origin_column.x, demo.origin_column.y)
+                            && demo.spawn_ready
+                        {
+                            spawn = Some(demo.spawn);
+                        }
+                        debug!(
+                            column = ?built.centre,
+                            light_ms = built.light_ms,
+                            mesh_ms = built.mesh_ms,
+                            "terrain column ready"
+                        );
+                    } else {
+                        debug!(column = ?built.centre, "discarded stale terrain build");
+                    }
+                }
+                if let Some(ring) = &mut self.terrain_ring {
+                    ring.upload_dirty = true;
+                }
+                if let Some(spawn) = spawn {
+                    let announce = self.terrain_ring.as_ref().is_some_and(|ring| !ring.spawned);
+                    if announce {
+                        self.set_spawn(spawn);
+                        if let Some(ring) = &mut self.terrain_ring {
+                            ring.spawned = true;
+                        }
+                        info!(?spawn, "standing on the centre terrain column");
+                    }
+                }
+            }
+            PoolResult::Coarse(coarse) => {
+                let intact = self
+                    .terrain_demo
+                    .as_ref()
+                    .is_some_and(|demo| coarse_snapshot_intact(&demo.columns, &coarse.snapshot));
+                let mut apply = None;
+                if intact {
+                    apply = Some(coarse.sections);
+                }
+                if let Some(demo) = &mut self.terrain_demo {
+                    if let Some(sections) = apply {
+                        let changed = demo.columns.len() != coarse.snapshot.len();
+                        demo.coarse = sections;
+                        demo.select_lod(demo.lod_column);
+                        if let Some(ring) = &mut self.terrain_ring {
+                            ring.coarse_busy = false;
+                            ring.coarse_dirty = changed;
+                            ring.upload_dirty = true;
+                        }
+                    } else if let Some(ring) = &mut self.terrain_ring {
+                        ring.coarse_busy = false;
+                        ring.coarse_dirty = true;
+                    }
+                }
+            }
+        }
     }
 
     fn update_highlight(&mut self) {
@@ -2669,8 +3530,11 @@ impl App {
         };
         profiling::scope!("player update");
         let streaming = self.streaming.as_ref();
-        let ready =
-            |position: Vec3| streaming.is_none_or(|streaming| streaming.aabb_ready(position));
+        let demo = self.terrain_demo.as_ref();
+        let ready = |position: Vec3| match demo {
+            Some(demo) => demo.aabb_ready(position),
+            None => streaming.is_none_or(|streaming| streaming.aabb_ready(position)),
+        };
         let source: &dyn crate::player::BlockSource = match &self.terrain_demo {
             Some(demo) => demo,
             None => &self.world,
@@ -2695,11 +3559,9 @@ impl App {
 
         if self.focused {
             self.record_frame(elapsed);
-            let stream_ready = self.poll_stream();
+            self.poll_ring();
             let delta_seconds = elapsed.min(MAX_FRAME_DELTA).as_secs_f32();
-            if stream_ready {
-                self.step_player(delta_seconds);
-            }
+            self.step_player(delta_seconds);
             self.sky.advance(delta_seconds);
             self.camera.set_position(self.player.eye_position());
             self.update_highlight();
@@ -2807,6 +3669,33 @@ impl App {
                 on_ground = self.player.on_ground,
                 "frame timing"
             );
+            if let Some(demo) = &self.terrain_demo {
+                let wanted =
+                    usize::try_from((2 * demo.view_radius + 1) * (2 * demo.view_radius + 1))
+                        .unwrap_or(0);
+                let resident = demo.columns.len();
+                let ready = demo.light.len();
+                let fine = demo.fine.len();
+                let coarse: usize = demo.coarse.len();
+                let quads = demo.quads;
+                let bytes = demo.footprint_bytes();
+                let in_flight = self
+                    .terrain_ring
+                    .as_ref()
+                    .map_or(0, |ring| ring.in_flight.len());
+                info!(
+                    wanted,
+                    resident, ready, fine, coarse, quads, in_flight, bytes, "terrain ring"
+                );
+                let full = resident >= wanted;
+                if let Some(ring) = &mut self.terrain_ring
+                    && full
+                    && !ring.announced_full
+                {
+                    ring.announced_full = true;
+                    info!(wanted, bytes, "terrain ring complete");
+                }
+            }
             self.overlay_fps = frames / seconds;
             self.overlay_frame_ms = seconds * 1000.0 / frames;
             self.frame_accum = Duration::ZERO;
@@ -3435,15 +4324,26 @@ mod tests {
         let mut demo =
             build_terrain_demo(0x5EED, IVec2::new(2, -3), 2).expect("the v1 terrain builds");
         assert!(
-            !demo.coarse_sections.is_empty(),
+            !demo.coarse.is_empty(),
             "a radius-2 patch has complete octant regions"
         );
-        let fine = demo.fine_sections.len();
+        demo.fine_radius = 0;
+        let fine: usize = demo.fine.values().map(Vec::len).sum();
         demo.select_lod((demo.origin_column.x, demo.origin_column.y));
+        let near_fine: usize = demo
+            .fine
+            .iter()
+            .filter(|(key, _)| {
+                let (x, z) = **key;
+                let (px, pz) = (demo.origin_column.x, demo.origin_column.y);
+                (x - px).abs().max((z - pz).abs()) <= 1
+            })
+            .map(|(_, sections)| sections.len())
+            .sum();
         assert_eq!(
             demo.sections.len(),
-            fine,
-            "the player's region and its fine margin stay full detail"
+            near_fine,
+            "the player's column and its fine ring are full detail"
         );
 
         demo.select_lod((demo.origin_column.x + 2, demo.origin_column.y + 2));
@@ -3453,11 +4353,7 @@ mod tests {
             demo.sections.len()
         );
 
-        let coarse: BTreeSet<[i32; 3]> = demo
-            .coarse_sections
-            .iter()
-            .map(|section| section.origin)
-            .collect();
+        let coarse: BTreeSet<[i32; 3]> = demo.coarse.iter().map(|section| section.origin).collect();
         let active_fine = demo
             .sections
             .iter()
@@ -3475,7 +4371,7 @@ mod tests {
             );
         }
         assert!(
-            demo.coarse_sections
+            demo.coarse
                 .iter()
                 .any(|section| !section.mesh.skirts.is_empty()),
             "coarse meshes carry skirts for the fine boundary"
@@ -3484,143 +4380,247 @@ mod tests {
 
     #[test]
     fn the_demo_tile_is_lod_selected_at_spawn() {
-        let (demo, replay) =
+        let (mut demo, replay) =
             build_terrain_demo_extent(0x5EED, IVec2::new(0, 0), 0, 3, 0, 3, &[], &[], 0)
                 .expect("the one-tile demo builds");
-        assert_eq!(replay.keys, []);
+        assert_eq!(replay.keys, Vec::<section::SectionKey>::new());
         assert_eq!(
             demo.columns.keys().min(),
             Some(&(0, 0)),
             "the tile is one 128-block generation unit"
         );
         assert_eq!(demo.columns.keys().max(), Some(&(3, 3)));
+        let fine: usize = demo.fine.values().map(Vec::len).sum();
+        demo.fine_radius = 0;
+        demo.select_lod((0, 0));
         assert!(
-            demo.sections.len() < demo.fine_sections.len(),
-            "the far corner is coarse at spawn: {} active vs {} fine",
+            demo.sections.len() < fine,
+            "the far corner is coarse at spawn: {} active vs {fine} fine",
             demo.sections.len(),
-            demo.fine_sections.len()
         );
     }
 
     #[test]
-    fn prefetch_candidates_lead_the_player_by_two_columns() {
-        assert_eq!(
-            prefetch_candidates((0, 0), (0, 0), 4),
-            vec![(-4, 0), (0, -4), (-4, -4)]
-        );
-        assert_eq!(
-            prefetch_candidates((0, 0), (2, 2), 4),
-            vec![(4, 0), (0, 4), (4, 4)]
-        );
-        assert_eq!(
-            prefetch_candidates((0, 0), (1, 3), 4),
-            vec![(-4, 0), (0, 4), (-4, 4)]
-        );
-    }
-
-    #[test]
-    fn stream_plan_swaps_cached_tiles_and_prefetches_early() {
-        let tile = 4;
-        let active = (0, 0);
-        let none = BTreeSet::new();
-        assert_eq!(
-            plan_stream(active, (1, 1), &none, None, tile),
-            StreamPlan {
-                swap: None,
-                build: Some((-4, 0)),
-                ready: true,
-            }
-        );
-        assert_eq!(
-            plan_stream(active, (2, 2), &none, None, tile),
-            StreamPlan {
-                swap: None,
-                build: Some((4, 0)),
-                ready: true,
-            }
-        );
-
-        let cached = BTreeSet::from([(4, 0)]);
-        assert_eq!(
-            plan_stream(active, (4, 2), &cached, None, tile),
-            StreamPlan {
-                swap: Some((4, 0)),
-                build: None,
-                ready: true,
-            }
-        );
-        assert_eq!(
-            plan_stream(active, (4, 2), &none, None, tile),
-            StreamPlan {
-                swap: None,
-                build: Some((4, 0)),
-                ready: false,
-            }
-        );
-        assert_eq!(
-            plan_stream(active, (4, 2), &none, Some((4, 0)), tile),
-            StreamPlan {
-                swap: None,
-                build: None,
-                ready: false,
-            }
-        );
-        assert_eq!(
-            plan_stream(active, (1, 1), &none, Some((4, 0)), tile),
-            StreamPlan {
-                swap: None,
-                build: None,
-                ready: true,
-            }
-        );
-    }
-
-    fn tiny_demo(base: (i32, i32)) -> TerrainDemo {
+    fn saved_columns_replay_into_the_ring() {
+        let mut saved = Vec::new();
         let pack = content::v1_default();
-        let mut columns = BTreeMap::new();
-        columns.insert(base, std::array::from_fn(|_| section::Section::uniform(0)));
-        let mut solid = vec![false; pack.len()];
-        solid[0] = false;
-        TerrainDemo {
-            seed: 1,
-            origin_column: IVec2::new(base.0, base.1),
-            columns,
-            light: BTreeMap::new(),
-            materials: demo_materials(),
-            pack,
-            baselines: BTreeMap::new(),
-            revision: 0,
-            read_only: false,
-            air: 0,
-            solid,
-            spawn: Vec3::ZERO,
-            sections: Vec::new(),
-            fine_sections: Vec::new(),
-            coarse_sections: Vec::new(),
-            lod_column: base,
-            quads: 0,
-            min_y: 0,
-            max_y: 0,
-            build_time: Duration::ZERO,
-        }
+        let mut section = section::Section::uniform(0);
+        let key = section::SectionKey {
+            column: [0, 0],
+            section: 0,
+        };
+        section.set(1, 1, 1, pack.id("core:stone").expect("stone"));
+        saved.push(section::SavedSection {
+            key,
+            edited: true,
+            baseline_hash: section::baseline_hash(&section::Section::uniform(0)),
+            section,
+            unknown_names: Vec::new(),
+        });
+        let replayed = replay_saved_sections(saved, &[], 0, &pack, None, None);
+        assert_eq!(replayed.sections, 1);
+        assert_eq!(replayed.revision, 0);
+        assert!(!replayed.read_only);
+        assert_eq!(
+            replayed.saved[0].section.get(1, 1, 1),
+            pack.id("core:stone").expect("stone")
+        );
     }
 
     #[test]
-    fn a_cached_tile_swaps_under_the_player_and_keeps_the_old_one() {
-        let mut app = App::with_world(World::default(), true);
-        app.terrain_demo = Some(tiny_demo((0, 0)));
-        app.terrain_cache.insert((-4, 0), tiny_demo((-4, 0)));
-        app.player.position = Vec3::new(-1.0, 64.0, 16.0);
+    #[allow(clippy::cast_possible_truncation)]
+    fn a_journal_frame_ahead_of_the_section_store_regenerates_it() {
+        let seed = 0x5EED;
+        let pack = content::v1_default();
+        let terrain = pipeline::Terrain::new(seed).expect("the description compiles");
+        let section = terrain.section(0, 0, 0).expect("the section generates");
+        let mut cell = None;
+        for y in 0..32 {
+            for z in 0..32 {
+                for x in 0..32 {
+                    if section.get(x, y, z) != 0 {
+                        cell = Some((x, y, z));
+                        break;
+                    }
+                }
+                if cell.is_some() {
+                    break;
+                }
+            }
+            if cell.is_some() {
+                break;
+            }
+        }
+        let (x, y, z) = cell.expect("the spawn section has a solid block");
+        let old = pack
+            .name(section.get(x, y, z))
+            .expect("the block has a name");
+        let record = editlog::Edit::record(
+            [
+                i32::try_from(x).unwrap_or(0),
+                i32::try_from(y).unwrap_or(0),
+                i32::try_from(z).unwrap_or(0),
+            ],
+            old,
+            "core:air",
+            1,
+            0,
+            0,
+            0,
+        )
+        .expect("the edit records");
+        let batch = editlog::EditBatch::new(1, 0, vec![record]);
+        let replayed = replay_saved_sections(
+            Vec::new(),
+            std::slice::from_ref(&batch),
+            0,
+            &pack,
+            None,
+            Some(&terrain),
+        );
+        assert_eq!(replayed.applied, 1);
+        assert_eq!(replayed.revision, 1);
+        assert_eq!(replayed.sections, 1, "the missing section was regenerated");
+        assert_eq!(replayed.saved[0].section.get(x, y, z), 0);
+    }
 
-        assert!(app.poll_stream(), "the cached tile has ground");
-        assert_eq!(
-            app.terrain_demo.as_ref().map(demo_tile),
-            Some((-4, 0)),
-            "the cached tile is active"
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn the_ring_caps_generation_and_gates_on_the_centre() {
+        let seed = 0x5EED;
+        let column = IVec2::new(2, -3);
+        let hydro = pipeline::Terrain::new(seed)
+            .expect("the description compiles")
+            .solve_world_hydro()
+            .expect("the hydrology solves");
+        let demo = TerrainDemo::empty(seed, column, hydro);
+        let mut app = App::with_world(World::default(), true);
+        app.terrain_ring = Some(RingStream::new(&demo, Vec::new(), 2));
+        app.terrain_demo = Some(demo);
+        app.player.position = Vec3::new(
+            column.x as f32 * 32.0 + 16.5,
+            64.0,
+            column.y as f32 * 32.0 + 16.5,
+        );
+
+        // The centre column starts unready, so physics refuses movement.
+        assert!(
+            !app.terrain_demo
+                .as_ref()
+                .is_some_and(|demo| demo.aabb_ready(app.player.position))
+        );
+        app.poll_ring();
+        let in_flight = &app
+            .terrain_ring
+            .as_ref()
+            .expect("the ring exists")
+            .in_flight;
+        assert_eq!(in_flight.len(), 2, "two columns per frame");
+        assert!(
+            in_flight.contains(&(column.x, column.y)),
+            "the centre column is generated first"
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !app.terrain_demo.as_ref().is_some_and(|demo| {
+            demo.column_ready((column.x, column.y)) && demo.fine.contains_key(&(column.x, column.y))
+        }) {
+            assert!(
+                Instant::now() < deadline,
+                "the centre column did not become ready"
+            );
+            app.poll_ring();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let demo = app.terrain_demo.as_ref().expect("the demo exists");
+        assert!(demo.spawn_ready, "the spawn surface was measured");
+        assert!(
+            demo.fine.contains_key(&(column.x, column.y)),
+            "the centre column was meshed at LOD0"
         );
         assert!(
-            app.terrain_cache.contains_key(&(0, 0)),
-            "the old tile stays cached for a swap back"
+            demo.sections.iter().any(|active| {
+                active.scale == 1
+                    && active.origin[0].div_euclid(32) == column.x
+                    && active.origin[2].div_euclid(32) == column.y
+            }),
+            "the centre column's mesh is in the active render set"
+        );
+        assert!(
+            demo.aabb_ready(demo.spawn),
+            "the centre column now accepts movement"
+        );
+    }
+
+    #[test]
+    fn a_new_column_relights_and_remeshes_its_neighbour_border() {
+        let stone: Arc<[section::Section; COLUMN_SECTIONS]> =
+            Arc::new(std::array::from_fn(|_| section::Section::uniform(1)));
+        let air: Arc<[section::Section; COLUMN_SECTIONS]> =
+            Arc::new(std::array::from_fn(|_| section::Section::uniform(0)));
+        let mut columns = ColumnMap::new();
+        columns.insert((0, 0), stone);
+        columns.insert((1, 0), air);
+        let built = build_column(BuildJob {
+            centre: (1, 0),
+            full: true,
+            detailed: true,
+            columns,
+            previous_light: BTreeMap::new(),
+            fine_columns: BTreeSet::from([(0, 0)]),
+            materials: Arc::new(demo_materials()),
+            light_table: Arc::new(demo_light_table()),
+        });
+
+        assert!(
+            built.light.contains_key(&(0, 0)),
+            "the present neighbour is relit"
+        );
+        assert!(
+            built
+                .patches
+                .get(&(0, 0))
+                .is_some_and(|patches| !patches.is_empty()),
+            "the neighbour's border sections are remeshed"
+        );
+        assert!(
+            built.replace.contains_key(&(1, 0)),
+            "the new column is meshed at LOD0"
+        );
+    }
+
+    #[test]
+    fn the_ring_evicts_beyond_the_margin_but_keeps_unsaved_edits() {
+        let seed = 0x5EED;
+        let column = IVec2::new(0, 0);
+        let hydro = pipeline::Terrain::new(seed)
+            .expect("the description compiles")
+            .solve_world_hydro()
+            .expect("the hydrology solves");
+        let mut demo = TerrainDemo::empty(seed, column, hydro);
+        demo.view_radius = 0;
+        for key in [(0, 0), (5, 0), (6, 0)] {
+            demo.insert_column(key, std::array::from_fn(|_| section::Section::uniform(0)));
+        }
+        demo.unsaved.insert((6, 0));
+        let mut app = App::with_world(World::default(), true);
+        app.terrain_ring = Some(RingStream::new(&demo, Vec::new(), 1));
+        app.terrain_demo = Some(demo);
+        app.player.position = Vec3::new(16.5, 64.0, 16.5);
+
+        app.poll_ring();
+        let demo = app.terrain_demo.as_ref().expect("the demo exists");
+        assert!(
+            !demo.columns.contains_key(&(5, 0)),
+            "a column beyond radius + 2 is evicted"
+        );
+        assert!(
+            demo.columns.contains_key(&(6, 0)),
+            "an edit whose save is not queued is never evicted"
+        );
+        assert!(
+            demo.columns.contains_key(&(0, 0)),
+            "the player's column stays resident"
         );
     }
 
@@ -3652,18 +4652,15 @@ mod tests {
         let tile_ms = tiled.elapsed().as_secs_f64() * 1000.0;
 
         let generated = Instant::now();
-        let columns = demo_columns_extent(
-            0x5EED,
-            0,
-            3,
-            0,
-            3,
-            &pipeline::Terrain::new(0x5EED)
-                .expect("the v1 description compiles")
-                .solve_world_hydro()
-                .expect("the world hydrology solves"),
-        )
-        .expect("the tile generates");
+        let hydro = pipeline::Terrain::new(0x5EED)
+            .expect("the v1 description compiles")
+            .solve_world_hydro()
+            .expect("the world hydrology solves");
+        let columns: BTreeMap<_, _> = demo_columns_extent(0x5EED, 0, 3, 0, 3, &hydro)
+            .expect("the tile generates")
+            .into_iter()
+            .map(|(key, stack)| (key, Arc::new(stack)))
+            .collect();
         let generate_ms = generated.elapsed().as_secs_f64() * 1000.0;
 
         let lit = Instant::now();
@@ -3672,7 +4669,13 @@ mod tests {
 
         let meshed = Instant::now();
         let materials = demo_materials();
-        let (sections, quads, _, _) = demo_mesh(&columns, &light, &materials);
+        let fine = demo_fine_all(&columns, &light, &materials);
+        let sections: usize = fine.values().map(Vec::len).sum();
+        let quads: usize = fine
+            .values()
+            .flatten()
+            .map(|section| mesher2::quad_count(&section.mesh))
+            .sum();
         let mesh_ms = meshed.elapsed().as_secs_f64() * 1000.0;
 
         let coarse_started = Instant::now();
@@ -3680,8 +4683,7 @@ mod tests {
         let coarse_ms = coarse_started.elapsed().as_secs_f64() * 1000.0;
 
         eprintln!(
-            "demo build: terrain={terrain_ms:.0}ms tile={tile_ms:.0}ms generate={generate_ms:.0}ms light={light_ms:.0}ms mesh={mesh_ms:.0}ms coarse={coarse_ms:.0}ms | {} fine, {} coarse, {quads} quads",
-            sections.len(),
+            "demo build: terrain={terrain_ms:.0}ms tile={tile_ms:.0}ms generate={generate_ms:.0}ms light={light_ms:.0}ms mesh={mesh_ms:.0}ms coarse={coarse_ms:.0}ms | {sections} fine, {} coarse, {quads} quads",
             coarse.len()
         );
         assert!(quads > 0);
@@ -3792,12 +4794,12 @@ mod tests {
         );
 
         demo.apply_rebuild(rebuild);
-        let (expected_sections, _, _, _) =
-            demo_mesh(&demo.columns, &expected_light, &demo.materials);
-        let expected: BTreeMap<[i32; 3], mesher2::SectionMesh> = expected_sections
-            .into_iter()
-            .map(|section| (section.origin, section.mesh))
-            .collect();
+        let expected: BTreeMap<[i32; 3], mesher2::SectionMesh> =
+            demo_fine_all(&demo.columns, &expected_light, &demo.materials)
+                .into_values()
+                .flatten()
+                .map(|section| (section.origin, section.mesh))
+                .collect();
         let actual: BTreeMap<[i32; 3], mesher2::SectionMesh> = demo
             .sections
             .iter()

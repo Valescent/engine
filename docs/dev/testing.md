@@ -53,7 +53,7 @@ CI also runs dependency licence and advisory checks, commit message checks, and 
 
 ## Current coverage
 
-The headless suite covers **636 library tests** (2 ignored), **3** `light_preview`, and **24**
+The headless suite covers **643 library tests** (2 ignored), **3** `light_preview`, and **30**
 `terrain_gen` integration tests. Highlights:
 
 - Camera look direction, yaw/pitch clamping, and angle wrapping.
