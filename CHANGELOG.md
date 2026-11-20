@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Generation version 2: hydrology solves the whole finite world once (512×512 macro cells) instead of per 512-block tile, and every worker shares that solve, so a lake or river that crosses a tile seam has one level. Version 1 worlds are refused rather than regenerated with different water. Cost is ~165 ms once per seed; demo startup is ~0.97 s.
 - `tracy` is a default feature, so a debug run captures to `reports/tracy/` unless `TRACY_CAPTURE_SECONDS=0`; CI builds every cargo command with `--no-default-features`.
 
 ### Fixed

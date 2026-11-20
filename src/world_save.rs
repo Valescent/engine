@@ -30,7 +30,10 @@ use crate::section::{SavedSection, Section, SectionKey};
 /// Canonical generation parameters, beside the header.
 pub const DESCRIPTION_FILE: &str = "description.toml";
 /// Generator version this build writes and reads (`T1.2`).
-pub const GENERATOR_VERSION: u16 = 1;
+///
+/// Version 2 solves hydrology over the whole finite world instead of per tile,
+/// so lake and river levels at a 512-block seam can differ from version 1.
+pub const GENERATOR_VERSION: u16 = 2;
 /// One-past-the-active counter for unique world ids within this process.
 static NEXT_WORLD: AtomicU64 = AtomicU64::new(0);
 

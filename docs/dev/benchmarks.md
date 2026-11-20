@@ -392,6 +392,15 @@ Release build, 12 logical cores, `TERRAIN_DEMO=1`, 128x128 one-tile patch. Measu
 | Coarse LOD meshing | 45 ms |
 | **Startup build** | **~0.89 s** |
 
+With world-mode hydrology (generator version 2) the demo solves hydrology once and shares it:
+
+| Phase | Time |
+|---|---:|
+| Sample 262,144 macro heights | 66 ms |
+| Priority flood, D8, accumulation, lakes | 98 ms |
+| **One shared solve** | **~165 ms** |
+| **Startup build** | **~0.97 s** |
+
 | Edit rebuild (surface break) | Before | After |
 |---|---:|---:|
 | Sections remeshed | 27 | **1** |

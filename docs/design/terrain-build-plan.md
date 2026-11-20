@@ -108,7 +108,7 @@ still unimplemented, in dependency order. Nothing here blocks the terrain engine
 | 3 | Frozen `versions.toml` + deprecation dialog | Policy specified (T1.12); no table or UI | Needed before the first generator bump |
 | 4 | Panic/deadline wrapper around jobs (`S1.2`, `S1.3`) | Jobs are plain functions; no watchdog | Wrap with `catch_unwind` and the soft deadline |
 | 5 | Demo integration: real light, texture refs, collision, streaming, LOD | `TERRAIN_DEMO` uses real column light, collision, edits, per-edit saves, and distance LOD1; tiles stream with prefetched neighbours; per-face texture references resolve to procedural layers (`ADR-0015`) | An asset pipeline to replace the placeholder layers |
-| 6 | World-mode hydrology wiring | `WorldHydro` + `tile_view` implemented and tested | Type/ownership change in `pipeline.rs` |
+| 6 | World-mode hydrology wiring | `Terrain::hydro_tile` returns a view of one `WorldHydro` solve, shared by every worker; generator version 2 | None |
 | 7 | Camera-relative rendering (§14.3) | Specified; camera is world-space | Camera-wide change; the draw path already matches the current convention |
 | 8 | `terrain-gen map`, report bundle, `calibrate-blend`, PR counter gate | `map --seed --from --size --cell` (ASCII surface map, `--json`); `verify --report <dir>` writes `manifest.json`, `verify.json`, and `verify.txt` | Add `calibrate-blend`, then the PR counter gate |
 | 9 | Split `terrain-core` from `engine` | Deferred; `terrain-gen` links `wgpu` today | Enables the `Q1.9` crate-graph check |
@@ -128,7 +128,7 @@ deliberately exits 1 when a scenario exceeds its budget.
 | W0 hash, errors, description | done (`src/hash.rs`, `src/error.rs`, `src/description.rs`); SHA-256 + SplitMix64, canonical bytes, strict schema |
 | W1 section storage | done (`src/section.rs`); `Uniform`/`Paletted`, bit widths, `solid` count deviation recorded |
 | W2 lattice, noise, curves, graph | done; measured `NOISE_BOUND_2D = 1.019_993_3`, `3D = 1.019_797_9` |
-| W3 hydrology | done for tile mode; world mode and border unit in progress |
+| W3 hydrology | done: one world-mode solve, shared by workers |
 | W4a strata | done; `stone_at`/`stone_in` equivalence tested |
 | W4b height, surface | done except sea-floor bands (in progress) |
 | W4c climate, biomes | done except the v1 table (in progress) |
@@ -158,7 +158,7 @@ gates pass on a tree that compiles.
 | W14 | Renderer quad path: vertex-pulled 8-byte records, opaque + water, camera-relative | `src/renderer.rs`, `src/terrain_draw.wgsl` | **done** — naga-validated shader, `decode_quad` tests; not yet called from the app |
 | W15 | `terrain-gen verify` + `replay` + `repair` | `src/bin/terrain-gen.rs`, `tests/terrain_gen.rs` | **done** — 24 tests; canonical v2 record via `decode_record_at`; one shared `baseline_hash`; repair actions |
 | W16 | Content ids + v1 biome table + goldens | `src/content.rs`, `src/pipeline.rs` | **done** |
-| W17 | Close `OPEN` markers: sea-floor bands, cave windows, humidity order, world-mode hydrology | `src/surface.rs`, `src/volume.rs`, `src/climate.rs`, `src/hydro/mod.rs`, `src/hydro/lake.rs` | **done** — world mode implemented, not wired; bands now wired in the pipeline |
+| W17 | Close `OPEN` markers: sea-floor bands, cave windows, humidity order, world-mode hydrology | `src/surface.rs`, `src/volume.rs`, `src/climate.rs`, `src/hydro/mod.rs`, `src/hydro/lake.rs` | **done** - world mode solved once and wired through `hydro_tile` (generator version 2); bands now wired in the pipeline |
 | W18 | Strict `description.toml` reader/emitter | `src/description.rs` | **done** — 22 tests |
 | W19 | Mesher: 26-neighbour AO + skirt quads | `src/mesher2.rs` | **done** — 30 tests; record layout unchanged |
 | W20 | Features: uniform-air sections, water margin, no growth | `src/features/mod.rs`, `src/features/tree.rs` | **done** — gate also wired in `pipeline.rs` |
@@ -169,13 +169,11 @@ gates pass on a tree that compiles.
 
 Queued next:
 
-1. **Wire world-mode hydrology.** `Terrain::hydro_tile` still calls `HydroTile::solve` with zero
-   inflow; `WorldHydro` + `tile_view` exists and is tested. Type/ownership change only.
-2. **Residency-driven ring streaming.** Tiles stream in 128x128 units with prefetched neighbours; residency and the streaming ring are not the caller yet.
-3. **Texture art.** Per-face references and the mesher wiring are done (`ADR-0015`);
+1. **Residency-driven ring streaming.** Tiles stream in 128x128 units with prefetched neighbours; residency and the streaming ring are not the caller yet.
+2. **Texture art.** Per-face references and the mesher wiring are done (`ADR-0015`);
    `demo_texture_layer` still maps names onto eleven procedural placeholder layers.
-4. **Persistence follow-ups:** a decoder for an older section record format, and a richer world-repair dialog.
-5. `terrain-gen calibrate-blend`; then the PR counter gate (R1.8).
+3. **Persistence follow-ups:** a decoder for an older section record format, and a richer world-repair dialog.
+4. `terrain-gen calibrate-blend`; then the PR counter gate (R1.8).
 
 Verification at the 2026-11-19 merge point: `fmt`, `clippy --all-targets`,
 `cargo test` (629 lib, 2 ignored, 3 light_preview, 24 integration), `golden check`, `sweep --tier pr`, and
@@ -201,7 +199,7 @@ prove; none is silently accepted.
 | W23 section record | Re-encoding a **degraded** section would replace original unknown names with `?unknown:<id>` (`T1.6`) | Papered over by policy, not code: a world with unknown names loaded is **read-only** (no edits, no journal, no saves), so the round trip stays lossless. A name-override map is optional polish, not required |
 | W23 section record | Unknown ids encode as the diagnostic name `?unknown:<id>`, unreachable by that policy | Same; only reachable if the read-only rule is bypassed |
 | W21 journal | Writer and policy land; the IO thread that drives them does not exist. `flush_if_due` does at most one `write_all`; a partial append is session-fatal and recovered on reopen; the 10 s barrier only fires during a flush | Wire when the save writer lands |
-| W17 hydro | v1 ships tile mode; §7.1 now states it and the basin cap. `WorldHydro` + `tile_view` is queued as the v1.1 upgrade | Wire when seamless lakes matter; type change only |
+| W17 hydro | v1 ships world mode: one 512x512-cell solve, shared by every worker, wired through `hydro_tile`. Tile mode remains for tiles outside the solved grid | A generator version bump is required for any further change to levels |
 | W17 constants | `T_COLD_SHORE`, `T_COLD_SHELF`, and the clay-patch share are code constants; §2.1 now allows a generator-pinned constant | Changing any of them is a generator version bump |
 | W18 description | `[meta]` must be the last table; earlier placement yields a "missing key" error | Document "meta last" or improve the error |
 | W18 description | Accepts legacy bare strings/refs alongside quoted | Keep both; quoted is canonical |

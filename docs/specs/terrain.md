@@ -1430,9 +1430,12 @@ raymarched world models, isosurface meshing, and infinite ungenerated worlds.
 No open design questions remain. Each item below is deliberate, stated where it belongs, and does not
 contradict a MUST elsewhere in this document.
 
-- **Tile-mode hydrology** (§7.1): a basin larger than the 16-cell halo can be under-counted at a tile
-  seam. World mode is designed (`hydro::WorldHydro`) and queued; basins inside the halo are
-  seam-independent and tested.
+- **Hydrology is world mode** (§7.1): one solve over the 512×512-cell finite world, shared by every
+  worker, so a basin or river that crosses a 512-block tile seam has one level. This is generator
+  version 2. Tile mode remains for tiles outside the solved grid, where the 16-cell halo still
+  applies.
+- **Only generator version 2 ships.** No frozen evaluator for version 1 is implemented yet, so a
+  world pinned to version 1 is refused rather than regenerated with slightly different hydrology.
 - **Snow is a full cube** (§10.5); `snow_layer` step geometry is deferred (§22).
 - **Cold beach uses sand** for both temperature variants (§8.5).
 - **Persistence** (16): section files, one-generation backup rotation, the journal file, replay,

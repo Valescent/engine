@@ -57,7 +57,9 @@ derived state, runtime config, or per-section data.
 2. `format_version` must be one this build reads.
 3. `description.toml` must exist and parse.
 4. Recompute `description_hash` and compare.
-5. `generator_version` must be shipped (or the world opens only through the migration dialog).
+5. `generator_version` must be shipped (or the world opens only through the migration dialog). This
+   build ships version 2 (world-mode hydrology); a version 1 world is refused, because its water
+   levels would change.
 6. Validate the content pack against the pinned records. Textures are excluded from
    `record_hash`, so a re-texture never fails this check (`ADR-0015`).
 7. Recover the journal (below).

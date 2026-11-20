@@ -63,6 +63,8 @@
 use crate::description::{HYDRO_BORDER, HYDRO_TILE, MACRO_CELL, RIVER_MIN_CELLS};
 use crate::error::{ErrorKind, Stage, TerrainError};
 
+use std::sync::Arc;
+
 pub mod flood;
 pub mod flow;
 pub mod lake;
@@ -542,6 +544,66 @@ impl WorldTileView<'_> {
                 })
             })
         })
+    }
+}
+
+/// An owned tile-shaped view of a solved [`WorldHydro`].
+///
+/// [`WorldTileView`] borrows the solved grid; a cache needs to keep the grid
+/// alive without a lifetime parameter, so this holds the same view over an
+/// [`Arc`]. Local cell coordinates are identical to [`HydroTile`]'s and to
+/// [`WorldTileView`]'s.
+#[derive(Clone, Debug)]
+pub struct OwnedWorldTile {
+    world: Arc<WorldHydro>,
+    /// Global cell of the first owned cell, not of the local origin.
+    origin_x: i32,
+    origin_z: i32,
+}
+
+impl OwnedWorldTile {
+    /// Wraps `tile_x`/`tile_z`, or returns `None` when the tile is not wholly
+    /// inside the solved world.
+    #[must_use]
+    pub fn new(world: Arc<WorldHydro>, tile_x: i32, tile_z: i32) -> Option<Self> {
+        world.tile_view(tile_x, tile_z)?;
+        Some(Self {
+            origin_x: tile_x.checked_mul(TILE_CELLS)?,
+            origin_z: tile_z.checked_mul(TILE_CELLS)?,
+            world,
+        })
+    }
+
+    fn view(&self) -> WorldTileView<'_> {
+        WorldTileView {
+            world: &self.world,
+            origin_x: self.origin_x,
+            origin_z: self.origin_z,
+        }
+    }
+
+    /// Pre-detail macro height at a local cell.
+    #[must_use]
+    pub fn height(&self, x: i32, z: i32) -> f32 {
+        self.view().height(x, z)
+    }
+
+    /// Flood surface at a local cell.
+    #[must_use]
+    pub fn filled(&self, x: i32, z: i32) -> f32 {
+        self.view().filled(x, z)
+    }
+
+    /// Lake surface at a local cell, or `0` when dry.
+    #[must_use]
+    pub fn lake_level(&self, x: i32, z: i32) -> i32 {
+        self.view().lake_level(x, z)
+    }
+
+    /// Channel width in blocks at a local cell.
+    #[must_use]
+    pub fn river_width(&self, x: i32, z: i32) -> f32 {
+        self.view().river_width(x, z)
     }
 }
 

@@ -29,7 +29,7 @@ repairs use `world/terrain-demo/`; the legacy `world/chunks/` path is untouched.
 |---|---|
 | `src/description.rs`, `src/header.rs`, `src/section.rs` | World identity, header bytes, section records |
 | `src/graph/`, `src/pipeline.rs`, `src/height.rs`, `src/surface.rs`, `src/strata.rs`, `src/climate.rs`, `src/volume.rs` | Generation from description to columns |
-| `src/features/`, `src/hydro/` | Trees/ore/scatter and tile-mode hydrology |
+| `src/features/`, `src/hydro/` | Trees/ore/scatter and world-mode hydrology (`WorldHydro`, one solve shared by workers) |
 | `src/light2.rs`, `src/padded.rs` | Column light, incremental repair, shared padded scratch |
 | `src/mesher2.rs`, `src/lod.rs` | Greedy section meshing, coarse downsample, skirts |
 | `src/section.rs`, `src/lod.rs`, `src/revisions.rs`, `src/residency.rs`, `src/editlog.rs` | Section storage, LOD derivation, revisions, residency policy, edit journal |
@@ -64,6 +64,16 @@ keyed and sorted, so worker order cannot change the patch.
   `y = 0` because a block moves the sky seed below it, neighbours only around the edit.
 - `section_differs` drives the remesh set: every section whose light changed plus the sections
   touched by the edited block's 26-block neighbourhood.
+
+## Hydrology
+
+- One `WorldHydro` solve covers the finite world (512×512 macro cells) and is installed on every
+  worker's `Terrain`, so lakes and rivers that cross a 512-block tile seam have one level.
+- Measured cost: ~66 ms to sample 262,144 macro heights plus ~98 ms to flood, route, accumulate, and
+  find lakes (~165 ms once per seed).
+- `hydro_tile` returns a view when the tile is inside the solved grid and falls back to a standalone
+  tile solve outside it.
+- This is generator version 2: a version 1 world is refused rather than regenerated.
 
 ## Meshing and LOD
 
@@ -131,7 +141,7 @@ cargo test --locked
 cargo run --locked --quiet --bin terrain-gen -- golden check
 ```
 
-Current local count: **629 lib tests** (2 ignored), **3** `light_preview`, **24** `terrain_gen`
+Current local count: **636 lib tests** (2 ignored), **3** `light_preview`, **24** `terrain_gen`
 integration tests.
 
 ## Known gaps
@@ -142,5 +152,4 @@ integration tests.
 - Residency-driven ring streaming (16-column view radius) is not wired; the demo pages tiles.
 - No normative older section record exists, so migration fixtures cannot be added yet.
 - Camera-relative rendering (spec 14.3) is not applied.
-- World-mode hydrology (`hydro::WorldHydro`) is implemented but not wired.
 - LOD2, skirts on every fine/coarse transition, and a visible loading indicator are not done.

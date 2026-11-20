@@ -31,6 +31,8 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::climate::{Biome, BiomeTable, Climate, ClimateParams, ClimateTile, MacroCells};
@@ -300,7 +302,52 @@ pub struct Terrain {
     /// Distinct LOD0 columns with at least one generated section (`N1.4`).
     lod0_columns: RefCell<BTreeSet<(i32, i32)>>,
     tiles: RefCell<BTreeMap<(i32, i32), std::rc::Rc<TileData>>>,
-    hydro: RefCell<BTreeMap<(i32, i32), std::rc::Rc<HydroTile>>>,
+    hydro: RefCell<BTreeMap<(i32, i32), HydroTileRef>>,
+    /// The one whole-world hydrology result, solved on first use and shared
+    /// with every worker that installs it ([Terrain::with_world_hydro]).
+    world_hydro: RefCell<Option<Arc<hydro::WorldHydro>>>,
+}
+
+/// The hydrology result for one tile (D8.2).
+///
+/// World mode is the v1 path: the tile is a view of one solve over
+/// [hydro::WORLD_SIDE_CELLS], so a basin that crosses a tile seam has one
+/// level. Tile mode remains for tiles outside that grid.
+#[derive(Clone, Debug)]
+pub enum HydroTileRef {
+    /// A tile solved on its own, with zero boundary inflow.
+    Tile(Rc<HydroTile>),
+    /// A tile-shaped view of the whole-world solve.
+    World(hydro::OwnedWorldTile),
+}
+
+impl HydroTileRef {
+    /// Pre-detail macro height at a local cell.
+    #[must_use]
+    pub fn height(&self, x: i32, z: i32) -> f32 {
+        match self {
+            Self::Tile(tile) => tile.height(x, z),
+            Self::World(tile) => tile.height(x, z),
+        }
+    }
+
+    /// Lake surface at a local cell, or   when dry.
+    #[must_use]
+    pub fn lake_level(&self, x: i32, z: i32) -> i32 {
+        match self {
+            Self::Tile(tile) => tile.lake_level(x, z),
+            Self::World(tile) => tile.lake_level(x, z),
+        }
+    }
+
+    /// Channel width in blocks at a local cell.
+    #[must_use]
+    pub fn river_width(&self, x: i32, z: i32) -> f32 {
+        match self {
+            Self::Tile(tile) => tile.river_width(x, z),
+            Self::World(tile) => tile.river_width(x, z),
+        }
+    }
 }
 
 impl std::fmt::Debug for Terrain {
@@ -419,6 +466,7 @@ impl Terrain {
             lod0_columns: RefCell::new(BTreeSet::new()),
             tiles: RefCell::new(BTreeMap::new()),
             hydro: RefCell::new(BTreeMap::new()),
+            world_hydro: RefCell::new(None),
         })
     }
 
@@ -601,23 +649,84 @@ impl Terrain {
         ))
     }
 
-    /// Hydro tile covering a 512-block square, solved with zero boundary inflow.
+    /// Hydro tile covering a 512-block square.
     ///
-    /// `OPEN(D8.2)` nothing produces the integer inflow across a tile seam yet, so
-    /// accumulation restarts at every 512-block edge.
+    /// v1 uses world mode (`D8.2`): the first call solves the whole finite
+    /// world once and every tile reads a view of that result, so a basin is
+    /// never cut at a tile seam. A tile outside the solved world falls back to a
+    /// standalone solve with zero boundary inflow.
     ///
     /// # Errors
     ///
-    /// Propagates `HydroTile::solve` failures.
-    pub fn hydro_tile(
-        &self,
-        hydro_x: i32,
-        hydro_z: i32,
-    ) -> Result<std::rc::Rc<HydroTile>, TerrainError> {
+    /// Propagates `WorldHydro::solve` and `HydroTile::solve` failures.
+    pub fn hydro_tile(&self, hydro_x: i32, hydro_z: i32) -> Result<HydroTileRef, TerrainError> {
         if let Some(cached) = self.hydro.borrow().get(&(hydro_x, hydro_z)) {
-            return Ok(std::rc::Rc::clone(cached));
+            return Ok(cached.clone());
         }
         let hydro_started = Instant::now();
+        let world = self.world_hydro()?;
+        let tile = match hydro::OwnedWorldTile::new(Arc::clone(&world), hydro_x, hydro_z) {
+            Some(view) => HydroTileRef::World(view),
+            None => {
+                let side = hydro::SIDE;
+                let heights = self.tile_heights(hydro_x, hydro_z);
+                let inflow = vec![0_u32; (side * side) as usize];
+                HydroTileRef::Tile(Rc::new(HydroTile::solve(&heights, &inflow)?))
+            }
+        };
+        // Diagnostics only, taken after the solve returned.
+        self.counters
+            .record_latency(Stage::Hydrology, micros(hydro_started));
+        self.hydro
+            .borrow_mut()
+            .insert((hydro_x, hydro_z), tile.clone());
+        Ok(tile)
+    }
+
+    /// Installs one solved world, so every worker shares a single solve.
+    #[must_use]
+    pub fn with_world_hydro(mut self, world: Arc<hydro::WorldHydro>) -> Self {
+        *self.world_hydro.get_mut() = Some(world);
+        self
+    }
+
+    /// Solves the whole finite world at [`hydro::WORLD_SIDE_CELLS`].
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`hydro::WorldHydro::solve`].
+    pub fn solve_world_hydro(&self) -> Result<Arc<hydro::WorldHydro>, TerrainError> {
+        let side = hydro::WORLD_SIDE_CELLS;
+        let cells = usize::try_from(side * side).expect("the world grid fits usize");
+        let half = side / 2;
+        let mut heights = vec![0.0_f32; cells];
+        for z in 0..side {
+            for x in 0..side {
+                let cell_x = x - half;
+                let cell_z = z - half;
+                let block_x = f32::from(i16::try_from(cell_x * MACRO_CELL + 2).unwrap_or(0));
+                let block_z = f32::from(i16::try_from(cell_z * MACRO_CELL + 2).unwrap_or(0));
+                heights[(x + side * z) as usize] = self.macro_height(block_x, block_z);
+            }
+        }
+        Ok(Arc::new(hydro::WorldHydro::solve(
+            &heights,
+            usize::try_from(side).expect("the world grid side fits usize"),
+        )?))
+    }
+
+    /// The cached whole-world result, solved on first use.
+    fn world_hydro(&self) -> Result<Arc<hydro::WorldHydro>, TerrainError> {
+        if let Some(world) = self.world_hydro.borrow().as_ref() {
+            return Ok(Arc::clone(world));
+        }
+        let world = self.solve_world_hydro()?;
+        *self.world_hydro.borrow_mut() = Some(Arc::clone(&world));
+        Ok(world)
+    }
+
+    /// Heights for one standalone tile, halo included.
+    fn tile_heights(&self, hydro_x: i32, hydro_z: i32) -> Vec<f32> {
         let side = hydro::SIDE;
         let mut heights = vec![0.0_f32; (side * side) as usize];
         for z in 0..side {
@@ -629,15 +738,7 @@ impl Terrain {
                 heights[(x + side * z) as usize] = self.macro_height(block_x, block_z);
             }
         }
-        let inflow = vec![0_u32; (side * side) as usize];
-        let tile = std::rc::Rc::new(HydroTile::solve(&heights, &inflow)?);
-        // Diagnostics only, taken after the solve returned.
-        self.counters
-            .record_latency(Stage::Hydrology, micros(hydro_started));
-        self.hydro
-            .borrow_mut()
-            .insert((hydro_x, hydro_z), std::rc::Rc::clone(&tile));
-        Ok(tile)
+        heights
     }
 
     /// Macro height at a block position, `f32` throughout (`C3.5`).
@@ -746,7 +847,7 @@ impl Terrain {
             .record_latency(Stage::Volume, micros(volume_started));
         let water_level = SEA
             .max(lake_level)
-            .max(river_level(hydro.as_ref(), hydro_x, hydro_z));
+            .max(river_level(&hydro, hydro_x, hydro_z));
         for y in (top + 1).max(1)..=water_level.min(WORLD_HEIGHT as i32 - 1) {
             let index = y as usize;
             if column[index] == self.materials.air {
@@ -1126,7 +1227,7 @@ fn quantise(height: f32, step: f32) -> f32 {
     SEA as f32 + k * step
 }
 
-fn river_level(hydro: &HydroTile, hydro_x: i32, hydro_z: i32) -> i32 {
+fn river_level(hydro: &HydroTileRef, hydro_x: i32, hydro_z: i32) -> i32 {
     let width = hydro.river_width(hydro_x, hydro_z);
     if width <= 0.5 {
         return i32::MIN;
@@ -1182,6 +1283,38 @@ mod tests {
         // A fifth climate biome (for example `ocean` or `beach`) would show up.
         let rendered = format!("{table:?}");
         assert_eq!(rendered.matches("Biome {").count(), 4, "{rendered}");
+    }
+
+    #[test]
+    fn hydro_tiles_read_the_whole_world_solve() {
+        let terrain = terrain();
+        let inside = terrain.hydro_tile(0, 0).unwrap();
+        assert!(
+            matches!(inside, HydroTileRef::World(_)),
+            "an in-grid tile must use world mode"
+        );
+
+        // The solved grid is -4..3 tiles; 4 is wholly outside it.
+        let outside = terrain.hydro_tile(4, 4).unwrap();
+        assert!(
+            matches!(outside, HydroTileRef::Tile(_)),
+            "a tile outside the world falls back to tile mode"
+        );
+    }
+
+    #[test]
+    fn an_installed_world_hydro_is_shared_by_workers() {
+        let terrain = terrain();
+        let world = terrain.solve_world_hydro().unwrap();
+        let other = Terrain::new(0x5EED)
+            .unwrap()
+            .with_world_hydro(Arc::clone(&world));
+
+        let (x, z) = (7, -13);
+        assert_eq!(
+            terrain.hydro_tile(0, 0).unwrap().river_width(x, z),
+            other.hydro_tile(0, 0).unwrap().river_width(x, z)
+        );
     }
 
     #[test]

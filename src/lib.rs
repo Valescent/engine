@@ -988,12 +988,21 @@ fn build_terrain_demo_extent(
     last_saved: u64,
 ) -> Result<(TerrainDemo, DemoReplay), error::TerrainError> {
     let started = Instant::now();
-    let terrain = pipeline::Terrain::new(seed)?;
+    let world_hydro = std::sync::Arc::new(pipeline::Terrain::new(seed)?.solve_world_hydro()?);
+    let terrain =
+        pipeline::Terrain::new(seed)?.with_world_hydro(std::sync::Arc::clone(&world_hydro));
     let materials = demo_materials();
     let pack = content::v1_default();
     let section_blocks = i32::try_from(description::SECTION_SIZE).expect("SECTION_SIZE fits i32");
 
-    let mut columns = demo_columns_extent(seed, min_x, max_x, min_z, max_z)?;
+    let mut columns = demo_columns_extent(
+        seed,
+        min_x,
+        max_x,
+        min_z,
+        max_z,
+        std::sync::Arc::clone(&world_hydro),
+    )?;
     let mut baselines = BTreeMap::new();
     let mut read_only = false;
     for record in saved {
@@ -1220,6 +1229,7 @@ fn demo_columns_extent(
     max_x: i32,
     min_z: i32,
     max_z: i32,
+    world_hydro: std::sync::Arc<crate::hydro::WorldHydro>,
 ) -> Result<BTreeMap<(i32, i32), [section::Section; COLUMN_SECTIONS]>, error::TerrainError> {
     let section_count = i32::try_from(description::SECTIONS_PER_COLUMN).unwrap_or(12);
     let mut keys = Vec::new();
@@ -1238,8 +1248,9 @@ fn demo_columns_extent(
         let handles: Vec<_> = keys
             .chunks(chunk)
             .map(|chunk| {
+                let world_hydro = std::sync::Arc::clone(&world_hydro);
                 scope.spawn(move || -> Result<Vec<_>, error::TerrainError> {
-                    let terrain = pipeline::Terrain::new(seed)?;
+                    let terrain = pipeline::Terrain::new(seed)?.with_world_hydro(world_hydro);
                     let mut out = Vec::with_capacity(chunk.len());
                     for &(sx, sz) in chunk {
                         let mut stack = Vec::with_capacity(COLUMN_SECTIONS);
@@ -3648,7 +3659,18 @@ mod tests {
         let tile_ms = tiled.elapsed().as_secs_f64() * 1000.0;
 
         let generated = Instant::now();
-        let columns = demo_columns_extent(0x5EED, 0, 3, 0, 3).expect("the tile generates");
+        let columns = demo_columns_extent(
+            0x5EED,
+            0,
+            3,
+            0,
+            3,
+            pipeline::Terrain::new(0x5EED)
+                .expect("the v1 description compiles")
+                .solve_world_hydro()
+                .expect("the world hydrology solves"),
+        )
+        .expect("the tile generates");
         let generate_ms = generated.elapsed().as_secs_f64() * 1000.0;
 
         let lit = Instant::now();
@@ -4037,8 +4059,11 @@ mod tests {
                 assert!(quad.normal <= 7, "reserved quad normal code");
             }
         }
+        // A gross-regression guard, not a benchmark: the suite runs tests in
+        // parallel on shared cores, and one column also pays the first
+        // whole-world hydrology solve on this thread.
         assert!(
-            elapsed < Duration::from_secs(2),
+            elapsed < Duration::from_secs(10),
             "one-column demo build took {elapsed:?}"
         );
     }
