@@ -15,6 +15,8 @@ is the methodology; this page is the run log.
 | Engine run (v0.0.5) | Historical baseline; see [Engine run](#engine-run-v005-release) |
 | Engine run (v0.0.8) | Current; see [Engine run](#engine-run-v008-release) |
 | Terrain v1 demo | Current; see [Terrain v1 demo](#terrain-v1-demo-2026-11-20) |
+| Terrain blend calibration | Current; fails the v1 target; see [Terrain blend calibration](#terrain-blend-calibration-2026-11-20) |
+| Terrain PR counters | Current; gated by the `CI` terrain job; see [Terrain PR counters](#terrain-pr-counters-2026-11-20) |
 | Headless run (v0.0.8) | Current; gated by the `Perf` workflow |
 
 ## Run it
@@ -319,6 +321,56 @@ cost, not wall time.
 `resident_bytes` covers stored blocks and light fields only; meshes and GPU buffers are not
 included. The **Perf** workflow runs both scenes on every `main` push and gates on a generous
 budget (625 ready columns, mean under 20 ms, p95 under 50 ms, under 200 MB of blocks and light).
+## Terrain blend calibration (2026-11-20)
+
+`terrain-gen calibrate-blend` measures `W_blocks` from `w = 0.5` to `w = 0.95`, doubled, per
+unordered biome pair. The definition is in [Terrain tools](terrain-tools.md#calibrate-blend).
+This run used the whole 2048-block world window (`--from -1024 -1024 --size 2048`) and the
+default 16-block anchor stride on the shipped v1 `blend_width = 0.05`:
+
+```console
+cargo run --locked --quiet --no-default-features --bin terrain-gen -- calibrate-blend --seeds 3
+```
+
+| Pair | Transects | Median | p10 | p90 | Assessment |
+|---|---:|---:|---:|---:|---|
+| 0-1 (plains/forest) | 5,219 | 48.76 | 27.12 | 172.60 | fails median and p90 |
+| 0-2 (plains/desert) | 869 | 43.50 | 25.06 | 164.02 | fails median and p90 |
+| 0-3 (plains/tundra) | 1,118 | 71.52 | 33.08 | 278.26 | fails median and p90 |
+| 1-3 (forest/tundra) | 707 | 38.01 | 20.38 | 159.61 | fails median and p90 |
+| 2-3 (desert/tundra) | 5 | 47.71 | 30.45 | 78.53 | reported only (<20 transects) |
+
+The command exits `1`. The measured medians are about twice the `20-28` target, which is
+consistent with `blend_width = 0.05` being the documented **starting point**, not a measured
+value: halving `W_blocks` needs roughly `blend_width = 0.1`. The p90 spread is wider than the
+`<= 64` gate even after that scale change. The interview's `E3.6` answer records the intended
+follow-up: fix the data (biome centres and weights) first, and add the gradient-normalising term
+in a later version bump. Changing `blend_width` or the biome table changes generated blocks, so
+it is a separate, generator-versioned change with fresh goldens, sweeps, and counter baselines.
+
+The tool is therefore local-only for now and is not part of the `Terrain gates` job.
+
+## Terrain PR counters (2026-11-20)
+
+`counters --tier pr` pins the deterministic part of the `Q1.1` metric list for the 16 PR seeds.
+The checked-in baseline is `tests/golden/terrain-counters.json`; the selection rules are in
+[Terrain tools](terrain-tools.md#counters). The first baseline:
+
+| Counter | Value |
+|---|---:|
+| `blocks_air` | 579,022 |
+| `blocks_solid` | 182,722 |
+| `blocks_water` | 24,688 |
+| `columns` | 2,048 |
+| `lod0_columns` | 0 |
+| `queued_columns` | 0 |
+| `ready_columns` | 512 |
+| `resident_columns` | 512 |
+
+Wall-clock latencies, per-second rates, and runtime-only residency and worker-health counters are
+excluded because they are not deterministic for the headless workload. The baseline moved once
+for this change; later movements require `counters --tier pr --update` and a reason in the commit.
+
 ## 2026-11-17 runs
 
 - **Machine:** AMD Ryzen 5 7600, 6 cores / 12 logical processors, Windows 11 Home.

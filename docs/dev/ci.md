@@ -140,15 +140,30 @@ The `Terrain gates` job runs the headless generator on `ubuntu-latest` after the
 the only job that treats generated block output as an assertion:
 
 ```console
-cargo run --locked --quiet --bin terrain-gen -- golden check
-cargo run --locked --quiet --bin terrain-gen -- seams --window 5x5 --seeds 3
-cargo run --locked --quiet --bin terrain-gen -- sweep --tier pr
+cargo run --locked --quiet --no-default-features --bin terrain-gen -- golden check
+cargo run --locked --quiet --no-default-features --bin terrain-gen -- seams --window 5x5 --seeds 3
+cargo run --locked --quiet --no-default-features --bin terrain-gen -- sweep --tier pr
+cargo run --locked --quiet --no-default-features --bin terrain-gen -- counters --tier pr
 ```
 
 It also runs `gen --threads 1 --order forward` against `--threads 4 --order shuffled` and fails
 when the two digests differ. Goldens change only through `golden update`, which is deliberate and
 must be accompanied by a generator version bump; a pull request that moves a golden without one
 fails review, not CI.
+
+`counters --tier pr` compares the deterministic counter snapshot against
+`tests/golden/terrain-counters.json` and fails when any counter drifts by more than 5%; a baseline
+of zero must stay zero. The checked-in baseline is rewritten only with `counters --tier pr
+--update`, and the commit must say why. The selected counters, the excluded wall-clock counters,
+and the comparison rule are defined in [Terrain tools](terrain-tools.md#counters).
+
+`calibrate-blend` is a calibration tool, not a CI gate. It currently exits `1` against the v1
+starting `blend_width`; see [Benchmark results](benchmarks.md#terrain-blend-calibration-2026-11-20).
+Run it locally after any change to climate fields, `BLEND_W`, or biome centres:
+
+```console
+cargo run --locked --quiet --no-default-features --bin terrain-gen -- calibrate-blend --seeds 3
+```
 
 ## Local equivalents
 

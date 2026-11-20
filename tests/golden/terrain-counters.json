@@ -1,0 +1,15 @@
+{
+  "schema": "valescent/terrain-counters@1",
+  "tier": "pr",
+  "seeds": 16,
+  "counters": {
+    "blocks_air": 579022,
+    "blocks_solid": 182722,
+    "blocks_water": 24688,
+    "columns": 2048,
+    "lod0_columns": 0,
+    "queued_columns": 0,
+    "ready_columns": 512,
+    "resident_columns": 512
+  }
+}
