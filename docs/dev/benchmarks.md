@@ -736,6 +736,31 @@ and the argument lists are reused. The frame log now reports `stream_ms`, `level
 - One 80 s run logged 0.65 ms and a 54 ms stall in an otherwise 0.59 ms run; frame-time outliers are
   dominated by the window/surface state, so compare ranges, not single samples.
 
+### Section foundation (level 1)
+
+The first hierarchy slice adds `src/section.rs`: `SectionKey` math, a level-1 coarse generator using
+the conservative `2 × 2` footprint maximum, a modified-chunk overlay, per-column coarse sky light,
+and a sample-space greedy mesh through `build_section_mesh`. It is not wired into streaming or the
+renderer yet. `bench_section` compares one level-1 section with the eight LOD1 chunk meshes covering
+the same `64³` region at seed 42's spawn:
+
+| Metric | One level-1 section | Eight LOD1 chunks |
+|---|---:|---:|
+| Generation | 629 µs (p95 868) | not timed |
+| Mesh | 1,053 µs (p95 1,184) | 2,360 µs |
+| Quads | 2,193 | 3,613 |
+| Vertices | 8,772 | 14,452 |
+| Samples / storage | 32,768 B | 131,072 B |
+| Light | 19,652 B | 157,216 B |
+| Draw calls | 1 | 8 |
+
+- The section covers the same volume with ~39% fewer quads and ~18% of the sample + light bytes.
+  Its mesh is cheaper than the eight LOD1 meshes because the coarse surface has no caves or trees.
+- The comparison uses LOD1 chunk meshes from freshly generated L0 chunks; the section uses the
+  surface-only seed rule, so the visual result is a comparison, not a pixel match.
+- Missing neighbour sections emit boundary faces (the mesher gets an empty border), which is the
+  deliberate no-crack rule for the first slice.
+
 ### GPU timing and indexed draws
 
 `wgpu-profiler` now runs unconditionally; the `tracy` feature only adds its Tracy client. The frame

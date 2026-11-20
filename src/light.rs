@@ -105,6 +105,20 @@ impl LightField {
         self.sky.get(field_index(local))
     }
 
+    /// Coarse per-column sky light: `15` above the column top, `0` below.
+    ///
+    /// `top` takes a local `(x, z)` in `-1..=32` and returns the highest
+    /// solid/water sample, or `-1` for an open column.
+    pub(crate) fn coarse(top: impl Fn(i32, i32) -> i32) -> Self {
+        let mut sky = PackedLight::new();
+        for local in grid_coords() {
+            if local.y > top(local.x, local.z) {
+                sky.set(field_index(local), MAX_LIGHT);
+            }
+        }
+        Self { sky, block: None }
+    }
+
     /// Block light at a local coordinate in `-1..=32`.
     pub(crate) fn block(&self, local: IVec3) -> u8 {
         self.block

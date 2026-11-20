@@ -310,7 +310,7 @@ fn field(seed: u64, tag: u64, frequency: f32, octaves: i32) -> FastNoiseLite {
 }
 
 /// Surface block for a biome at `depth` blocks below the terrain height.
-fn surface_block(biome: Biome, depth: i32) -> Block {
+pub(crate) fn surface_block(biome: Biome, depth: i32) -> Block {
     match biome {
         Biome::Plains => {
             if depth == 0 {

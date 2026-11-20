@@ -118,6 +118,14 @@ impl ChunkSnapshot {
         }
     }
 
+    /// Wraps an existing packed grid without copying it.
+    pub(crate) fn from_chunk(data: &Chunk) -> Self {
+        Self {
+            cells: data.shared_storage(),
+            water: data.has_water(),
+        }
+    }
+
     /// Returns the block at a chunk-local coordinate, or air outside the chunk.
     pub(crate) fn block(&self, local: IVec3) -> Block {
         if in_chunk(local) {
@@ -165,6 +173,33 @@ impl BorderBlocks {
     pub(crate) fn block(&self, local: IVec3) -> Block {
         self.blocks.get(&local).copied().unwrap_or(Block::Air)
     }
+}
+
+/// Builds one non-indexed greedy mesh for a coarse section sample grid.
+///
+/// `scale` is the section's sample spacing in blocks. Positions and UVs are in
+/// sample units multiplied by `scale`; face order, AO, and light packing match
+/// the chunk mesher.
+pub(crate) fn build_section_mesh(
+    snapshot: &ChunkSnapshot,
+    border: &BorderBlocks,
+    light: Option<&LightField>,
+    scale: f32,
+) -> MeshData {
+    let full_block = |local: IVec3| full_block(snapshot, border, local);
+    let matches = Block::is_solid;
+    let exposed = |cell: IVec3, normal: IVec3| !full_block(cell + normal).is_solid();
+    let corners = |anchor: IVec3, face: usize| corner_values(&full_block, light, anchor, face);
+    greedy(
+        CHUNK_SIZE,
+        scale,
+        &full_block,
+        &matches,
+        &exposed,
+        &|cell| cell,
+        &corners,
+        0,
+    )
 }
 
 /// Builds one non-indexed greedy mesh for a chunk snapshot.

@@ -106,3 +106,27 @@ config value from the start (`hierarchy.detail_chunks`). Keep the hierarchy behi
 `ENGINE_HIERARCHY=1` until the seam and memory tables pass. The four-level selection and the 2 km
 gate should not start until one level-1 section is generated, meshed, drawn, and compared against
 the current LOD1 meshes without a seam.
+
+## Slice 1 progress
+
+Landed on the `lod-hierarchy` branch:
+
+- `src/section.rs`: `SectionKey` level/extent/origin/parent/child math, level-1 generation with the
+  conservative footprint maximum, the `SectionEdits` modified-chunk overlay, per-column coarse sky
+  light, and a sample-space mesh entry point.
+- `mesh::build_section_mesh` and `ChunkSnapshot::from_chunk`: the greedy mesher runs directly on a
+  `32³` sample grid with a scale, with no LOD downsample.
+- `light::LightField::coarse`: `15` above the column top, `0` below, no block plane.
+- Tests: coordinate round trips (including negative coordinates), level-1 vs exhaustive seed rule,
+  sea-level water, edit raise/clear, coarse light, section mesh shape, and edit-overlap isolation.
+- `bench_section`: one level-1 section generates in 629 µs, meshes in 1,053 µs, and uses 32,768 B of
+  samples + 19,652 B of light for 2,193 quads; the eight LOD1 chunks covering the same volume mesh
+  in 2,360 µs for 3,613 quads and use 288 KiB of samples + light.
+
+Still blocking the visual gate:
+
+- Renderer and streaming integration (section keys in the draw path, one section on screen).
+- The L0 detail radius and the L0/L1 seam rule.
+- Coarse BFS light for the boundary (per-column light still has a hard seam).
+- The 2 km/8 km selection, section-count table, and memory measurement.
+

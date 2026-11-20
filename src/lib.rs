@@ -22,6 +22,7 @@ mod quad;
 mod quad_renderer;
 mod raycast;
 mod renderer;
+mod section;
 mod sky;
 mod streaming;
 mod voxel;

@@ -21,6 +21,7 @@ use crate::block::Block;
 use crate::generation::Generator;
 use crate::light::{self, LightSnapshot};
 use crate::mesh::{BorderBlocks, ChunkSnapshot, Lod, MeshData, build_mesh, build_water_mesh};
+use crate::section::{SECTION_SIZE, SectionEdits, SectionKey, generate_section};
 use crate::streaming::Streaming;
 use crate::world::{CHUNK_COLUMN, CHUNK_SIZE, Chunk, ChunkCoord, World};
 
@@ -242,6 +243,101 @@ fn chunk_for(fixture: Fixture) -> Chunk {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "benchmark; run with cargo test --release --lib bench_section -- --ignored --nocapture"]
+    fn bench_section() {
+        let generator = Generator::new(42);
+        let (x, z, height) = generator.spawn_column();
+        let level = 1;
+        let extent = 32 * (1 << level);
+        let key = SectionKey::new(
+            level,
+            IVec3::new(
+                x.div_euclid(extent),
+                height.div_euclid(extent),
+                z.div_euclid(extent),
+            ),
+        );
+
+        let edits = SectionEdits::new();
+        for _ in 0..2 {
+            std::hint::black_box(generate_section(&generator, key, &edits));
+        }
+        let mut generation = Vec::new();
+        for _ in 0..10 {
+            let started = Instant::now();
+            let section = generate_section(&generator, key, &edits);
+            generation.push(started.elapsed().as_secs_f64() * 1e6);
+            std::hint::black_box(section);
+        }
+        generation.sort_by(f64::total_cmp);
+
+        let section = generate_section(&generator, key, &edits);
+        let light = section.light();
+        let mut mesh_times = Vec::new();
+        let mut mesh = MeshData::default();
+        for _ in 0..10 {
+            let started = Instant::now();
+            mesh = section.mesh(Some(&light));
+            mesh_times.push(started.elapsed().as_secs_f64() * 1e6);
+        }
+        mesh_times.sort_by(f64::total_cmp);
+
+        let origin = key.origin();
+        let mut world = crate::world::World::default();
+        for dy in 0..2 {
+            for dx in 0..2 {
+                for dz in 0..2 {
+                    let chunk = ChunkCoord::new(
+                        origin.x / CHUNK_SIZE + dx,
+                        origin.y / CHUNK_SIZE + dy,
+                        origin.z / CHUNK_SIZE + dz,
+                    );
+                    world.insert_chunk(chunk, generator.generate_chunk(chunk));
+                }
+            }
+        }
+        world.relight();
+        let mut lod1_vertices = 0;
+        let mut lod1_quads = 0;
+        let mut lod1_time = 0.0;
+        for dy in 0..2 {
+            for dx in 0..2 {
+                for dz in 0..2 {
+                    let chunk = ChunkCoord::new(
+                        origin.x / CHUNK_SIZE + dx,
+                        origin.y / CHUNK_SIZE + dy,
+                        origin.z / CHUNK_SIZE + dz,
+                    );
+                    let started = Instant::now();
+                    let snapshot = ChunkSnapshot::new(&world, chunk);
+                    let border = BorderBlocks::new(&world, chunk);
+                    let light = world.light_field(chunk).cloned();
+                    let chunk_mesh = build_mesh(&snapshot, &border, light.as_deref(), Lod::Lod1);
+                    lod1_time += started.elapsed().as_secs_f64() * 1e6;
+                    lod1_vertices += chunk_mesh.vertices.len();
+                    lod1_quads += chunk_mesh.quads.len();
+                }
+            }
+        }
+
+        eprintln!(
+            "SECTION key={:?} gen_us={:.1} p95_us={:.1} mesh_us={:.1} p95_us={:.1} quads={} vertices={} section_bytes={} light_bytes={} lod1_quads={} lod1_vertices={} lod1_us={:.1}",
+            key,
+            generation.iter().sum::<f64>() / generation.len() as f64,
+            percentile(&generation, 0.95),
+            mesh_times.iter().sum::<f64>() / mesh_times.len() as f64,
+            percentile(&mesh_times, 0.95),
+            mesh.quads.len(),
+            mesh.vertices.len(),
+            usize::try_from(SECTION_SIZE * SECTION_SIZE * SECTION_SIZE).unwrap(),
+            light.resident_bytes(),
+            lod1_quads,
+            lod1_vertices,
+            lod1_time,
+        );
+    }
 
     #[test]
     #[ignore = "benchmark; run with cargo test --release --lib bench_light -- --ignored --nocapture"]
