@@ -355,7 +355,7 @@ The tool is therefore local-only for now and is not part of the `Terrain gates` 
 ## Terrain PR counters (2026-11-20)
 
 `counters --tier pr` pins the deterministic part of the `Q1.1` metric list for the 16 PR seeds.
-The checked-in baseline is `tests/golden/terrain-counters.json`; the selection rules are in
+The checked-in baseline is `crates/terrain-core/tests/golden/terrain-counters.json`; the selection rules are in
 [Terrain tools](terrain-tools.md#counters). The first baseline:
 
 | Counter | Value |

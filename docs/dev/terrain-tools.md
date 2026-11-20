@@ -96,7 +96,7 @@ cargo run --locked --quiet --no-default-features --bin terrain-gen -- counters -
 |---|---|---|
 | `--tier pr\|nightly` | required | The sweep region set and default seed count |
 | `--seeds <n>` | tier default (`16` / `64`) | Seeds `1..=n` |
-| `--file <path>` | `tests/golden/terrain-counters.json` | Baseline to check or rewrite; required for `nightly` |
+| `--file <path>` | `crates/terrain-core/tests/golden/terrain-counters.json` | Baseline to check or rewrite; required for `nightly` |
 | `--update` | off | Rewrite the baseline and exit `0` |
 
 ### Pinned counters
@@ -134,7 +134,7 @@ Excluded deliberately:
 
 ### Baseline and drift gate
 
-The baseline is `tests/golden/terrain-counters.json`:
+The baseline is `crates/terrain-core/tests/golden/terrain-counters.json`:
 
 ```json
 {
