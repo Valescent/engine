@@ -653,11 +653,16 @@ The compiler requires ≥3 climate biomes, distinct centres, resolvable ids, and
 biome. Per seed, ≥3 climate biomes MUST be present and each MUST cover ≥5% of land.
 
 A tile stores three parallel `u8` arrays per cell: `biome_best`, `biome_second`, and
-`biome_margin`, where `q = clamp(floor(m / BLEND_W * 255 + 0.5), 0, 255)` and
-`m = d2_second - d2_best`. The dither reconstructs `w = 0.5 + 0.5*smoothstep01(q/255)`; `q = 0` is
-the border (`w = 0.5`), `q = 255` is deep inside (`w = 1`). One helper `biome_pick(tile, cell, x, z)`
-owns the decision; climate values are stored separately as `f32` and never feed terrain through the
-biome arrays.
+`biome_margin`, where `q = clamp(floor(d / BLEND_W * 255 + 0.5), 0, 255)`,
+`d = m / |grad m|` is the straight-line block distance to the border, and
+`m = d2_second - d2_best`. The analytic gradient is
+`grad m = 2*[(T_b - T_s)*grad T + ((H - H_s)/w_s - (H - H_b)/w_b)*grad H]`, with `grad T` and
+`grad H` forward differences over one macro cell. `BLEND_W = BLEND_BLOCKS / (2*s95)` blocks,
+where `s95 ≈ 0.8042` solves `smoothstep(s95) = 0.9`; this makes a straight border measure
+exactly `BLEND_BLOCKS`. The dither reconstructs `w = 0.5 + 0.5*smoothstep01(q/255)`; `q = 0` is
+the border (`w = 0.5`), `q = 255` is deep inside (`w = 1`). One helper `biome_pick(tile, cell,
+x, z)` owns the decision; climate values are stored separately as `f32` and never feed terrain
+through the biome arrays.
 
 ### 8.4 Transitions (E3.3, E3.6)
 
@@ -668,8 +673,14 @@ smooth.
 
 `BLEND_BLOCKS = 24` is a calibration target, not a label: `W_blocks` is measured from `w = 0.5` to
 `w = 0.95`, doubled, along transects perpendicular to each biome-pair border. Acceptance: median
-20–28 blocks, p10 ≥ 8, p90 ≤ 64, per pair, over the sweep seeds. Failures are fixed in biome data,
-not code.
+20–28 blocks, p10 ≥ 8, p90 ≤ 64, per pair, over the sweep seeds. Failures are fixed in biome data
+first; the `q` formula itself is pinned.
+
+v1 status (16 seeds, 2026-11-20): all five pairs are assessed and pass. Medians are 23.33-27.17,
+p10 14.69-18.76, and p90 32.55-63.32. `terrain-gen calibrate-blend --seeds 16` exits `0`; the
+per-pair table is in [Benchmark results](../dev/benchmarks.md#terrain-blend-calibration-2026-11-20).
+The column pipeline still selects `biome_best` directly, so the dithered pick is not yet wired
+into generated blocks; `biome_pick` is the single helper that will replace that read.
 
 ### 8.5 Surface rules (E4.1–E4.5)
 
@@ -1451,7 +1462,11 @@ contradict a MUST elsewhere in this document.
   shipped one.
 - **`terrain-gen map` is ASCII-only** for now: `--seed --from --size --cell` prints a height/water grid and `--json` rows. PNG modes, `tEXt` metadata, legends, and `--ndjson` are deferred.
 - **The full tooling bundle is deferred.** `verify --report <dir>` writes a manifest plus JSON/text; the zip bundle is not implemented. `calibrate-blend` and the PR counter gate are implemented.
-- **Biome blend calibration is measured, not met.** `terrain-gen calibrate-blend` reports medians 43-72 blocks at `blend_width = 0.05` (target 20-28) and p90 117-278 (target <=64); `0.025` gives medians 26-39 but p90 117-161. Closing the gap needs tuned biome centres/weights and the gradient-normalising term, which is a generator version bump. The command is diagnostic and is not a CI gate.
+- **Biome blend calibration passes; the dither is not wired yet.** `terrain-gen calibrate-blend
+  --seeds 16` assesses all five pairs and passes (medians 23.33-27.17, p10 14.69-18.76, p90
+  32.55-63.32) after normalising the margin by its block-space gradient. The column pipeline
+  still reads `biome_best` directly instead of calling `biome_pick`, so generated blocks are
+  unchanged and the generator version stays 2. The command is diagnostic and is not a CI gate.
 - **Section-record migration has no older format.** Version 2 records are canonicalised and headers upgrade v1 to v2; there is no normative v1 section record to decode or migrate.
 - **Camera-relative rendering is applied; the CPU camera is still `f32`** (§14.3). Both draw paths
   subtract one per-frame render origin (the camera's block position) from every submitted section

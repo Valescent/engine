@@ -43,11 +43,21 @@
 //!
 //! Nearest point in `(temp, humidity)`: `d2 = (dt * T_SCALE)^2 + (dh * H_SCALE)^2 /
 //! weight`, no square root, and argmin ties break by the lower id (`E3.1`). Only the top
-//! two are kept. The margin `m = d2_second - d2_best` is quantised once to a `u8`:
-//! `q = clamp(floor(m / blend_width * 255 + 0.5), 0, 255)` (`E3.3`, `E3.5`). Per block,
+//! two are kept. The margin `m = d2_second - d2_best` is converted to a block distance
+//! by dividing by its own block-space gradient, then quantised once to a `u8`:
+//! `q = clamp(floor(d / blend_width * 255 + 0.5), 0, 255)`, where
+//! `d = m / |grad m|` (`E3.3`, `E3.5`). The gradient is analytic:
+//! `grad m = 2 * [(T_b - T_s) grad T + ((H-H_s)/w_s - (H-H_b)/w_b) grad H]`, so it
+//! needs no extra lattice reads and cannot split a border. Per block,
 //! `w = 0.5 + 0.5 * smoothstep01(q / 255)`, and the pick is `best` when
 //! `hash01(hash2(seed, dither_tag, x, z)) < w`, else `second`. The hash is keyed on
 //! `(x, z)` only, never `y`.
+//!
+//! `grad T` and `grad H` are forward differences over one macro cell (four blocks),
+//! taken from the tile's own fields. Forward differences are used because every global
+//! cell then has one stencil, whether it is written as an interior cell or as the
+//! neighbour's border cell; a central difference at the border would need a cell the
+//! tile does not store.
 //!
 //! # What this module does not do
 //!
@@ -66,12 +76,14 @@
 //!
 //! # Blend calibration
 //!
-//! The `q` quantiser is pinned (`E3.5`). [`ClimateParams::blend_width`] is a
+//! The normalised `q` quantiser is pinned (`E3.5`). [`ClimateParams::blend_width`] is a
 //! **calibration target**, not a magic number: the acceptance measurement is the
 //! transect distance from `w = 0.5` to `w = 0.95`, doubled, with a median of 20-28
-//! blocks, p10 >= 8, and p90 <= 64 per biome pair (`E3.6`). The value in
-//! [`ClimateParams::v1_default`] is the starting point for that sweep, not a
-//! measurement of it.
+//! blocks, p10 >= 8, and p90 <= 64 per biome pair (`E3.6`). Because the measured
+//! distance is `2 * s95 * blend_width`, where `s95 ≈ 0.8042` is the smoothstep argument
+//! at `w = 0.95`, [`ClimateParams::v1_default`] derives the ramp from the description's
+//! `BLEND_BLOCKS` target: `blend_width = BLEND_BLOCKS / (2 * s95)`. A straight border
+//! therefore measures exactly `BLEND_BLOCKS`.
 //!
 //! # Open questions
 //!
@@ -136,6 +148,23 @@ pub const T_SCALE: f32 = 1.0;
 
 /// Scale applied to a humidity delta before squaring (`E3.1`).
 pub const H_SCALE: f32 = 1.0;
+
+/// The smoothstep argument at which the dither reaches `w = 0.95`.
+///
+/// `0.5 + 0.5 * smoothstep01(s) = 0.95`, so `s` solves `3s^2 - 2s^3 = 0.9`.
+/// A straight border therefore measures `2 * S95 * blend_width` blocks.
+const S95: f32 = 0.804_199_9;
+
+/// The ramp length, in blocks, that measures as `blend_blocks` on a straight border.
+///
+/// The calibration measurement doubles the `w = 0.5` to `w = 0.95` distance, so the
+/// quantiser's full ramp must be `blend_blocks / (2 * S95)` blocks long (`E3.5`,
+/// `E3.6`).
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn blend_ramp_blocks(blend_blocks: u32) -> f32 {
+    blend_blocks as f32 / (2.0 * S95)
+}
 
 /// The prevailing wind axis. Pinned to `X`: wind blows toward `+x`, the march goes
 /// toward `-x` (`E2.1`).
@@ -413,19 +442,11 @@ impl BiomeTable {
         Ok(Self { biomes })
     }
 
-    /// The two nearest biomes and the quantised margin at one climate point
-    /// (`E3.1`, `E3.3`, `E3.5`).
+    /// The two nearest biome slots and the raw `d2` margin between them (`E3.1`).
     ///
-    /// Returns `(best, second, q)`. Ties break by the lower id. `q = 0` is the border
-    /// between the two (`w = 0.5`) and `q = 255` is deep inside `best` (`w = 1`). A
-    /// single-biome table returns `(id, id, 255)`.
-    ///
-    /// `blend_width` is the margin, in `d2` units, at which the dither reaches certainty.
-    /// It must be finite and positive; [`ClimateParams::validate`] guarantees that for
-    /// the solver path.
-    #[must_use]
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    pub fn nearest_two(&self, temperature: f32, humidity: f32, blend_width: f32) -> (u8, u8, u8) {
+    /// Ties break by the lower id. A single-biome table returns the same slot
+    /// twice and a zero margin.
+    fn nearest_slots(&self, temperature: f32, humidity: f32) -> (usize, usize, f32) {
         let mut best_slot = 0_usize;
         let mut best_d2 = f32::INFINITY;
         let mut best_id = u8::MAX;
@@ -445,6 +466,11 @@ impl BiomeTable {
             }
         }
 
+        if self.biomes.len() == 1 {
+            return (best_slot, best_slot, 0.0);
+        }
+
+        let mut second_slot = 0_usize;
         let mut second_d2 = f32::INFINITY;
         let mut second_id = u8::MAX;
         for (slot, biome) in self.biomes.iter().enumerate() {
@@ -456,22 +482,87 @@ impl BiomeTable {
                 Ordering::Less => {
                     second_d2 = d2;
                     second_id = biome.id;
+                    second_slot = slot;
                 }
                 Ordering::Equal if biome.id < second_id => {
                     second_id = biome.id;
+                    second_slot = slot;
                 }
                 _ => {}
             }
         }
 
-        if self.biomes.len() == 1 {
-            return (best_id, best_id, 255);
-        }
+        (best_slot, second_slot, (second_d2 - best_d2).max(0.0))
+    }
 
-        let margin = (second_d2 - best_d2).max(0.0);
+    /// The two nearest biomes and the raw `d2` margin quantised directly
+    /// (`E3.1`, `E3.3`).
+    ///
+    /// Returns `(best, second, q)`. Ties break by the lower id. `q = 0` is the border
+    /// between the two (`w = 0.5`) and `q = 255` is deep inside `best` (`w = 1`). A
+    /// single-biome table returns `(id, id, 255)`.
+    ///
+    /// `blend_width` is the margin, in `d2` units, at which the dither reaches certainty.
+    /// This is the raw quantiser; generation uses [`Self::nearest_two_normalised`] so a
+    /// pair's transition is a fixed number of blocks rather than a fixed `d2` margin.
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    pub fn nearest_two(&self, temperature: f32, humidity: f32, blend_width: f32) -> (u8, u8, u8) {
+        let (best_slot, second_slot, margin) = self.nearest_slots(temperature, humidity);
+        let best = &self.biomes[best_slot];
+        if self.biomes.len() == 1 {
+            return (best.id, best.id, 255);
+        }
+        let second = &self.biomes[second_slot];
         let scaled = margin / blend_width * 255.0 + 0.5;
         let quantised = scaled.floor().clamp(0.0, 255.0);
-        (best_id, second_id, quantised as u8)
+        (best.id, second.id, quantised as u8)
+    }
+
+    /// The two nearest biomes and the quantised **block distance** to their border
+    /// (`E3.5`).
+    ///
+    /// `temperature_gradient` and `humidity_gradient` are `(d/dx, d/dz)` in climate
+    /// units per block. The `d2` margin is divided by its own analytic gradient,
+    /// `grad m = 2 * [(T_b - T_s) grad T + ((H - H_s)/w_s - (H - H_b)/w_b) grad H]`,
+    /// which is the straight-line distance to the border in blocks. `blend_width` is
+    /// the ramp length, in blocks, at which the dither reaches certainty. A locally
+    /// flat field with a positive margin is infinitely far from the border, so it
+    /// quantises to `255`; a flat tie is `0`.
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    pub fn nearest_two_normalised(
+        &self,
+        temperature: f32,
+        humidity: f32,
+        temperature_gradient: (f32, f32),
+        humidity_gradient: (f32, f32),
+        blend_width: f32,
+    ) -> (u8, u8, u8) {
+        let (best_slot, second_slot, margin) = self.nearest_slots(temperature, humidity);
+        let best = &self.biomes[best_slot];
+        if self.biomes.len() == 1 {
+            return (best.id, best.id, 255);
+        }
+        let second = &self.biomes[second_slot];
+        let temp_delta = best.temp_c - second.temp_c;
+        let humid_delta =
+            (humidity - second.humid_c) / second.weight - (humidity - best.humid_c) / best.weight;
+        let gradient_x =
+            2.0 * (temp_delta * temperature_gradient.0 + humid_delta * humidity_gradient.0);
+        let gradient_z =
+            2.0 * (temp_delta * temperature_gradient.1 + humid_delta * humidity_gradient.1);
+        let magnitude = (gradient_x * gradient_x + gradient_z * gradient_z).sqrt();
+        let distance = if magnitude > 0.0 {
+            margin / magnitude
+        } else if margin > 0.0 {
+            f32::INFINITY
+        } else {
+            0.0
+        };
+        let scaled = distance / blend_width * 255.0 + 0.5;
+        let quantised = scaled.floor().clamp(0.0, 255.0);
+        (best.id, second.id, quantised as u8)
     }
 }
 
@@ -487,7 +578,8 @@ pub struct ClimateParams {
     pub half_span: i32,
     /// Temperature drop per block above sea level (`E1.2`).
     pub lapse: f32,
-    /// `d2` margin at which the biome dither reaches certainty (`E3.3`).
+    /// Normalised block distance at which the biome dither reaches certainty
+    /// (`E3.3`).
     pub blend_width: f32,
     /// Latitude curve: warm at 0, cold at 1 (`E1.1`).
     pub latitude: Curve,
@@ -502,17 +594,16 @@ impl ClimateParams {
     /// reaches 0.225 below its centre, so a curve that touched either end would saturate
     /// at the pole on flat ground.
     ///
-    /// `blend_width` is the **calibration target** for the `E3.6` sweep: a starting
-    /// value, not a measured constant. The `d2` margin is not proportional to blocks,
-    /// so the acceptance test is the transect measurement in the module docs, not the
-    /// number below.
+    /// `blend_width` is the **calibration target** for the `E3.6` sweep: it is derived
+    /// from the description's `BLEND_BLOCKS` so that a straight border measures exactly
+    /// that many blocks. See [`blend_ramp_blocks`].
     #[must_use]
     pub fn v1_default() -> Self {
         Self {
             equator: 0,
             half_span: 1_024,
             lapse: 1.0 / 320.0,
-            blend_width: 0.05,
+            blend_width: blend_ramp_blocks(crate::description::default_v1().blend_blocks),
             latitude: Curve::new(&[(0.0, 0.92), (0.35, 0.74), (0.70, 0.40), (1.0, 0.25)])
                 .expect("the v1 latitude knots are valid"),
             shadow: Curve::new(&[(0.0, 0.0), (0.35, 0.18), (0.75, 0.60), (1.0, 1.0)])
@@ -555,7 +646,7 @@ pub struct ClimateTile {
     best: Vec<u8>,
     /// Second-nearest biome id; equal to `best` in a single-biome world.
     second: Vec<u8>,
-    /// Quantised margin in `0..=255` (`E3.3`).
+    /// Quantised block distance to the border in `0..=255` (`E3.3`, `E3.5`).
     margin: Vec<u8>,
     /// How many times a field clamp fired while building the tile.
     clamp_fires: u64,
@@ -728,8 +819,8 @@ impl Climate {
     ///
     /// The origin is in cells. It moves the latitude and the noise sample; the macro
     /// grid stays tile-relative, so the same global field yields bit-identical border
-    /// cells in neighbouring tiles. Every stored cell in `-1..=32` (and the spare slot
-    /// above it) is written, and no per-cell allocation happens.
+    /// cells in neighbouring tiles. The fields are written for `-1..=33` and the biome
+    /// arrays for the readable `-1..=32`; no per-cell allocation happens.
     #[must_use]
     #[allow(clippy::cast_precision_loss)]
     pub fn solve_at(
@@ -754,6 +845,9 @@ impl Climate {
         let mut margin = vec![0_u8; CELL_COUNT];
         let mut clamp_fires = 0_u64;
 
+        // Pass 1: the two fields, over the readable cells plus one extra cell on
+        // each high side. The extra cell (`SIDE - 2`, i.e. 33) is what lets every
+        // readable cell take a *forward* difference.
         for cell_z in MIN_CELL..=(SIDE - 2) {
             for cell_x in MIN_CELL..=(SIDE - 2) {
                 let slot = index(cell_x, cell_z);
@@ -792,8 +886,32 @@ impl Climate {
                 let value = unit(wet) * (1.0 - SHADOW_STRENGTH * drying) + MARITIME * coast;
                 let moisture = clamp_unit(value, &mut clamp_fires);
                 humidity[slot] = moisture;
+            }
+        }
 
-                let (near, far, q) = table.nearest_two(temperature, moisture, params.blend_width);
+        // Pass 2: the biome arrays. A forward difference keeps one stencil per
+        // *global* cell, so a border cell written by one tile and the same cell
+        // seen as interior by its neighbour agree bit for bit.
+        for cell_z in MIN_CELL..=MAX_CELL {
+            for cell_x in MIN_CELL..=MAX_CELL {
+                let slot = index(cell_x, cell_z);
+                let ahead_x = index(cell_x + 1, cell_z);
+                let ahead_z = index(cell_x, cell_z + 1);
+                let temperature_gradient = (
+                    (temp[ahead_x] - temp[slot]) / MACRO_CELL_F,
+                    (temp[ahead_z] - temp[slot]) / MACRO_CELL_F,
+                );
+                let humidity_gradient = (
+                    (humidity[ahead_x] - humidity[slot]) / MACRO_CELL_F,
+                    (humidity[ahead_z] - humidity[slot]) / MACRO_CELL_F,
+                );
+                let (near, far, q) = table.nearest_two_normalised(
+                    temp[slot],
+                    humidity[slot],
+                    temperature_gradient,
+                    humidity_gradient,
+                    params.blend_width,
+                );
                 best[slot] = near;
                 second[slot] = far;
                 margin[slot] = q;
@@ -830,7 +948,7 @@ mod tests {
             equator: 0,
             half_span: 64,
             lapse: 1.0 / 320.0,
-            blend_width: 0.05,
+            blend_width: blend_ramp_blocks(24),
             latitude: Curve::linear(&[(0.0, 0.92), (1.0, 0.3)]).unwrap(),
             shadow: Curve::linear(&[(0.0, 0.0), (1.0, 1.0)]).unwrap(),
         }

@@ -2205,6 +2205,7 @@ fn blend_seed(
 ) -> Result<PairWidths, TerrainError> {
     let terrain = Terrain::new(seed)?;
     let half = description::default_v1().world_half_extent;
+    let bounds = world_cell_bounds();
     let mut pairs: PairWidths = BTreeMap::new();
     for (cell_x, cell_z) in anchor_cells(from, size, step) {
         let anchor_x = cell_x * MACRO_CELL + 2;
@@ -2220,14 +2221,10 @@ fn blend_seed(
         let Some(sample) = anchor_sample(&terrain, cell_x, cell_z)? else {
             continue;
         };
-        let mut profile = Vec::with_capacity(usize::try_from(march * 2 + 1).unwrap_or(0));
-        for offset in -march..=march {
-            let cell_sample_x = f64::from(cell_x) + sample.direction.0 * f64::from(offset) / 4.0;
-            let cell_sample_z = f64::from(cell_z) + sample.direction.1 * f64::from(offset) / 4.0;
-            let q = bilinear_margin(&terrain, cell_sample_x, cell_sample_z)?;
-            let weight = blend_weight(q);
-            profile.push((f64::from(offset), weight));
-        }
+        let profile =
+            transect_profile(cell_x, cell_z, sample.direction, march, bounds, &|x, z| {
+                Ok(f32::from(cell_margin(&terrain, x, z)?))
+            })?;
         if let Some(width) = transect_width(&profile) {
             pairs
                 .entry((sample.low, sample.high))
@@ -2245,77 +2242,194 @@ struct AnchorSample {
     direction: (f64, f64),
 }
 
+/// One cell's contribution to a blend measurement: its two nearest biomes and
+/// the quantised margin between them.
+#[derive(Clone, Copy, Debug)]
+struct CellPicks {
+    best: u8,
+    second: u8,
+    margin: u8,
+}
+
+/// Reads one anchor from the terrain's climate tiles.
 fn anchor_sample(
     terrain: &Terrain,
     cell_x: i32,
     cell_z: i32,
 ) -> Result<Option<AnchorSample>, TerrainError> {
+    anchor_from_cells(cell_x, cell_z, &|x, z| cell_picks(terrain, x, z))
+}
+
+/// Selects one transect anchor from any margin field.
+///
+/// The anchor must be inside the blend band and have two distinct biomes. The
+/// direction comes from [`margin_direction`].
+fn anchor_from_cells<F>(
+    cell_x: i32,
+    cell_z: i32,
+    picks: &F,
+) -> Result<Option<AnchorSample>, TerrainError>
+where
+    F: Fn(i32, i32) -> Result<CellPicks, TerrainError>,
+{
+    let here = picks(cell_x, cell_z)?;
+    if here.best == here.second {
+        return Ok(None);
+    }
+    if blend_weight(f32::from(here.margin)) >= BLEND_END_WEIGHT {
+        return Ok(None);
+    }
+    let Some(direction) = margin_direction(cell_x, cell_z, here.best, here.second, picks)? else {
+        return Ok(None);
+    };
+    Ok(Some(AnchorSample {
+        low: here.best.min(here.second),
+        high: here.best.max(here.second),
+        direction,
+    }))
+}
+
+fn cell_picks(terrain: &Terrain, cell_x: i32, cell_z: i32) -> Result<CellPicks, TerrainError> {
     let tile_x = floor_div(cell_x, CLIMATE_CELLS_PER_TILE);
     let tile_z = floor_div(cell_z, CLIMATE_CELLS_PER_TILE);
     let local_x = cell_x - tile_x * CLIMATE_CELLS_PER_TILE;
     let local_z = cell_z - tile_z * CLIMATE_CELLS_PER_TILE;
-    if !(0..CLIMATE_CELLS_PER_TILE).contains(&local_x)
-        || !(0..CLIMATE_CELLS_PER_TILE).contains(&local_z)
-    {
-        return Ok(None);
-    }
     let tile = terrain.tile(tile_x, tile_z)?;
-    let best = tile.climate.best(local_x, local_z);
-    let second = tile.climate.second(local_x, local_z);
-    if best == second {
-        return Ok(None);
-    }
-    let q = tile.climate.margin(local_x, local_z);
-    if blend_weight(f32::from(q)) >= BLEND_END_WEIGHT {
-        return Ok(None);
-    }
-
-    // A least-squares plane over a 5x5 cell window. Central differences of the
-    // quantised margin are too noisy near the border (where successive cells
-    // differ by one q step) and skew the transect direction.
-    let mut sum_x = 0.0_f32;
-    let mut sum_z = 0.0_f32;
-    let mut square_x = 0.0_f32;
-    let mut square_z = 0.0_f32;
-    for delta_z in -2..=2 {
-        for delta_x in -2..=2 {
-            let neighbour = f32::from(cell_margin(terrain, cell_x + delta_x, cell_z + delta_z)?);
-            let dx = f32::from(i8::try_from(delta_x).unwrap_or(0));
-            let dz = f32::from(i8::try_from(delta_z).unwrap_or(0));
-            sum_x += neighbour * dx;
-            sum_z += neighbour * dz;
-            square_x += dx * dx;
-            square_z += dz * dz;
-        }
-    }
-    let gradient_x = sum_x / square_x;
-    let gradient_z = sum_z / square_z;
-    let magnitude = (gradient_x * gradient_x + gradient_z * gradient_z).sqrt();
-    if magnitude == 0.0 || !magnitude.is_finite() {
-        return Ok(None);
-    }
-    Ok(Some(AnchorSample {
-        low: best.min(second),
-        high: best.max(second),
-        direction: (
-            f64::from(gradient_x / magnitude),
-            f64::from(gradient_z / magnitude),
-        ),
-    }))
+    Ok(CellPicks {
+        best: tile.climate.best(local_x, local_z),
+        second: tile.climate.second(local_x, local_z),
+        margin: tile.climate.margin(local_x, local_z),
+    })
 }
 
-/// Bilinear interpolation of the quantised margin over the cell lattice.
+/// Direction of increasing margin from a least-squares plane through same-side cells.
 ///
-/// The cell centre for cell `c` is block `4c + 2`, so a block position `b`
-/// maps to continuous cell coordinate `(b - 2) / 4`.
-#[allow(clippy::cast_possible_truncation)]
-fn bilinear_margin(terrain: &Terrain, cell_x: f64, cell_z: f64) -> Result<f32, TerrainError> {
-    // Keep the four reads on cell centres inside the finite world: the last
-    // centre is block `half - 2`, so a transect near the rim never builds a tile
-    // outside it.
+/// The quantised margin is a V across a border: it falls to `0` at the border and
+/// rises on both sides, so a plane fitted through both sides has a crease in it and a
+/// direction that can be nearly tangential. Only cells with the anchor's ordered
+/// `(best, second)` pair are used, which keeps one side of the V, and saturated cells
+/// (`q = 255`) are dropped because the distance no longer grows there. The plane has
+/// an intercept, so an asymmetric sample does not bias the gradient. The window starts
+/// at `5 x 5` and widens to `7 x 7`, then `9 x 9`, until four cells qualify.
+#[allow(clippy::similar_names)]
+fn margin_direction<F>(
+    cell_x: i32,
+    cell_z: i32,
+    best: u8,
+    second: u8,
+    picks: &F,
+) -> Result<Option<(f64, f64)>, TerrainError>
+where
+    F: Fn(i32, i32) -> Result<CellPicks, TerrainError>,
+{
+    for radius in [2_i32, 3, 4] {
+        let mut count = 0.0_f32;
+        let mut sum_x = 0.0_f32;
+        let mut sum_z = 0.0_f32;
+        let mut sum_q = 0.0_f32;
+        let mut square_x = 0.0_f32;
+        let mut square_z = 0.0_f32;
+        let mut cross_xz = 0.0_f32;
+        let mut cross_xq = 0.0_f32;
+        let mut cross_zq = 0.0_f32;
+        for delta_z in -radius..=radius {
+            for delta_x in -radius..=radius {
+                let pick = picks(cell_x + delta_x, cell_z + delta_z)?;
+                if pick.best != best || pick.second != second || pick.margin == u8::MAX {
+                    continue;
+                }
+                let x = f32::from(i8::try_from(delta_x).unwrap_or(0));
+                let z = f32::from(i8::try_from(delta_z).unwrap_or(0));
+                let q = f32::from(pick.margin);
+                count += 1.0;
+                sum_x += x;
+                sum_z += z;
+                sum_q += q;
+                square_x += x * x;
+                square_z += z * z;
+                cross_xz += x * z;
+                cross_xq += x * q;
+                cross_zq += z * q;
+            }
+        }
+        if count < 4.0 {
+            continue;
+        }
+        let mean_x = sum_x / count;
+        let mean_z = sum_z / count;
+        let mean_q = sum_q / count;
+        let var_x = square_x - count * mean_x * mean_x;
+        let var_z = square_z - count * mean_z * mean_z;
+        let cov_xz = cross_xz - count * mean_x * mean_z;
+        let cov_xq = cross_xq - count * mean_x * mean_q;
+        let cov_zq = cross_zq - count * mean_z * mean_q;
+        let determinant = var_x * var_z - cov_xz * cov_xz;
+        if determinant <= f32::EPSILON * var_x * var_z {
+            continue;
+        }
+        let gradient_x = (cov_xq * var_z - cov_zq * cov_xz) / determinant;
+        let gradient_z = (cov_zq * var_x - cov_xq * cov_xz) / determinant;
+        let magnitude = (gradient_x * gradient_x + gradient_z * gradient_z).sqrt();
+        if magnitude == 0.0 || !magnitude.is_finite() {
+            continue;
+        }
+        return Ok(Some((
+            f64::from(gradient_x / magnitude),
+            f64::from(gradient_z / magnitude),
+        )));
+    }
+    Ok(None)
+}
+
+/// Cell bounds that keep every bilinear read inside the finite world.
+///
+/// The cell centre for cell `c` is block `4c + 2`, so the last centre is block
+/// `half - 2`.
+fn world_cell_bounds() -> (f64, f64) {
     let half = description::default_v1().world_half_extent;
-    let min_cell = f64::from(ceil_div(-half + 1 - 2, MACRO_CELL));
-    let max_cell = f64::from(floor_div(half - 1 - 2, MACRO_CELL));
+    (
+        f64::from(ceil_div(-half + 1 - 2, MACRO_CELL)),
+        f64::from(floor_div(half - 1 - 2, MACRO_CELL)),
+    )
+}
+
+/// One transect as `(block offset, w)` pairs, sampled one block apart.
+///
+/// `direction` is a unit vector in block space; one block is a quarter of a
+/// cell, so a block offset moves the cell coordinate by `offset / 4`.
+fn transect_profile<F>(
+    cell_x: i32,
+    cell_z: i32,
+    direction: (f64, f64),
+    march: i32,
+    bounds: (f64, f64),
+    margin_at: &F,
+) -> Result<Vec<(f64, f32)>, TerrainError>
+where
+    F: Fn(i32, i32) -> Result<f32, TerrainError>,
+{
+    let mut profile = Vec::with_capacity(usize::try_from(march * 2 + 1).unwrap_or(0));
+    for offset in -march..=march {
+        let cell_sample_x = f64::from(cell_x) + direction.0 * f64::from(offset) / 4.0;
+        let cell_sample_z = f64::from(cell_z) + direction.1 * f64::from(offset) / 4.0;
+        let q = bilinear_over(cell_sample_x, cell_sample_z, bounds, margin_at)?;
+        profile.push((f64::from(offset), blend_weight(q)));
+    }
+    Ok(profile)
+}
+
+/// Bilinear interpolation over the cell lattice, clamped to `bounds`.
+#[allow(clippy::cast_possible_truncation)]
+fn bilinear_over<F>(
+    cell_x: f64,
+    cell_z: f64,
+    bounds: (f64, f64),
+    margin_at: &F,
+) -> Result<f32, TerrainError>
+where
+    F: Fn(i32, i32) -> Result<f32, TerrainError>,
+{
+    let (min_cell, max_cell) = bounds;
     let cell_x = cell_x.clamp(min_cell, max_cell);
     let cell_z = cell_z.clamp(min_cell, max_cell);
     let x0 = cell_x.floor() as i32;
@@ -2324,10 +2438,10 @@ fn bilinear_margin(terrain: &Terrain, cell_x: f64, cell_z: f64) -> Result<f32, T
     let z1 = (z0 + 1).min(max_cell as i32);
     let fx = (cell_x - f64::from(x0)) as f32;
     let fz = (cell_z - f64::from(z0)) as f32;
-    let q00 = f32::from(cell_margin(terrain, x0, z0)?);
-    let q10 = f32::from(cell_margin(terrain, x1, z0)?);
-    let q01 = f32::from(cell_margin(terrain, x0, z1)?);
-    let q11 = f32::from(cell_margin(terrain, x1, z1)?);
+    let q00 = margin_at(x0, z0)?;
+    let q10 = margin_at(x1, z0)?;
+    let q01 = margin_at(x0, z1)?;
+    let q11 = margin_at(x1, z1)?;
     let top = q00 + (q10 - q00) * fx;
     let bottom = q01 + (q11 - q01) * fx;
     Ok(top + (bottom - top) * fz)
@@ -2381,12 +2495,12 @@ fn transect_width(profile: &[(f64, f32)]) -> Option<f64> {
 
     let (_, anchor_weight) = profile[center];
     let mut border = (0.0_f64, anchor_weight);
-    let mut descended = false;
     for &(offset, weight) in profile[..center].iter().rev() {
         if weight < border.1 {
             border = (offset, weight);
-            descended = true;
-        } else if descended && weight > border.1 {
+        } else if weight > border.1 {
+            // The first rise behind the anchor closes the first local minimum.
+            // Scanning past it would pick an unrelated border further back.
             break;
         }
     }
@@ -4278,6 +4392,7 @@ fn hex_bytes(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use terrain_core::climate::{Biome, BiomeTable};
 
     /// A synthetic transect: `w = 0.5` at and behind the border and a linear
     /// rise to `w = 0.95` at 24 blocks in front of it.
@@ -4325,6 +4440,107 @@ mod tests {
     fn transect_width_rejects_a_saturated_profile() {
         let flat = vec![(-8.0, 0.8_f32), (0.0, 0.85), (8.0, 0.9)];
         assert_eq!(transect_width(&flat), None);
+    }
+
+    #[test]
+    fn transect_width_stops_at_the_first_minimum_behind_the_anchor() {
+        // The anchor is the nearest minimum (a tangential transect). A deeper,
+        // unrelated minimum 40 blocks behind must not become the border.
+        let profile: Vec<(f64, f32)> = (-64..=64)
+            .map(|offset| {
+                let distance = f32::from(i16::try_from(offset).unwrap_or(0));
+                let weight = if offset == 0 {
+                    0.505
+                } else if offset >= 12 {
+                    0.95
+                } else if offset > 0 {
+                    0.5 + 0.45 * distance / 12.0
+                } else if offset == -40 {
+                    0.50
+                } else {
+                    0.7
+                };
+                (f64::from(distance), weight)
+            })
+            .collect();
+        // The old search skipped the immediate rise and measured to the far dip.
+        let width = transect_width(&profile).expect("the anchor minimum measures");
+        assert!((width - 24.0).abs() < 1e-6, "measured {width}");
+    }
+
+    /// A synthetic two-centre climate for auditing the measurement itself.
+    ///
+    /// Temperature rises linearly with block `x` through the border at block 2
+    /// (the centre of climate cell 0) and humidity is constant, so the `d2`
+    /// margin is `m(x) = 2 * 0.6 * gradient * |x - 2|` before it saturates.
+    fn analytic_picks(
+        gradient: f32,
+        blend_width: f32,
+    ) -> impl Fn(i32, i32) -> Result<CellPicks, TerrainError> {
+        let table = BiomeTable::new(vec![
+            Biome {
+                id: 0,
+                temp_c: 0.2,
+                humid_c: 0.5,
+                weight: 1.0,
+                priority: 0,
+            },
+            Biome {
+                id: 1,
+                temp_c: 0.8,
+                humid_c: 0.5,
+                weight: 1.0,
+                priority: 0,
+            },
+        ])
+        .expect("the audit table is valid");
+        move |cell_x, _cell_z| {
+            let block_x = cell_x * MACRO_CELL + 2;
+            let temperature = 0.5 + gradient * f32::from(i16::try_from(block_x - 2).unwrap_or(0));
+            let (best, second, margin) = table.nearest_two(temperature, 0.5, blend_width);
+            Ok(CellPicks {
+                best,
+                second,
+                margin,
+            })
+        }
+    }
+
+    /// The tool must measure the closed-form width of a straight, analytic
+    /// border. `w` reaches 0.95 at `q = 206`; that margin, divided by the known
+    /// `d2` gradient, is the distance to the border, and the tool doubles it.
+    #[test]
+    fn transect_measures_the_analytic_blend_width() {
+        let gradient = 0.0028_f32;
+        let blend_width = 0.05_f32;
+        let picks = analytic_picks(gradient, blend_width);
+        let (cell_x, cell_z) = (2, 0);
+        let anchor = anchor_from_cells(cell_x, cell_z, &picks)
+            .expect("the analytic field is readable")
+            .expect("cell 2 is inside the blend band");
+        assert!(
+            anchor.direction.0 > 0.999 && anchor.direction.1.abs() < 1e-3,
+            "direction {:?}",
+            anchor.direction
+        );
+
+        let profile = transect_profile(
+            cell_x,
+            cell_z,
+            anchor.direction,
+            64,
+            world_cell_bounds(),
+            &|x, z| Ok(f32::from(picks(x, z)?.margin)),
+        )
+        .expect("the analytic transect is readable");
+        let width = transect_width(&profile).expect("the analytic transect is complete");
+
+        let reached = f64::from(blend_width) * (206.0 - 0.5) / 255.0;
+        let expected = 2.0 * reached / (2.0 * 0.6 * f64::from(gradient));
+        assert!(
+            (width - expected).abs() < 0.75,
+            "measured {width}, closed form {expected}"
+        );
     }
 
     #[test]
