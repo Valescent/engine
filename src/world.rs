@@ -108,6 +108,8 @@ pub(crate) struct Chunk {
     top: i32,
     /// Highest water block's local y, or `-1` when the chunk has none.
     water_top: i32,
+    /// Highest non-tree solid block's local y, or `-1` when the chunk has none.
+    terrain_top: i32,
 }
 
 impl Default for Chunk {
@@ -118,6 +120,7 @@ impl Default for Chunk {
             water: 0,
             top: -1,
             water_top: -1,
+            terrain_top: -1,
         }
     }
 }
@@ -138,6 +141,7 @@ impl Chunk {
     }
 
     /// Highest solid block's local y, or `-1` when the chunk has none.
+    #[cfg(test)]
     pub(crate) fn top(&self) -> i32 {
         self.top
     }
@@ -145,6 +149,11 @@ impl Chunk {
     /// Highest water block's local y, or `-1` when the chunk has none.
     pub(crate) fn water_top(&self) -> i32 {
         self.water_top
+    }
+
+    /// Highest non-tree solid block's local y, or `-1` when the chunk has none.
+    pub(crate) fn terrain_top(&self) -> i32 {
+        self.terrain_top
     }
 
     /// Returns the block at a local coordinate, or `Air` outside the chunk.
@@ -191,6 +200,12 @@ impl Chunk {
         } else if previous == Block::Water && block != Block::Water && local.y == self.water_top {
             self.recompute_water_top();
         }
+
+        if block.is_terrain() && local.y > self.terrain_top {
+            self.terrain_top = local.y;
+        } else if previous.is_terrain() && !block.is_terrain() && local.y == self.terrain_top {
+            self.recompute_terrain_top();
+        }
     }
 
     /// Recomputes the highest solid cell after the top block is cleared.
@@ -223,6 +238,22 @@ impl Chunk {
             }
         }
         self.water_top = -1;
+    }
+
+    /// Recomputes the highest non-tree solid cell after the top one is cleared.
+    fn recompute_terrain_top(&mut self) {
+        for y in (0..CHUNK_SIZE).rev() {
+            for x in 0..CHUNK_SIZE {
+                for z in 0..CHUNK_SIZE {
+                    let index = local_index(IVec3::new(x, y, z)).expect("in-chunk cell");
+                    if packed_block(&self.cells, index).is_terrain() {
+                        self.terrain_top = y;
+                        return;
+                    }
+                }
+            }
+        }
+        self.terrain_top = -1;
     }
 
     /// Shared packed storage, cloned for a worker snapshot.
@@ -1279,6 +1310,27 @@ mod tests {
 
         chunk.set_block(IVec3::new(1, 3, 1), Block::Air);
         assert_eq!(chunk.water_top(), -1);
+    }
+
+    #[test]
+    fn terrain_top_ignores_trees_and_recomputes() {
+        let mut chunk = Chunk::default();
+        assert_eq!(chunk.terrain_top(), -1);
+
+        chunk.set_block(IVec3::new(1, 5, 1), Block::Grass);
+        chunk.set_block(IVec3::new(1, 6, 1), Block::Wood);
+        chunk.set_block(IVec3::new(1, 7, 1), Block::Leaves);
+        assert_eq!(chunk.terrain_top(), 5, "a tree is not a terrain wall");
+        assert_eq!(chunk.top(), 7);
+
+        chunk.set_block(IVec3::new(1, 6, 1), Block::Stone);
+        assert_eq!(chunk.terrain_top(), 6);
+
+        chunk.set_block(IVec3::new(1, 6, 1), Block::Wood);
+        assert_eq!(chunk.terrain_top(), 5, "a trunk is not terrain");
+
+        chunk.set_block(IVec3::new(1, 5, 1), Block::Air);
+        assert_eq!(chunk.terrain_top(), -1);
     }
 
     #[test]

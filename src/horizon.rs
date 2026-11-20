@@ -46,7 +46,7 @@ impl Horizon {
         let mut bins: Vec<Vec<(f32, f32)>> = (0..BINS).map(|_| Vec::new()).collect();
         let mut tops = HashMap::new();
         for (chunk, data) in world.iter_chunks() {
-            let highest = data.top().max(data.water_top());
+            let highest = data.terrain_top().max(data.water_top());
             if highest < 0 {
                 continue;
             }
@@ -197,6 +197,17 @@ mod tests {
         let mut visible = hidden;
         visible.set_block(IVec3::new(320, 30, 0), Block::Water);
         assert!(!Horizon::build(camera, &visible).occludes(target));
+    }
+
+    #[test]
+    fn trees_do_not_count_as_horizon_walls() {
+        let mut world = World::default();
+        world.set_block(IVec3::new(64, 40, 0), Block::Wood);
+        world.set_block(IVec3::new(64, 41, 0), Block::Leaves);
+        world.set_block(IVec3::new(320, 2, 0), Block::Stone);
+        let horizon = Horizon::build(Vec3::new(0.0, 10.0, 0.0), &world);
+
+        assert!(!horizon.occludes(ChunkCoord::new(10, 0, 0)));
     }
 
     #[test]

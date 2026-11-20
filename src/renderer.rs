@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::mem::size_of;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -210,6 +211,63 @@ pub(crate) struct Renderer {
     depth_view: wgpu::TextureView,
     profiler: Option<wgpu_profiler::GpuProfiler>,
     gpu_ms: f64,
+    capture: Option<Capture>,
+}
+
+/// One pending frame readback, armed by `ENGINE_CAPTURE`.
+struct Capture {
+    path: PathBuf,
+    delay: Duration,
+    started: Instant,
+    buffer: wgpu::Buffer,
+    bytes_per_row: u32,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+    done: bool,
+}
+
+impl Capture {
+    fn new(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> Option<Self> {
+        let path = PathBuf::from(std::env::var("ENGINE_CAPTURE").ok()?);
+        if !config.usage.contains(wgpu::TextureUsages::COPY_SRC) {
+            warn!("surface cannot be copied; frame capture disabled");
+            return None;
+        }
+        let delay = std::env::var("ENGINE_CAPTURE_DELAY")
+            .ok()
+            .and_then(|value| value.parse::<f64>().ok())
+            .unwrap_or(20.0)
+            .max(0.0);
+        let bytes_per_row = (config.width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("frame capture"),
+            size: u64::from(bytes_per_row) * u64::from(config.height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        info!(
+            path = %path.display(),
+            delay_secs = delay,
+            "frame capture armed"
+        );
+        Some(Self {
+            path,
+            delay: Duration::from_secs_f64(delay),
+            started: Instant::now(),
+            buffer,
+            bytes_per_row,
+            width: config.width,
+            height: config.height,
+            format: config.format,
+            done: false,
+        })
+    }
+
+    fn due(&self) -> bool {
+        !self.done && self.started.elapsed() >= self.delay
+    }
 }
 
 impl Renderer {
@@ -308,10 +366,15 @@ impl Renderer {
         let config = surface
             .get_default_config(&adapter, width, height)
             .ok_or(RendererError::UnsupportedSurface)?;
-        let present_modes = surface.get_capabilities(&adapter).present_modes;
+        let caps = surface.get_capabilities(&adapter);
+        let present_modes = caps.present_modes;
         let mut config = config;
         config.present_mode = wgpu::PresentMode::Fifo;
+        if caps.usages.contains(wgpu::TextureUsages::COPY_SRC) {
+            config.usage |= wgpu::TextureUsages::COPY_SRC;
+        }
         surface.configure(&device, &config);
+        let capture = Capture::new(&device, &config);
 
         let frame = FrameUniform {
             view_projection: camera.view_projection().to_cols_array(),
@@ -414,6 +477,7 @@ impl Renderer {
             depth_view,
             profiler,
             gpu_ms: 0.0,
+            capture,
         };
 
         info!(
@@ -775,6 +839,7 @@ impl Renderer {
                 label: Some("frame encoder"),
             });
 
+        let mut captured = false;
         {
             profiling::scope!("encode");
             let attachments = [Some(wgpu::RenderPassColorAttachment {
@@ -804,12 +869,42 @@ impl Renderer {
             if let Some(profiler) = self.profiler.as_mut() {
                 profiler.resolve_queries(&mut encoder);
             }
+
+            if let Some(capture) = &mut self.capture
+                && capture.due()
+            {
+                encoder.copy_texture_to_buffer(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &frame.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &capture.buffer,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(capture.bytes_per_row),
+                            rows_per_image: Some(capture.height),
+                        },
+                    },
+                    wgpu::Extent3d {
+                        width: capture.width,
+                        height: capture.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                captured = true;
+            }
         }
 
         {
             profiling::scope!("submit");
             self.queue.submit(Some(encoder.finish()));
             self.window.pre_present_notify();
+        }
+        if captured {
+            self.finish_capture();
         }
         {
             profiling::scope!("present");
@@ -835,6 +930,36 @@ impl Renderer {
         }
 
         stats
+    }
+
+    fn finish_capture(&mut self) {
+        let Some(capture) = &mut self.capture else {
+            return;
+        };
+        let slice = capture.buffer.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+        let result = slice.get_mapped_range().map(|data| {
+            write_bmp(
+                &capture.path,
+                capture.width,
+                capture.height,
+                capture.bytes_per_row,
+                capture.format,
+                &data,
+            )
+        });
+        capture.buffer.unmap();
+        capture.done = true;
+        match result {
+            Ok(Ok(())) => info!(path = %capture.path.display(), "captured frame"),
+            Ok(Err(error)) => {
+                warn!(%error, path = %capture.path.display(), "failed to write frame capture");
+            }
+            Err(error) => {
+                warn!(%error, path = %capture.path.display(), "failed to map frame capture");
+            }
+        }
     }
 
     fn scene_pass_descriptor<'a>(
@@ -968,6 +1093,53 @@ impl Renderer {
             Err(error) => error!(%error, "failed to recreate the window surface"),
         }
     }
+}
+
+/// Writes one BGRA/RGBA readback as a 24-bit BMP.
+#[allow(clippy::cast_possible_truncation)]
+fn write_bmp(
+    path: &Path,
+    width: u32,
+    height: u32,
+    bytes_per_row: u32,
+    format: wgpu::TextureFormat,
+    data: &[u8],
+) -> std::io::Result<()> {
+    let row_bytes = width.saturating_mul(3);
+    let padding = (4 - row_bytes % 4) % 4;
+    let image_size = (row_bytes + padding).saturating_mul(height);
+    let file_size = 54 + image_size;
+    let mut out = Vec::with_capacity(usize::try_from(file_size).unwrap_or(0));
+    out.extend_from_slice(b"BM");
+    out.extend_from_slice(&file_size.to_le_bytes());
+    out.extend_from_slice(&[0; 4]);
+    out.extend_from_slice(&54_u32.to_le_bytes());
+    out.extend_from_slice(&40_u32.to_le_bytes());
+    out.extend_from_slice(&i32::try_from(width).unwrap_or(i32::MAX).to_le_bytes());
+    out.extend_from_slice(&i32::try_from(height).unwrap_or(i32::MAX).to_le_bytes());
+    out.extend_from_slice(&1_u16.to_le_bytes());
+    out.extend_from_slice(&24_u16.to_le_bytes());
+    out.extend_from_slice(&0_u32.to_le_bytes());
+    out.extend_from_slice(&image_size.to_le_bytes());
+    out.extend_from_slice(&0_u32.to_le_bytes());
+    out.extend_from_slice(&0_u32.to_le_bytes());
+    out.extend_from_slice(&0_u32.to_le_bytes());
+    out.extend_from_slice(&0_u32.to_le_bytes());
+    for y in (0..height).rev() {
+        let row = &data[y as usize * bytes_per_row as usize..];
+        for x in 0..width {
+            let i = x as usize * 4;
+            let (blue, green, red) = match format {
+                wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb => {
+                    (row[i + 2], row[i + 1], row[i])
+                }
+                _ => (row[i], row[i + 1], row[i + 2]),
+            };
+            out.extend_from_slice(&[blue, green, red]);
+        }
+        out.extend(std::iter::repeat_n(0, padding as usize));
+    }
+    std::fs::write(path, out)
 }
 
 /// Features the GPU profiler needs, intersected with what the adapter supports.
@@ -1527,6 +1699,24 @@ fn create_overlay_buffer(device: &wgpu::Device) -> (wgpu::Buffer, u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bmp_rows_are_bottom_up_bgr_with_padding() {
+        let directory = std::env::temp_dir().join(format!("engine-bmp-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("capture.bmp");
+        let data = [10, 20, 30, 255, 40, 50, 60, 255];
+        write_bmp(&path, 2, 1, 8, wgpu::TextureFormat::Bgra8UnormSrgb, &data).unwrap();
+
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(&bytes[..2], b"BM");
+        assert_eq!(bytes.len(), 54 + 6 + 2);
+        assert_eq!(&bytes[18..22], &2_i32.to_le_bytes());
+        assert_eq!(&bytes[22..26], &1_i32.to_le_bytes());
+        assert_eq!(&bytes[54..60], &[10, 20, 30, 40, 50, 60]);
+        assert_eq!(&bytes[60..62], &[0, 0]);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn shared_index_pattern_matches_the_mesher() {

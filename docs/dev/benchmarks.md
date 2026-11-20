@@ -736,6 +736,23 @@ and the argument lists are reused. The frame log now reports `stream_ms`, `level
 - One 80 s run logged 0.65 ms and a 54 ms stall in an otherwise 0.59 ms run; frame-time outliers are
   dominated by the window/surface state, so compare ranges, not single samples.
 
+### Frame capture
+
+`ENGINE_CAPTURE=<path.bmp>` and `ENGINE_CAPTURE_DELAY=<seconds>` (default 20) copy the presented
+surface to a readback buffer and write a 24-bit BMP once. It does not need window focus, so it is the
+repeatable visual gate for horizon and hierarchy work.
+
+The horizon A/B at the spawn view is conclusive:
+
+- **Off:** the full ridge and its trees are visible to the horizon.
+- **On:** the far part of the ridge beyond the near crest is removed, leaving a vertical cut at a
+  chunk boundary.
+- Excluding trees from the horizon tops (`Chunk::terrain_top`) did not remove the cut. The remaining
+  over-cull is the per-chunk maximum top splatted across the chunk's whole azimuth span; the next
+  horizon fix is a per-bin or minimum-column occluder height.
+- Horizon therefore remains opt-in. The capture tool is kept for the next horizon attempt and for
+  the hierarchy's section seam.
+
 ### Section foundation (level 1)
 
 The first hierarchy slice adds `src/section.rs`: `SectionKey` math, a level-1 coarse generator using
