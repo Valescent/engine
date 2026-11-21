@@ -19,6 +19,7 @@ mod renderer;
 mod sky;
 mod startup;
 mod v0;
+mod world_io;
 
 pub use app::RunError;
 pub use renderer::RendererError;

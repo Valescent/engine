@@ -30,9 +30,9 @@ use crate::player::Player;
 use crate::renderer::{Renderer, RendererError};
 use crate::save;
 use crate::sky::Sky;
-use crate::startup::{no_vsync_requested, save_directory};
 use crate::streaming::Streaming;
 use crate::world::{ChunkCoord, DirtyChunks, SaveError, World};
+use crate::world_io::{no_vsync_requested, save_directory};
 
 use self::frame::{FrameAccumulator, upload_terrain_demo};
 
@@ -413,7 +413,7 @@ mod tests {
     use crate::frustum::Frustum;
     use crate::light;
     use crate::mesher::{Job, JobResult};
-    use crate::startup::stress_world;
+    use crate::world_io::stress_world;
 
     use super::*;
 

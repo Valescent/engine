@@ -239,7 +239,7 @@ with a real counterexample, **1** ad hoc, **0** absent or opposite.
 |---:|---|---|---:|---|
 | 1 | Headless crate boundary | `terrain-core` normal deps exclude `winit`, `wgpu`, `tracy-client`, `wgpu-profiler` | 4 | `cargo tree -p terrain-core -e normal` resolves only `fastnoise-lite` and `thiserror`; the CI `Crate graph` step fails on a window, GPU, or profiler leak ([testing](../dev/testing.md)). |
 | 2 | Dependency direction inside `terrain-core` | A stage never imports `pipeline`, `save`, or `world_save`; only `pipeline` imports all stages | 3 | The `use crate::` edges are clean: `pipeline` names every stage, and no stage names `pipeline`, `save`, or `world_save` outside a test module. There is still no edge checker, so the rule rests on review. |
-| 3 | Cycle freedom | The module graph has no back edge | 1 | `content <-> section` and `v0::light <-> v0::mesh` remain; the root/headless cycle is gone, but `app <-> startup` replaced it (§3.1). |
+| 3 | Cycle freedom | The module graph has no back edge | 1 | `content <-> section` and `v0::light <-> v0::mesh` remain; the root/headless cycle and the `app <-> startup` replacement are gone (§3.1). |
 | 4 | Public surface | `pub` only at a crate boundary; `pub(crate)` inside | 3 | `terrain-core`: 325 reachable public items, down from 889, against 712 `pub(crate)` declarations; `tests/visibility.rs`, three `compile_fail` doctests, and the strict rustdoc CI gate guard it. `engine`: 6 public items and 8 public modules, including the transitional `v0` re-exports. |
 | 5 | Module depth and ownership | One module owns each state; callers use an interface smaller than the body | 3 | `src/lib.rs` is 75 lines with no function body; `pipeline` hides every stage behind 22 public items; `DemoRuntime` owns patch, ring, save, repair, and the edit queue. `App` is down from 39 fields to 34, one of them `demo`, and keeps all 34 `pub(crate)` for the rest of the crate. |
 | 6 | File budget | No new file over 1,000 lines; exceptions listed | 4 | `scripts/size-budgets.sh` exits 0: 177 tracked files (8 `src/v0/` excluded), 0 counted files over 1,000, 30 over 600; the largest counted file is `metrics2.rs` at 991. CI runs the script as a hard gate. |
@@ -257,8 +257,8 @@ transitional `v0` modules that are still public from `engine`.
 
 ### 3.1 Dependency edges and cycles
 
-Measured at `c0d47e9` from production `use crate::` paths (test modules and `*/tests/` files
-excluded):
+Measured at the `feature/break-app-cycle` tip from production `use crate::` paths (test modules and
+`*/tests/` files excluded):
 
 ```text
 terrain-core:
@@ -270,10 +270,10 @@ terrain-core:
   world_save -> content, description, editlog, error, hash, header, save, section
 
 engine:
-  startup -> app, block, config, demo, generation, headless, mesher, residency,
-             streaming, world
-  app -> startup (insert_generated_chunk, release_column, save_directory,
-                  no_vsync_requested)      # cycle: app <-> startup
+  startup -> app, config, demo, headless, residency, streaming, world, world_io
+  app -> block, camera, config, demo, mesh, mesher, player, renderer, save, sky,
+         streaming, world, world_io
+  world_io -> block, generation, mesher, streaming, world
   demo -> content, description, editlog, error, light2, lod, mesher2, padded,
           pipeline, player, residency, save, section, world_save
   v0::light -> v0::mesh::ChunkSnapshot     # cycle: v0::light <-> v0::mesh
@@ -282,23 +282,23 @@ engine:
   renderer -> mesher2::Quad (via the engine re-export)
 ```
 
-Two of the three original cycles remain; the third is broken, but a new `app <-> startup` cycle took
-its place:
+Two of the three original cycles remain, and the `app <-> startup` replacement is gone:
 
 - **Crate root `<->` headless: broken.** `headless` imports `crate::app::App`; `startup` imports
   `headless` and `app`; `src/lib.rs` only declares `mod headless;`. The edge is
   `startup -> headless -> app`, which is acyclic.
+- **`app <-> startup`: broken.** `src/world_io.rs` now owns `save_directory`, `no_vsync_requested`,
+  `insert_generated_chunk`, `release_column`, `stress_world`, and the `world_for`/`generated_setup`
+  seed helpers. `startup` still imports `app::{App, RunError}` and constructs `App`; `app` imports
+  `world_io`; `world_io` imports neither, so the edge is `startup -> app -> world_io` and
+  `startup -> world_io`. `startup` keeps `run`, tracing setup, the environment switches, config and
+  world choice, and the demo `open` hand-off.
 - **`section <-> content`: remains.** `BlockId` is still `pub type BlockId = u16` in
   `section/storage.rs`; `content/pack.rs` and `content/record.rs` import it, and `section/codec.rs`
   imports `content::{ContentPack, ...}`.
 - **`light <-> mesh`: remains, now under `src/v0/`.** `v0/light.rs` imports
   `crate::mesh::ChunkSnapshot`, `v0/mesh.rs` imports `crate::light::LightField`, and
   `ChunkSnapshot` is still defined in `v0/mesh.rs`.
-
-The engine did not become acyclic: `app/mod.rs` and `app/frame.rs` import four helpers from
-`startup`, and `startup` imports `app::{App, RunError}`, so the graph now has `app <-> startup`. That
-pair also violates the §5.1 row that forbids `app -> startup`; moving those helpers into `app` or a
-shared leaf module would break it.
 
 The `section <-> content` cycle is a type-placement problem: `BlockId` is a content concept, but it
 lives in `section`. The `v0::light <-> v0::mesh` cycle is a data-structure placement problem:
@@ -566,8 +566,9 @@ Rust privacy rule the split relies on.
 
 | From | May use | Must not use |
 |---|---|---|
-| `startup` | `app`, `headless`, `demo`, `terrain_core`, `config` | `renderer` directly, `v0` internals |
-| `app` | `demo`, `renderer`, `camera`, `player`, `raycast`, `sky`, `overlay`, `v0`, `terrain_core` | `startup` |
+| `startup` | `app`, `headless`, `demo`, `terrain_core`, `config`, `world_io` | `renderer` directly, `v0` internals |
+| `app` | `demo`, `renderer`, `camera`, `player`, `raycast`, `sky`, `overlay`, `v0`, `terrain_core`, `world_io` | `startup` |
+| `world_io` | `v0::world`, `v0::generation`, `v0::mesher`, `v0::streaming`, `block` | `app`, `startup` |
 | `demo` | `terrain_core`, `player::BlockSource`, `block` | `app`, `renderer`, `winit`, `wgpu`, `v0::world` |
 | `renderer` | `camera`, `frustum`, `v0::mesh`, `v0::voxel`, `overlay`, `sky`, `terrain_core::mesher2` | `app`, `demo`, `startup` |
 | `v0::light` | `v0::world` | `v0::mesh` |
@@ -580,7 +581,7 @@ The target graph is a DAG. A stage module is a leaf with respect to orchestratio
 `description`, `hash`, `error`, `section`, `content`, `curve`, `noise`, `lattice`, and its sibling
 stage if the spec says so, but it may not call `Terrain::new` or open a world. That is what makes
 `pipeline` the only composition point. The landed tree meets this rule inside `terrain-core`; the
-`app <-> startup` and `v0::light <-> v0::mesh` pairs are the engine exceptions recorded in §3.1.
+`v0::light <-> v0::mesh` pair is the engine exception recorded in §3.1.
 
 A CI check can build this edge list from `crate::` paths and fail on a back edge. It is still not
 implemented; the exceptions in §3.1 would have to be fixed before it could be switched on.
