@@ -6,9 +6,12 @@
 //! [`crate::save`] and [`crate::editlog`]; it does not generate terrain and does
 //! not decide which sections are dirty.
 //!
-//! The engine still owns the IO loop. Call [`WorldSave::record_batch`] for each
-//! committed edit, [`WorldSave::flush`] on pause and quit, and
-//! [`WorldSave::save_section`] after a section's edits are durable in memory.
+//! The engine still owns the IO loop. Call `WorldSave::record_batch` for each
+//! committed edit, `WorldSave::flush` on pause and quit, and
+//! `WorldSave::save_section` after a section's edits are durable in memory. Those
+//! three methods, the journal accessor, the migration steps, and the journal
+//! writer family are crate-private: the public persistence surface is
+//! [`WorldSave`] plus [`SaveWorker`].
 //!
 //! # Structure
 //!

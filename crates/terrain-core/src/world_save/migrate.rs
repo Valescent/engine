@@ -18,7 +18,7 @@ impl WorldSave {
     ///
     /// [`ErrorKind::InvariantViolated`] for a backwards target, or
     /// [`ErrorKind::IoError`] when the header or journal cannot be written.
-    pub fn begin_migration(
+    pub(crate) fn begin_migration(
         &mut self,
         from_format: u16,
         to_format: u16,
@@ -55,7 +55,7 @@ impl WorldSave {
     /// [`ErrorKind::InvariantViolated`] when no compatible migration is open,
     /// [`ErrorKind::CorruptSection`] for a bad record, and
     /// [`ErrorKind::IoError`] for a filesystem failure.
-    pub fn migrate_sections(&mut self) -> Result<usize, TerrainError> {
+    pub(crate) fn migrate_sections(&mut self) -> Result<usize, TerrainError> {
         let MigrationState::InProgress { to_format, .. } = self.header.migration_state else {
             return Err(TerrainError::new(
                 Stage::Persistence,
@@ -124,7 +124,7 @@ impl WorldSave {
     /// # Errors
     ///
     /// The same errors as [`Self::migrate_sections`].
-    pub fn resume_migration(&mut self) -> Result<usize, TerrainError> {
+    pub(crate) fn resume_migration(&mut self) -> Result<usize, TerrainError> {
         self.migrate_sections()
     }
 
@@ -133,7 +133,7 @@ impl WorldSave {
     /// # Errors
     ///
     /// [`ErrorKind::IoError`] for a filesystem failure.
-    pub fn finish_migration(&mut self) -> Result<(), TerrainError> {
+    pub(crate) fn finish_migration(&mut self) -> Result<(), TerrainError> {
         self.header.migration_state = MigrationState::None;
         self.header.format_version = header::HEADER_FORMAT_VERSION;
         self.header_dirty = true;
@@ -164,7 +164,7 @@ impl WorldSave {
     ///
     /// The same errors as the three steps, or an [`ErrorKind::IoError`] while
     /// writing the report.
-    pub fn migrate_with_report(
+    pub(crate) fn migrate_with_report(
         &mut self,
         from_format: u16,
         to_format: u16,

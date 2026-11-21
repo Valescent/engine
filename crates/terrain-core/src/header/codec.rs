@@ -22,7 +22,7 @@ impl Header {
     /// Total and allocation-only: a string longer than 255 bytes is truncated
     /// at a character boundary so this cannot panic. [`Self::validate`] is the
     /// refusal point and runs before [`Self::write`] touches the disk.
-    pub fn encode(&self) -> Vec<u8> {
+    pub(crate) fn encode(&self) -> Vec<u8> {
         let mut out = self.encode_body();
         let checksum = crc32(&out);
         out.extend_from_slice(&checksum.to_le_bytes());
@@ -34,7 +34,7 @@ impl Header {
     /// Version 1 has no `migration_state` field. Production code writes the
     /// current layout through [`Self::write`].
     #[must_use]
-    pub fn encode_v1(&self) -> Vec<u8> {
+    pub(crate) fn encode_v1(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(128);
         out.extend_from_slice(&MAGIC);
         out.extend_from_slice(&HEADER_FORMAT_V1.to_le_bytes());
@@ -104,7 +104,7 @@ impl Header {
     /// `SectionFault::Framing` for a wrong magic or an unreadable field,
     /// `SectionFault::Checksum` for a bad `crc32`, and
     /// `ErrorKind::NewerThanEngine` for a newer `format_version`.
-    pub fn decode(bytes: &[u8]) -> Result<Self, TerrainError> {
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self, TerrainError> {
         decode_at(bytes, Path::new(HEADER_FILE))
     }
 
@@ -113,7 +113,7 @@ impl Header {
     /// # Errors
     ///
     /// Returns an `IoError` when the file cannot be read, otherwise whatever
-    /// [`Self::decode`] reports.
+    /// `Self::decode` reports.
     pub fn read(path: &Path) -> Result<Self, TerrainError> {
         let bytes = std::fs::read(path).map_err(|error| io_error("read", path, &error))?;
         decode_at(&bytes, path)
@@ -143,7 +143,7 @@ impl Header {
     ///
     /// `DescriptionInvalid` for a string longer than 255 bytes or an empty
     /// `hash_algorithm`.
-    pub fn validate(&self) -> Result<(), TerrainError> {
+    pub(crate) fn validate(&self) -> Result<(), TerrainError> {
         for (key, text) in [
             ("hash_algorithm", &self.hash_algorithm),
             ("platform_tag", &self.platform_tag),

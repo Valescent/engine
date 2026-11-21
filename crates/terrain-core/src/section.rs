@@ -16,7 +16,7 @@
 //! The palette is unordered and append-only. Nothing downstream may branch on
 //! palette order: decoding, equality, and [`Section::content_hash`] all go
 //! through block ids. Growing the palette repacks in one pass. Shrinking back to
-//! one id is [`Section::compact`]'s explicit job, never a side effect of a write.
+//! one id is `Section::compact`'s explicit job, never a side effect of a write.
 //!
 //! # Saved record (`J4.1`, `J4.2`, `J4.4`)
 //!

@@ -10,7 +10,7 @@ use super::record::{BlockRecord, LIGHT_LEVELS, MAX_RECORDS, content_error, valid
 ///
 /// Fail safe, like `light2`'s opaque fallback: an unknown block can under-light
 /// a scene, never leak light through geometry. Callers that care about the
-/// difference use [`ContentPack::props`], which returns `None`.
+/// difference use `ContentPack::props`, which returns `None`.
 pub const UNKNOWN_SKY_ATTEN: u8 = LIGHT_LEVELS;
 
 /// A parsed content pack, indexed by stable name and by runtime id.
@@ -110,20 +110,20 @@ impl ContentPack {
     /// `None` for an id outside the pack, including the `UNKNOWN_BASE`
     /// placeholder range.
     #[must_use]
-    pub fn props(&self, id: BlockId) -> Option<&BlockRecord> {
+    pub(crate) fn props(&self, id: BlockId) -> Option<&BlockRecord> {
         self.records.get(usize::from(id))
     }
 
     /// Skylight attenuation for one id; [`UNKNOWN_SKY_ATTEN`] outside the pack.
     #[must_use]
-    pub fn sky_atten(&self, id: BlockId) -> u8 {
+    pub(crate) fn sky_atten(&self, id: BlockId) -> u8 {
         self.props(id)
             .map_or(UNKNOWN_SKY_ATTEN, |record| record.sky_atten)
     }
 
     /// Light emission for one id; `0` outside the pack.
     #[must_use]
-    pub fn emission(&self, id: BlockId) -> u8 {
+    pub(crate) fn emission(&self, id: BlockId) -> u8 {
         self.props(id).map_or(0, |record| record.emission)
     }
 
@@ -143,7 +143,7 @@ impl ContentPack {
     ///
     /// `DescriptionInvalid { key: "CONTENT" }` for the first pinned record that
     /// is missing, changed, or has a different `record_version`.
-    pub fn check_compatible(&self, pinned: &ContentPack) -> Result<(), TerrainError> {
+    pub(crate) fn check_compatible(&self, pinned: &ContentPack) -> Result<(), TerrainError> {
         for expected in &pinned.records {
             let Some(id) = self.id(&expected.name) else {
                 return Err(content_error("missing"));

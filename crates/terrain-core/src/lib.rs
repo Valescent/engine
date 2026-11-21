@@ -21,6 +21,13 @@
 //! use terrain_core::residency::Budget;
 //! # fn main() {}
 //! ```
+//!
+//! ```compile_fail
+//! // Batch 3 narrowed the journal writer family together with
+//! // `WorldSave::journal_mut`, so the type itself left the public surface.
+//! use terrain_core::editlog::JournalWriter;
+//! # fn main() {}
+//! ```
 
 pub mod climate;
 #[allow(dead_code)]

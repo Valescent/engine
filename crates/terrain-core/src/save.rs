@@ -5,12 +5,13 @@
 //! previous generation, and opens the journal after recovering a torn tail.
 //!
 //! The journal IO thread is the caller's: `open_journal` returns the recovered
-//! batches and a [`JournalWriter`](crate::editlog::JournalWriter) positioned at
-//! the recovered end. Call
-//! [`JournalWriter::flush`](crate::editlog::JournalWriter::flush) on pause, on quit, and before every section save.
+//! batches and a crate-private `JournalWriter` positioned at the recovered end.
+//! Call its `flush` method on pause, on quit, and before every section save. The
+//! writer and its sink are crate-private; [`crate::world_save::WorldSave`] owns
+//! the only public path to them.
 //!
 //! `world-repair` (the interactive choice between backup, quarantine, and
-//! salvage) is not implemented here. [`SectionStore::read_backup`] exposes the
+//! salvage) is not implemented here. `SectionStore::read_backup` exposes the
 //! verified previous generation for a caller that offers it.
 //!
 //! # Structure

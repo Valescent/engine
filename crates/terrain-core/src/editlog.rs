@@ -5,10 +5,12 @@
 //! per-block changes, each carrying the value it replaced. This module owns the
 //! records, their total order, the bytes they travel in, and the policy that
 //! decides when those bytes reach a sink. It never opens a file and never
-//! spawns a thread (`J3.1`): a caller supplies a [`JournalSink`] (a
+//! spawns a thread (`J3.1`): a caller supplies a `JournalSink` (a
 //! [`std::fs::File`] for the real journal, a `Vec<u8>` in tests), builds an
-//! [`EditBatch`], pushes it into a [`JournalWriter`], and recovers with
-//! `decode_batches`.
+//! [`EditBatch`], pushes it into a `JournalWriter`, and recovers with
+//! `decode_batches`. The writer, its sink trait, its policy, and its outcome
+//! type are crate-private: the engine owns persistence through
+//! [`crate::world_save::WorldSave`] and [`crate::world_save::SaveWorker`].
 //!
 //! Three rules drive every shape here:
 //!
@@ -50,21 +52,21 @@
 //!
 //! # Group commit (`J3.1`)
 //!
-//! `encode_batch` and `decode_batches` are pure framing; [`JournalWriter`]
+//! `encode_batch` and `decode_batches` are pure framing; `JournalWriter`
 //! adds the policy. It buffers encoded frames and flushes them in one
-//! [`JournalSink::write_all`] when [`CommitPolicy::should_flush`] says so (64
+//! `JournalSink::write_all` when `CommitPolicy::should_flush` says so (64
 //! batches or 250 ms, whichever comes first), and calls
-//! [`JournalSink::sync_data`] only when [`CommitPolicy::should_sync`] says so
-//! (every 10 s) or on an explicit [`JournalWriter::flush`] (pause, quit, before
+//! `JournalSink::sync_data` only when `CommitPolicy::should_sync` says so
+//! (every 10 s) or on an explicit `JournalWriter::flush` (pause, quit, before
 //! a section save).
 //!
 //! No clock is read in this module. Every time value is a caller-supplied
 //! monotonic millisecond count sharing an origin with the writer's creation;
 //! the writer starts that clock at zero. The IO thread owns the sink and the
 //! file: it recovers the torn tail, appends from that offset, calls
-//! [`JournalWriter::push`] on the producing side, polls
-//! [`JournalWriter::flush_if_due`] with its current count, and calls
-//! [`JournalWriter::flush`] at the explicit barriers.
+//! `JournalWriter::push` on the producing side, polls
+//! `JournalWriter::flush_if_due` with its current count, and calls
+//! `JournalWriter::flush` at the explicit barriers.
 //!
 //! # Structure
 //!
@@ -81,6 +83,7 @@ mod test_support;
 pub use frame::{BlockName, Edit, EditBatch};
 #[allow(unused_imports)] // crate-private re-exports keep the flat module paths
 pub(crate) use frame::{crc32, decode_batches, decode_with_report, encode_batch};
-pub use log::{CommitPolicy, FlushOutcome, JournalSink, JournalWriter};
+#[allow(unused_imports)] // crate-private re-exports keep the flat module paths
+pub(crate) use log::{CommitPolicy, FlushOutcome, JournalSink, JournalWriter};
 #[allow(unused_imports)] // crate-private re-exports keep the flat module paths
 pub(crate) use replay::{can_undo, coalesce, last_write_wins};

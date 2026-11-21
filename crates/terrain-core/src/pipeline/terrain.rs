@@ -259,7 +259,7 @@ impl Terrain {
     ///
     /// Returns a typed error when a curve, graph, or table fails validation, or
     /// [`crate::error::ErrorKind::ManifestIncompatible`] when a required record is missing.
-    pub fn with_pack(seed: u64, pack: &ContentPack) -> Result<Self, TerrainError> {
+    pub(crate) fn with_pack(seed: u64, pack: &ContentPack) -> Result<Self, TerrainError> {
         let description = default_v1();
         let materials = TerrainMaterials::from_pack(pack)?;
         let continentalness = field_graph(NodeSpec::fbm(
@@ -373,7 +373,8 @@ impl Terrain {
     /// `Full`, because neither has an owner yet: no bytes are reserved and
     /// nothing is shed. `Q1.7` exports these same counters to the HUD.
     #[must_use]
-    pub fn overlay(&self) -> Vec<String> {
+    #[allow(dead_code)] // the overlay read model has no consumer outside unit tests yet
+    pub(crate) fn overlay(&self) -> Vec<String> {
         metrics2::overlay_lines(&self.counters, &self.ledger, &self.shed)
     }
 
@@ -536,7 +537,7 @@ impl Terrain {
 impl Terrain {
     /// Macro height at a block position, `f32` throughout (`C3.5`).
     #[must_use]
-    pub fn macro_height(&self, block_x: f32, block_z: f32) -> f32 {
+    pub(crate) fn macro_height(&self, block_x: f32, block_z: f32) -> f32 {
         let continentalness = self.continentalness.eval_2d(block_x, block_z);
         let roughness = self.roughness.eval_2d(block_x, block_z);
         let peaks = self.peaks.eval_2d(block_x, block_z);
