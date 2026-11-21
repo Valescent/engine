@@ -97,8 +97,9 @@ at 12 or ~46 s at 16 after the narrow border relight (`ENGINE_NO_VSYNC=1`).
   find lakes (~165 ms once per seed).
 - `hydro_tile` returns a view when the tile is inside the solved grid and falls back to a standalone
   tile solve outside it.
-- This is generator version 3: world-mode hydrology plus the per-column biome dither. A version 1
-  or 2 world is refused rather than regenerated with different water or biome borders.
+- This is generator version 4: world-mode hydrology, the per-column biome dither, and the retuned
+  desert centre. A version 1, 2, or 3 world is refused rather than regenerated with different water
+  or biome borders.
 
 ## Meshing and LOD
 

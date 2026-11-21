@@ -110,7 +110,7 @@ still unimplemented, in dependency order. Nothing here blocks the terrain engine
 | 5 | Demo integration: real light, texture refs, collision, streaming, LOD | `TERRAIN_DEMO` uses real column light, collision, edits, per-edit saves, and distance LOD0/LOD1/LOD2; tiles stream with prefetched neighbours; per-face texture references resolve to procedural layers (`ADR-0015`) | An asset pipeline to replace the placeholder layers |
 | 6 | World-mode hydrology wiring | `Terrain::hydro_tile` returns a view of one `WorldHydro` solve, shared by every worker; generator version 2 | None |
 | 7 | Camera-relative rendering (§14.3) | Specified; camera is world-space | Camera-wide change; the draw path already matches the current convention |
-| 8 | `terrain-gen map`, report bundle, `calibrate-blend`, PR counter gate | `map --seed --from --size --cell` (ASCII surface map, `--json`); `verify --report <dir>` writes `manifest.json`, `verify.json`, and `verify.txt`; `calibrate-blend --seeds 16` assesses all five biome pairs and passes; the per-column `biome_pick` is wired into the surface rules and feature footprint in generator version 3; `counters --tier pr` gates a deterministic baseline in CI | None |
+| 8 | `terrain-gen map`, report bundle, `calibrate-blend`, PR counter gate | `map --seed --from --size --cell` (ASCII surface map, `--json`); `verify --report <dir>` writes `manifest.json`, `verify.json`, and `verify.txt`; `calibrate-blend --seeds 16` assesses all five biome pairs and passes; the per-column `biome_pick` is wired into the surface rules and feature footprint in generator version 4; `counters --tier pr` gates a deterministic baseline in CI | None |
 | 9 | Split `terrain-core` from `engine` | Deferred; `terrain-gen` links `wgpu` today | Enables the `Q1.9` crate-graph check |
 
 Ordering rationale: persistence first because it is the only thing that can lose player work; the rest
@@ -214,7 +214,7 @@ Landed since the 2026-11-20 review: world-mode hydrology (generator version 2), 
 rendering with a 2^20 precision test, the render-distance column ring (default 12 → 625 columns,
 cap 16 → the spec's 1,089), LOD2 in the far band (measured ~724k quads and ~71 MB at the default
 versus ~863k and ~118 MB at the cap; ~1.955M and ~126 MB for LOD1 only), `calibrate-blend` plus the
-PR counter gate, the per-column biome dither (generator version 3), and the `terrain-core` split
+PR counter gate, the per-column biome dither (generator version 4), and the `terrain-core` split
 with a CI crate-graph check.
 
 | Item | Why it is not a small change | First safe step |

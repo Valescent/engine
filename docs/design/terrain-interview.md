@@ -790,15 +790,16 @@ an ADR, or the executable source.
       transect scale correct (synthetic linear margin: 23.90 measured vs 23.98 closed form) and
       two measurement defects: the border walk skipped the nearest minimum, and the direction
       plane straddled the border's V. Both are fixed, and the gradient normaliser is now part of
-      `q` rather than a later bump. At 16 seeds all five pairs pass (medians 23.33–27.17, p10
-      14.69–18.76, p90 32.55–63.32). Generator version 3 calls `biome_pick` once per column for
+      `q` rather than a later bump. At 16 seeds all five pairs pass (medians 23.33–24.43, p10
+      14.63–18.77, p90 32.85–57.68). Generator version 4 calls `biome_pick` once per column for
       the surface rules and the `3 x 3` feature footprint, so the measured transition is the
       shipped one; the golden section hash and the PR counter baseline were refreshed. `q`
       quantisation is checked to be <0.1 block per step at a ~24-block band.
 - [x] E3.2 How many biomes exist and how are they named and versioned?
       **Six records in two classes.** Climate biomes (the only argmin candidates): **plains**
-      (~0.55, 0.45), **forest** (~0.50, 0.75), **desert** (~0.85, 0.10), **tundra** (~0.10, 0.35),
-      all weight 1.0. Centres are tuning starting points placed against the measured climate
+      (~0.55, 0.45), **forest** (~0.50, 0.75), **desert** (~0.84, 0.15, weight 1.15),
+      **tundra** (~0.10, 0.35). The other three use weight 1.0. Centres are tuning starting
+      points placed against the measured climate
       histogram, stored as `f32` bits. Override sets, never in climate space: **ocean** (slot 2) and
       **beach** (slot 3, with a cold-coast variant). **"Mountains" is not a biome** — alpine look
       comes from snow cap, slope stone, strata and deep rock. Compiler: ≥3 climate biomes, distinct

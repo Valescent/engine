@@ -58,7 +58,7 @@ derived state, runtime config, or per-section data.
 3. `description.toml` must exist and parse.
 4. Recompute `description_hash` and compare.
 5. `generator_version` must be shipped (or the world opens only through the migration dialog). This
-   build ships version 3 (world-mode hydrology plus the per-column biome dither); a version 1 or 2
+   build ships version 4 (world-mode hydrology, the per-column biome dither, and the retuned desert centre); a version 1, 2, or 3
    world is refused, because its water levels and biome borders would change.
 6. Validate the content pack against the pinned records. Textures are excluded from
    `record_hash`, so a re-texture never fails this check (`ADR-0015`).

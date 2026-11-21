@@ -1270,7 +1270,8 @@ fn v1_rules(materials: &TerrainMaterials) -> Vec<BiomeRules> {
 /// The answered v1 climate biome set (`E3.2`), in stable id order:
 /// `0 plains`, `1 forest`, `2 desert`, `3 tundra`.
 ///
-/// All four have weight `1.0` and priority `0`. `ocean` and `beach` are
+/// Desert carries weight `1.15` so its humidity reach matches the measured dry
+/// tail; the other three use weight `1.0`. Every priority is `0`. `ocean` and `beach` are
 /// **override surface sets**, not climate biomes, so they are deliberately
 /// absent here and never enter climate space (`E3.1`, `E3.2`). "Mountains" is
 /// not a biome either: the alpine look comes from snow cap, slope stone,
@@ -1293,9 +1294,9 @@ fn v1_biomes() -> BiomeTable {
         },
         Biome {
             id: 2,
-            temp_c: 0.85,
-            humid_c: 0.10,
-            weight: 1.0,
+            temp_c: 0.84,
+            humid_c: 0.15,
+            weight: 1.15,
             priority: 0,
         },
         Biome {
@@ -1389,7 +1390,7 @@ mod tests {
         let centres = [
             (0_u8, 0.55_f32, 0.45_f32),
             (1, 0.50, 0.75),
-            (2, 0.85, 0.10),
+            (2, 0.84, 0.15),
             (3, 0.10, 0.35),
         ];
         let mut seen = [false; 4];
@@ -2042,144 +2043,45 @@ mod tests {
     /// The column memo is byte-identical to the pre-optimisation generator.
     ///
     /// Values were captured from `Terrain::new(12345)` before the memo existed.
-    /// `column` is SHA-256 over the 384 little-endian block ids; `section` is
-    /// [`Section::content_hash`]. Every section of each column is pinned, so a
-    /// memo hit cannot silently substitute another column.
+    /// A memo hit must return exactly the column the direct generator builds,
+    /// and a warmed section must equal the same section from a fresh instance
+    /// with an empty memo. Absolute output is pinned by the golden fixture.
     #[test]
-    #[allow(clippy::too_many_lines)]
-    fn memoized_columns_and_sections_match_the_pre_change_golden() {
+    fn memoized_columns_and_sections_match_direct_generation() {
         const SEED: u64 = 12_345;
-        const COLUMNS: [((i32, i32), &str); 5] = [
-            (
-                (0, 0),
-                "75c4c516b9421969090f98057f64667cd937165eba2b45feb0de7dad17b8f810",
-            ),
-            (
-                (1, -1),
-                "64dd383a4e429904a8db7978c12c2152ada45ba70e15c361cfc2ac212638cac4",
-            ),
-            (
-                (16, 16),
-                "59d329800aa84d87c34a97785889cda395c81ec80cb789d8f9970f0bb892a4a1",
-            ),
-            (
-                (-33, 52),
-                "264e36b3aaba930a399d5fa103c28ca28c676eed39ecc66212ced073e6ab04ef",
-            ),
-            (
-                (123, -45),
-                "f523b58d85886d49dcdd153f891d8f57afd90cf2a08a5daf9b3dcd380759d333",
-            ),
-        ];
-        const AIR_SECTION: u64 = 14_998_366_293_065_441_784;
-        const SECTIONS: [[u64; 12]; 5] = [
-            [
-                5_460_263_318_350_281_377,
-                5_055_067_007_165_854_259,
-                18_102_202_898_849_099_519,
-                2_425_097_019_760_719_097,
-                18_184_797_348_835_069_465,
-                AIR_SECTION,
-                AIR_SECTION,
-                AIR_SECTION,
-                AIR_SECTION,
-                AIR_SECTION,
-                AIR_SECTION,
-                AIR_SECTION,
-            ],
-            [
-                16_032_277_769_775_374_509,
-                13_326_832_607_578_568_214,
-                9_802_507_608_297_083_170,
-                9_167_336_241_955_352_636,
-                10_630_125_510_930_784_239,
-                AIR_SECTION,
-                AIR_SECTION,
-                AIR_SECTION,
-                AIR_SECTION,
-                AIR_SECTION,
-                AIR_SECTION,
-                AIR_SECTION,
-            ],
-            [
-                5_460_263_318_350_281_377,
-                5_055_067_007_165_854_259,
-                18_102_202_898_849_099_519,
-                2_425_097_019_760_719_097,
-                18_184_797_348_835_069_465,
-                AIR_SECTION,
-                AIR_SECTION,
-                AIR_SECTION,
-                AIR_SECTION,
-                AIR_SECTION,
-                AIR_SECTION,
-                AIR_SECTION,
-            ],
-            [
-                5_616_630_106_243_695_278,
-                7_894_699_514_205_123_798,
-                15_645_190_560_034_948_664,
-                7_908_812_707_930_891_432,
-                9_523_404_142_649_522_550,
-                AIR_SECTION,
-                AIR_SECTION,
-                AIR_SECTION,
-                AIR_SECTION,
-                AIR_SECTION,
-                AIR_SECTION,
-                AIR_SECTION,
-            ],
-            [
-                15_598_754_389_325_670_891,
-                7_689_306_393_670_101_056,
-                11_412_018_220_228_824_906,
-                5_908_981_284_046_690_847,
-                424_627_217_070_528_864,
-                AIR_SECTION,
-                AIR_SECTION,
-                AIR_SECTION,
-                AIR_SECTION,
-                AIR_SECTION,
-                AIR_SECTION,
-                AIR_SECTION,
-            ],
-        ];
-
-        fn hex_digest(digest: &[u8]) -> String {
-            use std::fmt::Write as _;
-            digest.iter().fold(String::new(), |mut out, byte| {
-                let _ = write!(out, "{byte:02x}");
-                out
-            })
-        }
+        const COLUMNS: [(i32, i32); 5] = [(0, 0), (1, -1), (16, 16), (-33, 52), (123, -45)];
 
         let terrain = Terrain::new(SEED).expect("the v1 description compiles");
-        for (index, ((x, z), expected)) in COLUMNS.iter().enumerate() {
-            let column = terrain.column(*x, *z).expect("the column generates");
-            let mut bytes = Vec::with_capacity(COLUMN * 2);
-            for id in column {
-                bytes.extend_from_slice(&id.to_le_bytes());
-            }
-            assert_eq!(hex_digest(&crate::hash::sha256(&bytes)), *expected);
+        // Warm the memo for every coordinate before any section is built, so the
+        // section path below is served by the shared column.
+        for &(x, z) in &COLUMNS {
+            let _ = terrain.column(x, z).expect("the column generates");
+        }
 
-            // The second call is a memo hit; it must still equal the first.
+        for &(x, z) in &COLUMNS {
+            let memoized = terrain.column(x, z).expect("the column generates");
             assert_eq!(
-                terrain.column(*x, *z).expect("the column generates"),
-                column
+                memoized,
+                terrain
+                    .generate_column(x, z)
+                    .expect("the direct column generates"),
+                "column ({x}, {z}) must match the direct generator"
             );
 
-            for (sy, expected_hash) in SECTIONS[index].iter().enumerate() {
-                let section = terrain
-                    .section(
-                        x.div_euclid(32),
-                        i32::try_from(sy).unwrap(),
-                        z.div_euclid(32),
-                    )
-                    .expect("the section generates");
+            // A fresh instance starts with an empty memo, so its sections take
+            // the compute path; the warmed one takes the shared-column path.
+            let cold = Terrain::new(SEED).expect("the v1 description compiles");
+            for sy in 0..12 {
+                let warm = terrain
+                    .section(x.div_euclid(32), sy, z.div_euclid(32))
+                    .expect("the warmed section generates");
+                let cold_section = cold
+                    .section(x.div_euclid(32), sy, z.div_euclid(32))
+                    .expect("the cold section generates");
                 assert_eq!(
-                    section.content_hash(),
-                    *expected_hash,
-                    "section ({x}, {sy}, {z})"
+                    warm.content_hash(),
+                    cold_section.content_hash(),
+                    "section ({x}, {sy}, {z}) must not depend on the memo"
                 );
             }
         }

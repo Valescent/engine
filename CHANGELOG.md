@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Generation version 2: hydrology solves the whole finite world once (512×512 macro cells) instead of per 512-block tile, and every worker shares that solve, so a lake or river that crosses a tile seam has one level. Version 1 worlds are refused rather than regenerated with different water. Cost is ~165 ms once per seed; demo startup is ~0.97 s.
 - `tracy` is a default feature, so a debug run captures to `reports/tracy/` unless `TRACY_CAPTURE_SECONDS=0`; CI builds every cargo command with `--no-default-features`.
 - The headless terrain stack now lives in a `terrain-core` workspace crate (generation through persistence), and `terrain-gen` moved with its tests and goldens. `engine` re-exports the moved modules, so existing paths still work, and CI proves the tool resolves no `wgpu`, `winit`, `wgpu-profiler`, or `tracy-client`.
+- Generation version 4: the desert centre moved to `(0.84, 0.15, weight 1.15)`, lifting the thinnest coverage (seed 9 desert 5.09% -> 6.89%) and bringing the desert/tundra blend from p90 63.32 to 57.68 while every pair's median stays in 20-28. Two golden section hashes move; the counter baseline is unchanged.
 
 ### Fixed
 

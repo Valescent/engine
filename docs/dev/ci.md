@@ -176,7 +176,7 @@ wall-clock counters, and the comparison rule are defined in
 [Terrain tools](terrain-tools.md#counters).
 
 `calibrate-blend` is not part of this PR job: it passes at 16 seeds against the shipped generator
-version 3, but the pair 2-3 margin is too thin to gate every pull request (p90 63.32 against 64,
+version 4, but the pair 2-3 margin is too thin to gate every pull request (p90 57.68 against 64,
 36 transects). The `Perf` workflow runs it nightly instead; the per-PR guard is the
 `biome_coverage_holds_for_pr_seeds` test, which samples all 16 PR seeds. See
 [Terrain tools](terrain-tools.md#current-margins-16-seeds) and

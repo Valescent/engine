@@ -2919,7 +2919,7 @@ const SECTIONS_DIR: &str = "sections";
 /// Saved section file suffix.
 const SECTION_SUFFIX: &str = "sect";
 /// The generator version this build evaluates (`T1.2`).
-const SHIPPED_GENERATOR_VERSION: u16 = 3;
+const SHIPPED_GENERATOR_VERSION: u16 = 4;
 /// Upper bound on recursive section discovery, so a symlink loop cannot hang.
 const MAX_SECTION_DEPTH: usize = 8;
 /// Drift details printed before the report is elided.
@@ -4029,7 +4029,7 @@ const STAGES_FILE: &str = "stages.json";
 ///
 /// ```json
 /// {
-///   "generator_version": 3,
+///   "generator_version": 4,
 ///   "seed": 8576271745415857709,
 ///   "description_hash": "<64 or 32 lowercase hex digits>",
 ///   "platform_tag": "x86_64-pc-windows-msvc",

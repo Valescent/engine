@@ -95,15 +95,15 @@ fn column_surface_follows_the_dithered_pick() {
     let terrain = Terrain::new(SEED).expect("the v1 description compiles");
     let materials = terrain.materials();
 
-    // A desert/plains border on land near (-870, -98). `best` is desert on both
+    // A desert/plains border on land near (-872, -100). `best` is desert on both
     // sides but the dither flips two columns to plains; their topsoil follows
     // the pick, not the nearest centre.
     let cases = [
-        (-870, -98, 0_u8, materials.grass, 2_u8),
-        (-864, -96, 2, materials.sand, 2),
-        (-863, -96, 0, materials.grass, 2),
-        (-861, -96, 2, materials.sand, 2),
-        (-860, -96, 0, materials.grass, 0),
+        (-875, -100, 2_u8, materials.sand, 2_u8),
+        (-871, -100, 0, materials.grass, 2),
+        (-870, -100, 2, materials.sand, 2),
+        (-869, -100, 0, materials.grass, 2),
+        (-868, -100, 1, materials.grass, 1),
     ];
     let mut overridden = 0;
     for (x, z, expected, topsoil, nearest) in cases {
