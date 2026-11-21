@@ -799,24 +799,25 @@ the same recursive projected refinement and parent retention as level 2; childre
 | Cold target / settled target | 2,836 / 4,908 |
 | Sections with bounds | 4,641 |
 | Sections in the frustum | 1,330 |
-| Sections removed by the horizon | 646 |
-| Visible nodes (sections + L0 chunks) | 1,259 |
-| Visible vertices | 5.15 M |
+| Sections removed by the horizon | 552 |
+| Visible nodes (sections + L0 chunks) | 1,358 |
+| Visible vertices | 5.86 M |
 | Draw calls | 2 |
-| Frame | 0.55-0.56 ms |
-| GPU scene | 0.327 ms |
+| Frame | 0.62-0.63 ms |
+| GPU scene | 0.365 ms |
 | Allocated geometry | 74.62 MiB |
-| Visible geometry | 9.83 MiB |
+| Visible geometry | 11.18 MiB |
 | Geometry reservation | 94.24 MiB |
 | L0 resident (detail 16) | 85.9 MB |
 
 - Far refinement adds about 1,900 settled sections; the 8M pool holds them with ~20 MB of headroom.
   Two uploads were deferred during startup and none after.
-- The section horizon removes 646 of 1,330 in-frustum sections (-49%), 4.25 M of 9.40 M visible
-  vertices (-45%), and 8.10 MB of visible geometry (-45%) at the spawn view. GPU scene time falls
-  from 0.780 ms to 0.323 ms.
+- The section horizon removes 552 of 1,330 in-frustum sections (-41%), 3.54 M of 9.40 M visible
+  vertices (-38%), and 6.75 MiB of visible geometry (-38%) at the spawn view. GPU scene time falls
+  from 0.780 ms to 0.365 ms. The conservative full-bin coverage rule draws 94 more sections than the
+  earlier partial-bin approximation, but it cannot hide a visible bin.
 - `bench_horizon_sections` reproduces the target and culling counts without a window:
-  `target=4908 bounds=4641 frustum=1330 occluded=646 visible=684`.
+  `target=4908 bounds=4641 frustum=1330 occluded=552 visible=778`.
 - The 8 km frame and draw gates hold: 60 FPS and 2 draws. The 500 MB working-set gate is
   unverified: the table records L0 resident blocks and light plus the geometry reservation, not
   total process working set, and no full working-set measurement exists.
@@ -829,18 +830,19 @@ The horizon caches its occluded chunk and section sets at each 250 ms rebuild, s
 hash lookups instead of rerunning the azimuth-bin scan for every node. The quad renderer iterates a
 compact list of slots with geometry instead of all 20,480 slots. At the spawn 8 km view:
 
-| Metric | Before | After |
+| Metric | Before | Current |
 |---|---:|---:|
-| Frame | 0.58-0.69 ms | **0.55-0.56 ms** |
-| GPU scene | 0.323 ms | 0.327 ms |
-| Horizon rebuild | ~0.74 ms / 250 ms | ~1.38 ms / 250 ms |
+| Frame | 0.58-0.69 ms | **0.62-0.63 ms** |
+| GPU scene | 0.323 ms | 0.365 ms |
+| Horizon rebuild | ~0.74 ms / 250 ms | ~2.58 ms / 250 ms |
 | Per-frame horizon bin scans | ~1,259 | 0 |
 
-The four profiling scopes now cover `input`, `player update`, `camera update`, `stream columns`,
-`hierarchy`, `mesh request`, `mesh upload`, and `record frame`. The next capture should attribute the
-remaining frame self time. Reusing the swapchain view and batching timestamp queries were evaluated
-and left alone: the view belongs to the acquired frame, and `wgpu-profiler` 0.28 resolves queries
-per frame.
+The cached horizon and compact active-slot draw loop are in place, but the conservative full-bin
+coverage rule draws more sections than the earlier approximate test. The combined current frame is
+0.62-0.63 ms. The four profiling scopes cover `input`, `player update`, `camera update`,
+`stream columns`, `hierarchy`, `mesh request`, `mesh upload`, and `record frame`. Reusing the
+swapchain view and batching timestamp queries were evaluated and left alone: the view belongs to the
+acquired frame, and `wgpu-profiler` 0.28 resolves queries per frame.
 
 #### Section horizon
 
@@ -859,11 +861,11 @@ Coarse sections run as `Job::Section` on the shared worker pool instead of the m
 thread builds the edit overlay and uploads finished opaque/water meshes and horizon bounds. Timing
 from `generated world ready` to `target=4908 queue=0`:
 
-| | Main-thread build | Pooled (8 jobs) | Pooled + bounded (11 jobs) |
-|---|---:|---:|---:|
-| Hierarchy settle (4,908 sections) | 22.9 s | 6.4-6.9 s | **5.69 s** |
-| First logged frame | 4.14 ms | 2.36 ms | 2.36-2.65 ms |
-| Settled frame / GPU | 0.69 / 0.33 ms | 0.58-0.69 / 0.32-0.33 ms | **0.55-0.56 / 0.327 ms** |
+| | Main-thread build | Pooled (8 jobs) | Bounded (11 jobs) | Review fixes (shared 16) |
+|---|---:|---:|---:|---:|
+| Hierarchy settle (4,908 sections) | 22.9 s | 6.4-6.9 s | 5.69 s | **7.8 s** |
+| First logged frame | 4.14 ms | 2.36 ms | 2.36-2.65 ms | 2.36-2.65 ms |
+| Settled frame / GPU | 0.69 / 0.33 ms | 0.58-0.69 / 0.32-0.33 ms | 0.55-0.56 / 0.327 ms | **0.62-0.63 / 0.365 ms** |
 
 - The pool has 11 workers and also serves chunk generation, light, and meshing. Section jobs use
   `Priority::Background`, so a saturated chunk load delays them rather than blocking the frame.
@@ -872,8 +874,13 @@ from `generated world ready` to `target=4908 queue=0`:
   the whole grid vertically, so they improve mainly on generation (629 -> 480 µs).
 - Raising `MAX_SECTION_JOBS` from 8 to 11 matched the worker count and cut the settle from 6.53 s to
   5.69 s in consecutive runs.
-- The full 4,908-section target still meshes to the same 5.15 M visible vertices after the horizon
-  pass. `sections_in_flight` in the frame log shows the queue draining.
+- Chunk and section results now share one upload budget. The old separate budgets allowed 8 + 8; a
+  cap of 8 slowed the settle to 8.9-10.3 s, while the shipped shared cap of 16 restores 7.8 s. The
+  5.69 s column predates that shared budget and the conservative horizon coverage; it is kept for
+  comparison, not as the current gate.
+- The full 4,908-section target still meshes to the same geometry; after the conservative horizon
+  coverage fix the settled view is 5.86 M visible vertices. `sections_in_flight` in the frame log
+  shows the queue draining.
 
 ### Section foundation (level 1)
 

@@ -69,7 +69,7 @@ help overdraw. The current order is the chunk map order.
 | Backface culling | Back faces | None | Done. |
 | Front-to-back sort | Overdraw | O(n log n) per frame | Sorts about 1,400 visible chunks; cheap, GPU-only win. |
 | Water distance cutoff | Transparent draws beyond LOD1 | None | Water is full resolution; skip it far away. |
-| Horizon (heightmap) culling | Chunks and hierarchy sections below the terrain silhouette | Cached horizon rebuild at most every 250 ms | Catches hills and mountains; a settled frame only does cached hash lookups; cannot see into caves or tunnels. |
+| Horizon (heightmap) culling | Chunks and hierarchy sections below the terrain silhouette | Cached horizon rebuild at most every 250 ms | Catches hills and mountains; a settled frame only does cached hash lookups; an occluder claims only bins it fully contains; cannot see into caves or tunnels. |
 | GPU occlusion queries | Any chunk hidden on screen, including caves | Query set plus one-frame-late readback | Handles what heightmaps cannot; adds synchronization. |
 | Screen-space depth pyramid | Same as queries, no readback stall | Compute pass plus indirect draws | Most robust, most work. |
 | Multi-draw indirect | Per-chunk draw setup | Megabuffer plus indirect args | Cuts 1,900 draws to a handful; the enabler for distance 48+. |

@@ -317,8 +317,8 @@ See [v0.0.9 scope](dev/v0.0.9-scope.md) for the deliverables and acceptance crit
 #### 4. Metrics
 - [x] Distance-32 target: settled frame around 0.6 ms, 39.31 MiB geometry reservation, 2 draws; geometry target met
 - [x] 2 km gate: 0.466 ms frame, 0.235 ms GPU, 3.58 M vertices, 2 draws, 30.94 MiB allocated geometry
-- [x] 8 km gate: 0.55-0.56 ms frame, 0.327 ms GPU, 5.15 M vertices, 1,259 visible nodes, 2 draws, 74.62 MiB allocated geometry, 94.24 MiB reservation; the section horizon removes 646 of 1,330 in-frustum sections and the hierarchy settles in 5.69 s
-- [x] 325 tests pass (ignored benchmarks run separately); fmt, clippy, doc, typos, and mdbook pass
+- [x] 8 km frame/draw gate: 0.62-0.63 ms frame, 0.365 ms GPU, 5.86 M vertices, 1,358 visible nodes, 2 draws, 74.62 MiB allocated geometry, 94.24 MiB reservation; the section horizon removes 552 of 1,330 in-frustum sections and the hierarchy settles in 7.8 s with the shared 16-result upload budget. The 500 MB total-working-set half of the gate is unverified.
+- [x] 370 tests pass (ignored benchmarks run separately); fmt, clippy, doc, typos, and mdbook pass
 
 #### 5. Acceptance and release
 - [ ] Manual definition-of-done run
@@ -332,7 +332,8 @@ See [v0.0.9 scope](dev/v0.0.9-scope.md) for the deliverables and acceptance crit
 - Main-thread frame time at or below 4 ms at distance 32, with no frame above 33 ms once ready
 - Headless counts unchanged for the same world, proving storage packing is not a content change
 
-**Measured:** the distance-32, 2 km, and 8 km gates are recorded above. The manual run, release
+**Measured:** the distance-32 and 2 km gates are recorded above. The 8 km frame/draw gate is recorded;
+its total working set is unverified, so the 500 MB half is not claimed. The manual run, release
 decision, and version bump remain.
 
 ### Non-Goals

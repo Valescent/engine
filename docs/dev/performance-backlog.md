@@ -24,7 +24,9 @@ Baseline at `0b65acc`:
 | `chunk light` | ~8.7 ms/job under Tracy |
 
 The windowed frame log also prints a 652-of-1,911 horizon counter, but that sample covers a
-different in-frustum set; the benchmark's 646 of 1,330 is the baseline.
+different in-frustum set; the benchmark's 646 of 1,330 is the baseline. After the review fixes the
+counts are 552 of 1,330 offline and 553 of 1,911 in the windowed run; the conservative full-bin
+coverage rule intentionally culls less.
 
 ## Steady frame
 
@@ -44,25 +46,32 @@ different in-frustum set; the benchmark's 646 of 1,330 is the baseline.
 | HL1 | Bounds-limit the section mesher to the solid/water y range | High (2-4x mesh) | M | done |
 | HL2 | Fill generated columns in bulk instead of per-sample `set_sample` | High (2-3x generate) | M | done |
 | HL3 | Add `section generate` / `section bounds` / `section light` / `section mesh` scopes | Enables HL1-HL2 | S | done |
-| HL4 | Tune `MAX_SECTION_JOBS` and section priority on the shared pool | Medium (settle) | S | done; 8 -> 11 jobs, 6.53 s -> 5.69 s |
+| HL4 | Tune `MAX_SECTION_JOBS` and section priority on the shared pool | Medium (settle) | S | done; 8 -> 11 jobs, 6.53 s -> 5.69 s with separate upload budgets; the shared 16-result budget settles in 7.8 s |
 | HL5 | Optimize the chunk-light BFS (bitsets or a flatter queue) | Medium (load) | M | todo |
 | HL6 | Reduce the L0 detail radius | High, but lowers near detail | S | rejected |
 
 ## Current results
 
-Measured after SF1-SF3 and HL1-HL4, on the same spawn view:
+Measured after the review fixes, on the same spawn view:
 
 | Gate | Before | Current |
 |---|---:|---:|
-| 8 km steady frame / GPU | 0.58-0.69 / 0.323 ms | **0.55-0.56 / 0.327 ms** |
-| 8 km hierarchy settle | 6.4-6.9 s (22.9 s before the pool) | **5.69 s** |
-| Visible nodes / vertices | 1,259 / 5.15 M | unchanged |
+| 8 km steady frame / GPU | 0.58-0.69 / 0.323 ms | **0.62-0.63 / 0.365 ms** |
+| 8 km hierarchy settle | 6.4-6.9 s (22.9 s before the pool) | **7.8 s** with the shared 16-result budget |
+| Visible nodes / vertices | 1,259 / 5.15 M | **1,358 / 5.86 M** |
+| Horizon-culled sections | 646 of 1,330 | **552 of 1,330 (778 visible)** |
 | L3 far section generation | 1,793 µs | **1,135 µs** |
 | L3 far opaque mesh | 1,784 µs | **642 µs** |
 | L3 far water mesh | 1,139 µs | **248 µs** |
-| Horizon rebuild | ~0.74 ms | ~1.38 ms every 250 ms; zero per-frame bin scans |
+| Horizon rebuild | ~0.74 ms | ~2.58 ms every 250 ms; zero per-frame bin scans |
 
-The section-job cap test used two settled runs: `MAX_SECTION_JOBS=8` gave 6.53 s and 11 gave 5.69 s. The pool has 11 workers, so 11 is the natural cap; chunk work still uses `Priority::Background` ordering. The far-section mesher is the main win because far sections hold only a few solid/water layers; near level-1 sections span almost the whole grid and improve less.
+The steady frame and visible geometry are higher than the pre-fix 0.55-0.56 ms / 5.15 M because the
+horizon now marks a bin covered only when the occluder interval fully contains it. That conservative
+rule is quality-safe but draws 94 more sections. The section-job cap test used two settled runs:
+`MAX_SECTION_JOBS=8` gave 6.53 s and 11 gave 5.69 s with separate 8 + 8 upload budgets. Chunk and
+section results now share one budget; 8 slowed the settle to 8.9-10.3 s, while the shipped 16 restores
+7.8 s. The far-section mesher remains the main load win because far sections hold only a few
+solid/water layers; near level-1 sections span almost the whole grid and improve less.
 
 ## Rules
 
