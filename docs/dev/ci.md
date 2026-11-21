@@ -19,7 +19,7 @@ them.
 
 | Workflow | File | Triggers | Jobs |
 |---|---|---|---|
-| `CI` | `.github/workflows/ci.yml` | Push to `main`, pull request | Test matrix, dependencies, spelling |
+| `CI` | `.github/workflows/ci.yml` | Push to `main`, pull request | Test matrix, dependencies, spelling, terrain gates |
 | `Docs` | `.github/workflows/docs.yml` | Push to `main`, pull request, manual dispatch | mdBook build, GitHub Pages deploy |
 | `Commits` | `.github/workflows/commits.yml` | Push to `main`, pull request | Conventional Commits, changelog gate |
 | `Release` | `.github/workflows/release.yml` | `v*` tag push, manual dispatch | Version bump, GitHub release |
@@ -174,6 +174,40 @@ than 5%; a baseline of zero must stay zero. The checked-in baseline is rewritten
 `counters --tier pr --update`, and the commit must say why. The selected counters, the excluded
 wall-clock counters, and the comparison rule are defined in
 [Terrain tools](terrain-tools.md#counters).
+
+### Size budgets
+
+The `Terrain gates` job also runs the file-size checker, which scans tracked `*.rs` files and
+ignores `target/`, `book/`, and `world/`:
+
+```console
+sh scripts/size-budgets.sh
+```
+
+The thresholds come from [Modular structure](../design/modular-structure.md#56-size-budgets)
+§5.6. Every file over **1,000 lines** is printed as a GitHub warning annotation
+(`::warning file=...,line=1::`), and files over **600 lines** are counted as the advisory tier.
+The script always exits 0 on findings, and the CI step sets `continue-on-error: true`: §8 records
+the decision that size budgets are warnings, not failures, until the refactor brings the tree
+under the limits. Remove `continue-on-error` and make the checker exit non-zero once no tracked
+Rust file exceeds 1,000 lines.
+
+On 2026-11-20 the merged tree has **22 files over 1,000 lines** and **29 files over 600 lines**
+out of 62 tracked Rust files (the 600-line count includes the 1,000-line offenders; 7 files sit
+between 601 and 1,000). The five largest are:
+
+| Lines | File |
+|---:|---|
+| 6,900 | `src/lib.rs` |
+| 4,646 | `crates/terrain-core/src/terrain_gen.rs` |
+| 2,688 | `crates/terrain-core/src/mesher2.rs` |
+| 2,681 | `src/renderer.rs` |
+| 2,129 | `crates/terrain-core/src/light2.rs` |
+
+`sh scripts/size-budgets.test.sh` builds a throwaway Git work tree with exactly 600-line and
+1,001-line fixtures and asserts the annotation, both counts, the 600-line boundary, and the zero
+exit. It runs as a separate, blocking step before the checker, because a broken checker should
+fail even while its findings stay advisory.
 
 `calibrate-blend` is not part of this PR job: it passes at 16 seeds against the shipped generator
 version 4, but the pair 2-3 margin is too thin to gate every pull request (p90 57.68 against 64,

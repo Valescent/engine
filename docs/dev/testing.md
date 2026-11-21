@@ -34,9 +34,15 @@ cargo test --locked --no-default-features
 cargo run --locked --quiet --no-default-features --bin terrain-gen -- golden check
 cargo tree -p terrain-core -e normal --no-default-features
 cargo doc --no-deps --no-default-features
+sh scripts/size-budgets.sh
+sh scripts/size-budgets.test.sh
 typos
 mdbook build
 ```
+
+`size-budgets.sh` reports files over 1,000 and 600 lines as warnings and always exits 0; the
+self-test checks its annotations and counts against fixed fixtures. See
+[CI](ci.md#size-budgets).
 
 CI also runs dependency licence and advisory checks, commit message checks, and the documentation build. The `pool_sim` benchmark is not part of CI. `--no-default-features` is required in CI because `tracy` is a default feature that builds a C++ client; use `cargo test --locked` locally to test the profiled build.
 
