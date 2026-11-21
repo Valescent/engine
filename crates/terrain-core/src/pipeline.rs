@@ -30,7 +30,7 @@
 )]
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
@@ -161,6 +161,13 @@ const HEIGHT_SIDE: i32 = TILE_BLOCKS + 2;
 const HEIGHT_CELLS: usize = (HEIGHT_SIDE * HEIGHT_SIDE) as usize;
 /// Vertical blocks in a column.
 const COLUMN: usize = WORLD_HEIGHT as usize;
+/// Finished columns kept per [`Terrain`], one full section footprint.
+///
+/// A section walks `32 x 32` columns and the ring asks for every section of a
+/// column before moving on, so this bound lets one section's column work feed
+/// the other eleven. It is a hard per-instance bound: about 0.8 MiB of block
+/// ids at `BlockId = u16`, plus the key map.
+const COLUMN_CACHE_COLUMNS: usize = 32 * 32;
 /// Highest relief above sea, in blocks (`C1.5`).
 const MAX_RELIEF: f32 = (MAX_TERRAIN_Y - SEA) as f32;
 /// Lowest base below sea, in blocks (`C1.6`).
@@ -311,6 +318,37 @@ pub struct Terrain {
     /// The one whole-world hydrology result, solved on first use and shared
     /// with every worker that installs it ([`Terrain::with_world_hydro`]).
     world_hydro: RefCell<Option<Arc<hydro::WorldHydro>>>,
+    /// Bounded per-instance memo of finished columns.
+    ///
+    /// A column's blocks are pure generator output, so reusing one changes no
+    /// byte. The cache is keyed by exact world `(x, z)`, is never shared
+    /// between `Terrain` instances, and is cleared when the hydrology result
+    /// changes. See [`COLUMN_CACHE_COLUMNS`] for the bound.
+    column_cache: RefCell<ColumnCache>,
+}
+
+/// Finished columns kept for reuse across the sections of one column.
+#[derive(Default)]
+struct ColumnCache {
+    entries: BTreeMap<(i32, i32), Rc<[BlockId; COLUMN]>>,
+    /// Insertion order, so eviction is a hard bound with no clock.
+    order: VecDeque<(i32, i32)>,
+}
+
+impl ColumnCache {
+    fn get(&self, x: i32, z: i32) -> Option<Rc<[BlockId; COLUMN]>> {
+        self.entries.get(&(x, z)).map(Rc::clone)
+    }
+
+    fn insert(&mut self, x: i32, z: i32, column: Rc<[BlockId; COLUMN]>) {
+        if self.entries.len() >= COLUMN_CACHE_COLUMNS
+            && let Some(oldest) = self.order.pop_front()
+        {
+            self.entries.remove(&oldest);
+        }
+        self.order.push_back((x, z));
+        self.entries.insert((x, z), column);
+    }
 }
 
 /// The hydrology result for one tile (`D8.2`).
@@ -473,6 +511,7 @@ impl Terrain {
             tiles: RefCell::new(BTreeMap::new()),
             hydro: RefCell::new(BTreeMap::new()),
             world_hydro: RefCell::new(None),
+            column_cache: RefCell::new(ColumnCache::default()),
         })
     }
 
@@ -708,9 +747,14 @@ impl Terrain {
     }
 
     /// Installs one solved world, so every worker shares a single solve.
+    ///
+    /// The column memo is cleared because water depths and lake levels change
+    /// with the hydrology result.
     #[must_use]
     pub fn with_world_hydro(mut self, world: Arc<hydro::WorldHydro>) -> Self {
         *self.world_hydro.get_mut() = Some(world);
+        self.column_cache.get_mut().entries.clear();
+        self.column_cache.get_mut().order.clear();
         self
     }
 
@@ -820,10 +864,42 @@ impl Terrain {
 
     /// Generates one block column.
     ///
+    /// The result is served from the per-instance column memo when this column
+    /// was generated already, so the sections of one column share its work.
+    ///
     /// # Errors
     ///
     /// Propagates tile and table failures.
     pub fn column(&self, block_x: i32, block_z: i32) -> Result<[BlockId; COLUMN], TerrainError> {
+        Ok(*self.shared_column(block_x, block_z)?)
+    }
+
+    /// One finished column, shared by every section that covers it.
+    ///
+    /// The memo is bounded by [`COLUMN_CACHE_COLUMNS`] and keyed by the exact
+    /// world `(x, z)`. A column is a pure function of the generator state, so
+    /// a hit is the same array a fresh [`Terrain::generate_column`] returns.
+    fn shared_column(
+        &self,
+        block_x: i32,
+        block_z: i32,
+    ) -> Result<Rc<[BlockId; COLUMN]>, TerrainError> {
+        if let Some(column) = self.column_cache.borrow().get(block_x, block_z) {
+            return Ok(column);
+        }
+        let column = Rc::new(self.generate_column(block_x, block_z)?);
+        self.column_cache
+            .borrow_mut()
+            .insert(block_x, block_z, Rc::clone(&column));
+        Ok(column)
+    }
+
+    /// Generates one column without consulting the memo.
+    fn generate_column(
+        &self,
+        block_x: i32,
+        block_z: i32,
+    ) -> Result<[BlockId; COLUMN], TerrainError> {
         let tile_x = crate::lattice::floor_div(block_x, TILE_BLOCKS);
         let tile_z = crate::lattice::floor_div(block_z, TILE_BLOCKS);
         let tile = self.tile(tile_x, tile_z)?;
@@ -929,7 +1005,7 @@ impl Terrain {
             vec![self.materials.air; crate::description::SECTION_VOLUME].into_boxed_slice();
         for z in 0..32 {
             for x in 0..32 {
-                let column = self.column(base_x + x, base_z + z)?;
+                let column = self.shared_column(base_x + x, base_z + z)?;
                 for y in 0..32 {
                     let world_y = base_y + y;
                     if world_y < 0 || world_y >= WORLD_HEIGHT as i32 {
@@ -1961,5 +2037,151 @@ mod tests {
                 .expect("the section generates")
                 .content_hash(),
         );
+    }
+
+    /// The column memo is byte-identical to the pre-optimisation generator.
+    ///
+    /// Values were captured from `Terrain::new(12345)` before the memo existed.
+    /// `column` is SHA-256 over the 384 little-endian block ids; `section` is
+    /// [`Section::content_hash`]. Every section of each column is pinned, so a
+    /// memo hit cannot silently substitute another column.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn memoized_columns_and_sections_match_the_pre_change_golden() {
+        const SEED: u64 = 12_345;
+        const COLUMNS: [((i32, i32), &str); 5] = [
+            (
+                (0, 0),
+                "75c4c516b9421969090f98057f64667cd937165eba2b45feb0de7dad17b8f810",
+            ),
+            (
+                (1, -1),
+                "64dd383a4e429904a8db7978c12c2152ada45ba70e15c361cfc2ac212638cac4",
+            ),
+            (
+                (16, 16),
+                "59d329800aa84d87c34a97785889cda395c81ec80cb789d8f9970f0bb892a4a1",
+            ),
+            (
+                (-33, 52),
+                "264e36b3aaba930a399d5fa103c28ca28c676eed39ecc66212ced073e6ab04ef",
+            ),
+            (
+                (123, -45),
+                "f523b58d85886d49dcdd153f891d8f57afd90cf2a08a5daf9b3dcd380759d333",
+            ),
+        ];
+        const AIR_SECTION: u64 = 14_998_366_293_065_441_784;
+        const SECTIONS: [[u64; 12]; 5] = [
+            [
+                5_460_263_318_350_281_377,
+                5_055_067_007_165_854_259,
+                18_102_202_898_849_099_519,
+                2_425_097_019_760_719_097,
+                18_184_797_348_835_069_465,
+                AIR_SECTION,
+                AIR_SECTION,
+                AIR_SECTION,
+                AIR_SECTION,
+                AIR_SECTION,
+                AIR_SECTION,
+                AIR_SECTION,
+            ],
+            [
+                16_032_277_769_775_374_509,
+                13_326_832_607_578_568_214,
+                9_802_507_608_297_083_170,
+                9_167_336_241_955_352_636,
+                10_630_125_510_930_784_239,
+                AIR_SECTION,
+                AIR_SECTION,
+                AIR_SECTION,
+                AIR_SECTION,
+                AIR_SECTION,
+                AIR_SECTION,
+                AIR_SECTION,
+            ],
+            [
+                5_460_263_318_350_281_377,
+                5_055_067_007_165_854_259,
+                18_102_202_898_849_099_519,
+                2_425_097_019_760_719_097,
+                18_184_797_348_835_069_465,
+                AIR_SECTION,
+                AIR_SECTION,
+                AIR_SECTION,
+                AIR_SECTION,
+                AIR_SECTION,
+                AIR_SECTION,
+                AIR_SECTION,
+            ],
+            [
+                5_616_630_106_243_695_278,
+                7_894_699_514_205_123_798,
+                15_645_190_560_034_948_664,
+                7_908_812_707_930_891_432,
+                9_523_404_142_649_522_550,
+                AIR_SECTION,
+                AIR_SECTION,
+                AIR_SECTION,
+                AIR_SECTION,
+                AIR_SECTION,
+                AIR_SECTION,
+                AIR_SECTION,
+            ],
+            [
+                15_598_754_389_325_670_891,
+                7_689_306_393_670_101_056,
+                11_412_018_220_228_824_906,
+                5_908_981_284_046_690_847,
+                424_627_217_070_528_864,
+                AIR_SECTION,
+                AIR_SECTION,
+                AIR_SECTION,
+                AIR_SECTION,
+                AIR_SECTION,
+                AIR_SECTION,
+                AIR_SECTION,
+            ],
+        ];
+
+        fn hex_digest(digest: &[u8]) -> String {
+            use std::fmt::Write as _;
+            digest.iter().fold(String::new(), |mut out, byte| {
+                let _ = write!(out, "{byte:02x}");
+                out
+            })
+        }
+
+        let terrain = Terrain::new(SEED).expect("the v1 description compiles");
+        for (index, ((x, z), expected)) in COLUMNS.iter().enumerate() {
+            let column = terrain.column(*x, *z).expect("the column generates");
+            let mut bytes = Vec::with_capacity(COLUMN * 2);
+            for id in column {
+                bytes.extend_from_slice(&id.to_le_bytes());
+            }
+            assert_eq!(hex_digest(&crate::hash::sha256(&bytes)), *expected);
+
+            // The second call is a memo hit; it must still equal the first.
+            assert_eq!(
+                terrain.column(*x, *z).expect("the column generates"),
+                column
+            );
+
+            for (sy, expected_hash) in SECTIONS[index].iter().enumerate() {
+                let section = terrain
+                    .section(
+                        x.div_euclid(32),
+                        i32::try_from(sy).unwrap(),
+                        z.div_euclid(32),
+                    )
+                    .expect("the section generates");
+                assert_eq!(
+                    section.content_hash(),
+                    *expected_hash,
+                    "section ({x}, {sy}, {z})"
+                );
+            }
+        }
     }
 }
