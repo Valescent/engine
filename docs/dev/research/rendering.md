@@ -89,8 +89,9 @@ before committing; it changes the frame shape more than any item above.
 4. Megabuffer plus multi-draw once draw count, not vertices, is the limit.
 5. Mipmaps and anisotropy for quality.
 
-Items 2 and 4 are the first two steps of [GPU-driven meshing](gpu-driven-meshing.md), which also
-covers vertex pulling, a shared quad pool, and a compute mesher.
+Items 2 and 4 are components of [GPU-driven meshing](gpu-driven-meshing.md), not sequential stages:
+that plan packs quads first, then combines storage-buffer chunk info and the megabuffer in one stage.
+It also covers vertex pulling, a shared quad pool, and a compute mesher.
 
 Validate with `draw_calls`, `visible_vertices`, `GPU` time under Tracy, and the distance-24 scene.
 Keep the v0.0.4 reference mesher for the existing correctness tests.

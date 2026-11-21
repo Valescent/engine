@@ -57,12 +57,12 @@ Three consequences:
 
 ## Options
 
-### 1. Reusable scratch and a water early-out — in progress
+### 1. Reusable scratch and a water early-out — landed
 
 Hoist the greedy mask out of the face loop and `fill(None)` per slice; skip the water pass when the
-chunk has no water. Both are structural, not algorithmic, and keep output identical. **Landed** with
-the v0.0.9 storage work: dry chunks build water in 0.0 ms instead of 0.37-0.38 ms, and the mask
-change takes 5-10% off opaque builds (surface 0.97 → 0.91 ms, all-air 0.42 → 0.38 ms).
+chunk has no water. Both are structural, not algorithmic, and keep output identical. Landed with the
+v0.0.9 storage work: dry chunks build water in 0.0 ms instead of 0.37-0.38 ms, and the mask change
+takes 5-10% off opaque builds (surface 0.97 → 0.91 ms, all-air 0.42 → 0.38 ms).
 
 ### 2. Skip slices and columns that cannot emit
 

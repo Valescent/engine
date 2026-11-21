@@ -1,11 +1,11 @@
 # GPU-driven meshing research
 
-`docs/GPU-Driven Voxel Meshing and Rendering Spec v1.md` proposes a pipeline where the CPU only
-queues work: edits scatter into a voxel pool, compute shaders mesh dirty chunks into a shared quad
-pool, compute culling compacts a draw list, and one multi-draw indirect call renders vertex-pulled
-quads. This report checks that proposal against the engine as it stands, separates the parts that
-pay for themselves today from the parts that do not, and records what has to change before either
-can land.
+[GPU-Driven Voxel Meshing and Rendering Spec v1](<../../GPU-Driven Voxel Meshing and Rendering Spec v1.md>)
+proposes a pipeline where the CPU only queues work: edits scatter into a voxel pool, compute shaders
+mesh dirty chunks into a shared quad pool, compute culling compacts a draw list, and one multi-draw
+indirect call renders vertex-pulled quads. This report checks that proposal against the engine as it
+stands, separates the parts that pay for themselves today from the parts that do not, and records
+what has to change before either can land.
 
 It is research, not a commitment. The minimal-footprint variant and the compute mesher are
 unscheduled research, not v0.0.9 scope: that milestone lands the CPU-built quad pool, and its scope
@@ -129,9 +129,9 @@ most of the measured cost sits in what A removes.
   for CPU workers and their shared scratch; compute meshing does not.
 - **Frees the workers for latency-sensitive jobs.** Generation (~2.5 ms per column) and light BFS stay
   on the CPU; meshing leaves the queue entirely.
-- **Makes 4 cm sub-voxels conceivable.** A subdivided 32³ chunk holds 5.1 M sub-voxels. That is not a
-  CPU worker job, and it is the one content direction the spec enables that the current path cannot
-  reach.
+- **Makes 4 cm sub-voxels conceivable.** A subdivided 32³ chunk holds 512 M sub-voxel samples
+  (32³ blocks × 25³ sub-voxels). That is not a CPU worker job, and it is the one content direction
+  the spec enables that the current path cannot reach.
 - **Keeps a free oracle.** The CPU mesher stays in tree as the reference and the fallback, which the
   spec requires and the test suite already relies on.
 
@@ -186,16 +186,18 @@ Two layouts fit the engine's needs. The 8-byte form only works if lighting becom
 | Field | 8-byte, flat light | 12-byte, per-vertex light |
 |---|---:|---:|
 | Position in chunk, 3 × 5 bits | 15 | 15 |
+| Sub-voxel offset, 3 × 5 bits (subdivided quads only) | 15 | 15 |
 | Extent minus one, 2 × 5 bits | 10 | 10 |
 | Face direction | 3 | 3 |
-| Material ID | 12-16 | 12-16 |
+| Material ID | 12 | 12 |
 | Scale flag (block or sub-voxel) | 1 | 1 |
 | AO, 2 bits per corner | 8 | - |
 | Sky, block, AO, 10 bits per corner | - | 40 |
-| **Total** | **49-53 of 64** | **81-85 of 96** |
+| **Total** | **64 of 64** | **96 of 96** |
 
-Both leave room. The choice is really a lighting decision, and the spec's open questions do not list
-it.
+Both fit exactly once the sub-voxel offset is included, which is why material is capped at 12 bits; a
+16-bit material would need 68 and 100 bits. The choice is really a lighting decision, and the spec's
+open questions do not list it.
 
 ## Memory at distance 24
 
@@ -294,11 +296,15 @@ for the chunks currently being meshed. At one byte per block and a nibble per li
 once, roughly 310 MB of transfer, and then the ring is reused.
 
 **Page the quads.** Average chunk geometry is ~188 quads (11 KiB at 60 B per quad, derived), so two
-page classes, 256 and 1024 quads, cover the distribution. A remesh takes one free page, the chunk
-record swaps to it, and the old page returns to the free list after the frames in flight that could
-read it. No suballocator, no fragmentation beyond the class rounding, and no readback: a fixed page
-lets the dispatch write its own indirect count, so the trim step in spec section 6.5 disappears along
-with the 1-2 frame latency it causes.
+page classes, 256 and 1024 quads, cover most chunks. Surface and ground chunks do not: they emit
+about 2,005 and 2,273 quads, so a chunk reserves a chain sized from its previous count plus one page
+of headroom, and those classes take three or four 1,024-quad pages (3,072-4,096 quads). A remesh
+takes a free chain, the chunk record swaps to it, and the old chain returns to the free list after
+the frames in flight that could read it. If a dispatch still overruns its chain, the chunk keeps its
+previous mesh and falls back to the per-chunk path for that frame, so an unusually dense chunk costs
+a frame rather than a corrupted draw. No suballocator, no fragmentation beyond the class rounding,
+and no readback: a fixed chain lets the dispatch write its own indirect count, so the trim step in
+spec section 6.5 disappears along with the 1-2 frame latency it causes.
 
 | | Resident pools (spec) | Minimal variant |
 |---|---:|---:|
@@ -308,8 +314,8 @@ with the 1-2 frame latency it causes.
 | Upload per remesh | quads only | padded brick (~59 KiB) |
 | Edit latency | 1-2 frames | one page swap |
 
-The costs are real: a padded brick upload per remesh, a dispatch per batch, page-size waste on
-unusually dense chunks, and the same fallback path. It is also the only variant that keeps an
+The costs are real: a padded brick upload per remesh, a dispatch per batch, three or four pages for
+surface chunks, and the same fallback path. It is also the only variant that keeps an
 integrated GPU from duplicating the world in shared memory.
 
 For distance, the variant is paired with the seed-native hierarchy in
@@ -401,7 +407,8 @@ hierarchy plus the quad pool, without GPU pools or a compute mesher.
 
 ## References
 
-- `docs/GPU-Driven Voxel Meshing and Rendering Spec v1.md` - the proposal under review.
+- [GPU-Driven Voxel Meshing and Rendering Spec v1](<../../GPU-Driven Voxel Meshing and Rendering Spec v1.md>)
+  - the proposal under review.
 - [Rendering](rendering.md) - megabuffer, chunk-info buffer, and multi-draw recommendation.
 - [Culling](../culling.md) - the current culling stack and the GPU-driven endgame.
 - [Memory](memory.md) - per-chunk memory and the v0.0.8 packing results.

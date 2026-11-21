@@ -1,26 +1,28 @@
 # Geometry representation research
 
-The immediate plan is a shared quad pool with vertex pulling and multi-draw indirect: 8-12 bytes per
-quad instead of 60, which puts the measured 125.9 MB of resident geometry at roughly 17-25 MB and
-draws at or below ten. This report asks what comes after that, and whether any modern or theoretical
-representation changes the plan.
+The shared quad pool with vertex pulling and multi-draw indirect landed in v0.0.9 slice 4
+([ADR-0015](../../decisions/0015-quad-pool-and-indirect-draws.md)): 12 bytes per quad instead of 60,
+which took resident distance-32 geometry from 100.9 MB to 37.6 MiB (125.9 MB before shared index
+buffers) and draws from 3,409 to 2. This report asks what comes after that, and whether any modern or
+theoretical representation changes the plan. The one record experiment left open is the 8-byte form,
+which needs flat per-quad light or a second light stream.
 
 The short answer: after the quad pool, the remaining wins are **fewer quads, less overdraw, and a
 cheaper far field**, not a more exotic geometry representation. wgpu 30 rules out most of the
 hardware-driven options, and the voxel-specific research agrees that downsampling occupancy and
 re-meshing beats mesh simplification.
 
-## Baseline and the immediate plan
+## Baseline and the landed pool
 
-| Metric | Now | Quad pool (8-12 B) |
+| Metric | Pre-pool | 12-byte pool (landed) |
 |---|---:|---:|
-| Resident geometry, distance 32 | 125.9 MB | 17-25 MB |
-| Visible geometry, distance 32 | 37.6 MB | 5-7 MB |
+| Resident geometry, distance 32 | 100.9 MB | 37.6 MiB |
+| Visible geometry, distance 32 | 30.1 MB | 7.52 MiB |
 | Drawn quads, distance 32 | 657,000 | 657,000 |
-| Draw calls | 3,409 | <=10 |
+| Draw calls | 3,409 | 2 |
 
-The plan does not reduce drawn quads, only the bytes per quad and the submission cost. Anything beyond
-it has to reduce what is drawn or how far it is drawn.
+The landed pool did not reduce drawn quads, only the bytes per quad and the submission cost. Anything
+beyond it has to reduce what is drawn or how far it is drawn.
 
 ## wgpu 30 reality check
 
@@ -83,12 +85,13 @@ and a weak one for anything that needs to look close.
 
 ### 3-4. Record compression and dedup
 
-The 12-byte plan can become 6 bytes with 5-bit origin and extent per axis, a 2-bit axis, a 1-bit
-sign, 12-bit material, and 3-bit AO; chunk identity belongs in the draw record, not the quad.
-Octahedral normal encoding is for arbitrary normals and does not apply here. Meshopt-style codecs
-target static triangle meshes and are irrelevant to runtime greedy quads; they would only help
-offline-baked far LODs. Chunk or brick deduplication helps only if terrain repeats, which noisy
-generated worlds mostly do not.
+The landed 12-byte record can shrink to 6-8 bytes with a 5-bit origin and extent per axis, a 2-bit
+axis, a 1-bit sign, 12-bit material, and 3-bit AO; chunk identity belongs in the draw record, not the
+quad. That only works if light becomes flat per quad or moves to a second stream, which is the
+experiment left open. Octahedral normal encoding is for arbitrary normals and does not apply here.
+Meshopt-style codecs target static triangle meshes and are irrelevant to runtime greedy quads; they
+would only help offline-baked far LODs. Chunk or brick deduplication helps only if terrain repeats,
+which noisy generated worlds mostly do not.
 
 ### 5-10. What is not worth it yet
 
@@ -106,8 +109,10 @@ generated worlds mostly do not.
 
 ## Recommendation
 
-1. **Finish the quad pool first.** Fold in the 6-8 byte record and one shared index buffer; that is a
-   days-scale change on top of the pool, not a prototype.
+1. **The quad pool, shared index buffer, and indirect draws are done.** The open record item is the
+   6-8 byte attribute-free experiment: it saves 8-16 MB against the landed 38.4 MB pool but needs
+   flat per-quad light or a second light stream, so measure the visual and bandwidth trade before
+   accepting it.
 2. **Prototype chunk LOD + Hi-Z + indirect count.** Biggest remaining GPU-time win, and the
    foundation for any later virtual geometry. Seams are the risk.
 3. **Prototype the far heightfield ring** in parallel or as the fallback: 1-2 weeks, large visible

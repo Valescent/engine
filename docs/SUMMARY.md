@@ -31,6 +31,7 @@
 - [v0.0.6 — Atmosphere](specs/v0.0.6.md)
 - [v0.0.7 — Advanced Horizons](specs/v0.0.7.md)
 - [v0.0.8 — Scale](specs/v0.0.8.md)
+- [GPU-Driven Voxel Meshing and Rendering Spec v1](<GPU-Driven Voxel Meshing and Rendering Spec v1.md>)
 
 # Design
 

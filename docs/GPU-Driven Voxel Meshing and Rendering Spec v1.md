@@ -20,7 +20,7 @@ Define a GPU-driven pipeline that turns voxel data into visible geometry with mi
 - Ray-marched global illumination. Near-field sun shadows stay as already decided in the architecture doc.
 - Meshing the entire 4 cm resolution world. Fine detail is only meshed where blocks are subdivided.
 
-**Honest expectation on resources.** This design cuts CPU work sharply. It does not make RAM or VRAM free: the quad pool, voxel brick pool, and depth pyramid all live in VRAM, and CPU RAM still holds the authoritative world data, entity state, and mod runtime. Actual numbers must be measured against the budgets in section 10.
+**Honest expectation on resources.** This design cuts CPU work sharply. It does not make RAM or VRAM free: the quad pool and voxel brick pool live in VRAM (the depth pyramid joins them in v2), and CPU RAM still holds the authoritative world data, entity state, and mod runtime. Actual numbers must be measured against the budgets in section 10.
 
 ## 2. Terms
 
@@ -38,12 +38,11 @@ Define a GPU-driven pipeline that turns voxel data into visible geometry with mi
 
 1. Edit upload: scatter edits into the voxel pool, mark chunks dirty.
 2. Mesh: compute passes turn dirty chunks into packed quads.
-3. Allocate: quads land in a shared quad pool with a suballocator.
+3. Allocate: the host reserves a range in the shared quad pool and the GPU writes the quads into it (§6.5).
 4. Cull: compute passes build a compacted indirect draw list.
 5. Draw: multi-draw indirect with vertex pulling.
-6. Depth pyramid: rebuilt from the frame's depth for next frame's occlusion culling.
 
-Everything between steps 1 and 5 runs on the GPU. The CPU records the same fixed set of passes each frame.
+Everything between steps 1 and 5 runs on the GPU except the host-side range allocation and readback trim described in §6.5. The CPU records the same fixed set of passes each frame. The depth pyramid arrives with Hi-Z occlusion culling in v2 (§7).
 
 ## 4. Data structures
 
@@ -61,9 +60,14 @@ Everything between steps 1 and 5 runs on the GPU. The CPU records the same fixed
 | Position in chunk (x, y, z) | 5 each (block level), plus sub-voxel offset where subdivided |
 | Width, height (greedy extents) | 5 each, extended for sub-brick quads |
 | Face direction | 3 |
-| Material ID | 12 to 16 |
+| Material ID | 12 |
 | Ambient occlusion | 2 per corner (8 total) |
 | Scale flag (block vs sub-voxel) | 1 |
+
+Twelve bits is a hard cap, not a range. The block-level fields total 37 bits, and a subdivided quad
+adds a 5-bit sub-voxel offset per axis (15 bits), leaving exactly 12 for material in `vec2<u32>`. A
+16-bit material would need 68 bits and cannot fit; more than 4,096 materials need a larger record or
+an indirection.
 
 The 8-byte record carries AO but no per-corner sky or block light, unlike the accepted 12-byte
 renderer record, which spends 40 bits on four corners of sky/block/AO. To keep the current light
