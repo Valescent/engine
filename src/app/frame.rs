@@ -16,10 +16,10 @@ use crate::mesher::{MeshKind, MeshPool, Priority, collect_finished};
 use crate::metrics;
 use crate::player::{Player, PlayerInput};
 use crate::renderer::{FrameStats, Renderer, RendererError, TerrainSection};
-use crate::startup::{insert_generated_chunk, release_column, save_directory};
 use crate::streaming::Streaming;
 use crate::voxel::build_highlight_mesh;
 use crate::world::{CHUNK_COLUMN, ChunkCoord};
+use crate::world_io::{insert_generated_chunk, release_column, save_directory};
 
 use super::App;
 use super::input::axis;
