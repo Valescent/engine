@@ -460,22 +460,67 @@ impl TerrainDraw {
         pass.set_pipeline(&self.water_pipeline);
         pass.set_bind_group(0, camera, &[]);
         pass.set_bind_group(2, texture, &[]);
-        for origin in &self.order {
-            let Some(section) = self.sections.get(origin) else {
+
+        // Water is blended, so it must be drawn far to near. Opaque and cutout
+        // keep the caller's order. Depth writes stay off: within one section
+        // the water quads are unsorted, and a written depth would let a nearer
+        // fragment of the same draw reject a farther one that has not blended
+        // yet. It would also hide the block highlight drawn after water, which
+        // must read through the surface (spec 14.1).
+        let mut order: Vec<([i32; 3], u32)> = self
+            .order
+            .iter()
+            .filter_map(|origin| {
+                let section = self.sections.get(origin)?;
+                section.water.as_ref()?;
+                section_visible(frustum, section.world_origin, section.scale, render_origin)
+                    .then_some((section.world_origin, section.scale))
+            })
+            .collect();
+        sort_water_order(&mut order, render_origin);
+
+        for (origin, _scale) in order {
+            let Some(section) = self.sections.get(&origin) else {
                 continue;
             };
             let Some(range) = &section.water else {
                 continue;
             };
-            if !section_visible(frustum, section.world_origin, section.scale, render_origin) {
-                continue;
-            }
             pass.set_bind_group(1, &range.bind_group, &[]);
             pass.draw(0..range.vertices, 0..1);
             stats.draw_calls += 1;
             stats.visible_vertices += u64::from(range.vertices);
         }
     }
+}
+
+/// Orders water sections far to near by the squared distance from the frame's
+/// camera origin to each section centre.
+///
+/// Ties break by world origin, so a fixed section set and camera produce one
+/// deterministic order. Distances are compared in half-block integer units, so
+/// no absolute world coordinate is cast to `f32` and no precision is lost.
+fn sort_water_order(sections: &mut [([i32; 3], u32)], render_origin: IVec3) {
+    sections.sort_by_key(|&(origin, scale)| {
+        (
+            std::cmp::Reverse(water_distance_squared(origin, scale, render_origin)),
+            origin,
+        )
+    });
+}
+
+/// Squared distance from the camera origin to a section centre, in half-block
+/// units. The common factor of four preserves the ordering of block distances.
+fn water_distance_squared(world_origin: [i32; 3], scale: u32, render_origin: IVec3) -> i128 {
+    let extent = i64::from(scale) * 32;
+    let mut total = 0_i128;
+    for axis in 0..3 {
+        let centre = i64::from(world_origin[axis]) * 2 + extent;
+        let camera = i64::from(render_origin[axis]) * 2;
+        let delta = i128::from(centre - camera);
+        total += delta * delta;
+    }
+    total
 }
 
 /// Whether a section has any range to draw.
@@ -813,6 +858,46 @@ mod tests {
         let positions = quad_positions(quad);
         assert_eq!(positions[0], [5.0, 6.0, 7.0]);
         assert_eq!(positions[2], [6.0, 7.0, 8.0]);
+    }
+
+    #[test]
+    fn water_sections_draw_far_to_near_from_the_camera() {
+        let camera = IVec3::ZERO;
+        let mut sections = vec![
+            ([0, 0, 0], 1),
+            ([64, 0, 0], 1),
+            ([128, 0, 0], 1),
+            ([-64, 0, 0], 1),
+        ];
+
+        sort_water_order(&mut sections, camera);
+
+        assert_eq!(
+            sections
+                .iter()
+                .map(|&(origin, _)| origin)
+                .collect::<Vec<_>>(),
+            vec![[128, 0, 0], [64, 0, 0], [-64, 0, 0], [0, 0, 0]],
+            "the farthest section centre draws first"
+        );
+    }
+
+    #[test]
+    fn equal_water_distances_break_by_origin() {
+        // At scale 1 the centres are (48, 16, 16) and (-16, 16, 16); both are
+        // 48 blocks from the camera on the x axis, so the distance ties.
+        let camera = IVec3::ZERO;
+        let mut sections = vec![([32, 0, 0], 1), ([-64, 0, 0], 1)];
+
+        sort_water_order(&mut sections, camera);
+
+        assert_eq!(
+            sections
+                .iter()
+                .map(|&(origin, _)| origin)
+                .collect::<Vec<_>>(),
+            vec![[-64, 0, 0], [32, 0, 0]]
+        );
     }
 
     fn revisions(entries: &[([i32; 3], u64)]) -> BTreeMap<[i32; 3], u64> {
