@@ -137,7 +137,9 @@ at 12 or ~46 s at 16 after the narrow border relight (`ENGINE_NO_VSYNC=1`).
   so changing one never invalidates a saved section.
 - `demo_coarse_regions` downsamples every complete 2x2x2 fine group with `lod::downsample`, meshes
   with `mesh_coarse` at Lod1, and appends skirts on all sides. `demo_coarse_regions_masked` is the
-  same path with the clipped-region mask: an unmasked or missing column contributes air.
+  same path with the clipped-region mask: an unmasked or missing column contributes air. It also
+  takes the set of columns the active coarse bands own, so a pad cell over a LOD0 column can only
+  cull when its whole fine `2x2x2` group is opaque (see the coarse stitch below).
   `demo_far_regions` does the same for complete `4x4` column squares with `lod::downsample4` (64
   fine sections, the same most-frequent-solid vote), `mesh_coarse` at Lod2, and Lod2 skirts (two
   cells = eight blocks).
@@ -154,6 +156,18 @@ at 12 or ~46 s at 16 after the narrow border relight (`ENGINE_NO_VSYNC=1`).
   radius, so the stitch cost does not scale: with `ENGINE_SEED=12345` it is **+119 quads and +952
   bytes** (about 0.014% of the 850,895 active quads at radius 12; the same absolute cost at 16,
   where the active set is larger).
+- **The coarse side of the transition is stitched too.** A complete or clipped LOD1 section whose
+  mask is entirely coarse-owned masks the one-cell pad it meshes against. A pad cell over a column
+  the coarse bands do not own belongs to LOD0, so it counts as opaque only when every fine block of
+  its `2x2x2` group is an opaque full cube. The conservative downsample marks the cell solid from a
+  single solid block, which snaps it to the group's top plane; that used to cull the coarse
+  band-edge wall and leave up to one coarse cell above the drawn fine top open. The all-opaque test
+  emits the wall over that cell instead. A flush edge keeps the cull (the whole group is opaque),
+  and an interior coarse-to-coarse side, whose columns are owned, is unchanged. The rule is derived
+  from band ownership, not from the coarse set's build state. Cost at radius 12 with
+  `ENGINE_SEED=12345`: **+742 quads and +5,936 bytes** (about 0.087% of the active quads and 0.008%
+  of the 72.1 MB footprint; a live `terrain ring` sample moved 850,891 -> 851,637 active quads).
+  It does not scale with the ring radius because the fine band is the same `7x7` square.
 - **LOD water is all-or-nothing.** After the solid vote, a coarse cell is water only when every
   cell in its 2x2x2 or 4x4x4 group is water; any air makes it air. A coarse cell's `+Y` face sits
   on its group's top plane, so an any-water group whose missing cells were at the top rendered a
@@ -334,15 +348,12 @@ cargo tree -p terrain-core -e normal --no-default-features
   ring column is covered once. A clipped region whose aligned base is itself inside the LOD0 band
   is anchored at one of its drawn columns instead, so its `2x2` bounds can still overlap a finer
   section (which emits the geometry there) but its section origin never does.
-- The LOD0/coarse transition is stitched on the fine side (see Meshing and LOD): a fine column at
-  the cutoff skirts each side that faces the active LOD1 band, with the step read from the drawn
-  coarse surface. The extra fine transition ring and the clipped LOD1 regions are still the
-  selection mechanism; the stitch only closes the dropped surface. A clipped LOD1 region's drawn
-  mask edge is not a section edge, so the coarse mesher still culls its boundary wall against the
-  fine-band downsample; when that downsample snaps a coarse cell above the fine top, the exposed
-  band above the fine surface is not covered by the downward fine skirt. Closing that coarse-side
-  cull needs a mask-edge skirt (a follow-up), not more fine geometry. A visible loading indicator
-  is also not implemented.
+- The LOD0/coarse transition is stitched on both sides (see Meshing and LOD): a fine column at the
+  cutoff skirts each side that faces the active LOD1 band with the step read from the drawn coarse
+  surface, and the coarse mesher treats a pad cell over a fine-band column as opaque only when its
+  whole fine `2x2x2` group is opaque, so a snapped-up downsample cannot cull the band-edge wall.
+  The extra fine transition ring and the clipped LOD1 regions are still the selection mechanism;
+  the stitch only closes the dropped surface. A visible loading indicator is also not implemented.
 - No normative older section record exists, so migration fixtures cannot be added yet.
 - The camera and entities are still `f32`/world-space on the CPU. Camera-relative rendering is
   applied, but the spec's `f64` camera migration is not.

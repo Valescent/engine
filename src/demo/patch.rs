@@ -486,8 +486,13 @@ impl TerrainDemo {
                 masks.insert(anchor, mask.clone());
             }
         }
-        let rebuilt =
-            demo_coarse_regions_masked(&self.columns, &self.materials, &self.pack, &masks);
+        let rebuilt = demo_coarse_regions_masked(
+            &self.columns,
+            &self.materials,
+            &self.pack,
+            &masks,
+            &bands.owned,
+        );
         self.coarse.retain(|section| {
             !masks.contains_key(&(section.origin[0] / 32, section.origin[2] / 32))
         });

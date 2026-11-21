@@ -58,6 +58,10 @@ pub(crate) struct BandRegions {
     pub(crate) partial: BTreeMap<(i32, i32), BTreeSet<(i32, i32)>>,
     /// Complete LOD2 `4x4` regions.
     pub(crate) far: BTreeSet<(i32, i32)>,
+    /// Columns drawn by an active coarse band: every complete LOD1, clipped
+    /// LOD1, or complete LOD2 column. A column outside this set is drawn at
+    /// LOD0, so the coarse mesher must not cull against it.
+    pub(crate) owned: BTreeSet<(i32, i32)>,
 }
 
 /// The LOD1 and LOD2 region bases for a player column.
@@ -189,10 +193,20 @@ pub(crate) fn coarse_bands(
         }
     }
 
+    // `covered` holds every far and clear complete LOD1 column. The clipped
+    // regions cover the leftovers, so their masks complete the drawn set. A
+    // complete base that straddles the LOD0 square is not in `covered`; its
+    // fine columns stay LOD0 and only the clipped mask columns are coarse.
+    let mut owned = covered;
+    for columns in partial.values() {
+        owned.extend(columns.iter().copied());
+    }
+
     BandRegions {
         coarse,
         partial,
         far,
+        owned,
     }
 }
 
@@ -233,13 +247,14 @@ pub(crate) fn demo_lod_sets(
             BTreeSet::from([(x, z), (x + 1, z), (x, z + 1), (x + 1, z + 1)]),
         );
     }
-    let mut coarse: Vec<DemoSection> = demo_coarse_regions_masked(columns, materials, pack, &masks)
-        .into_values()
-        .flatten()
-        .collect();
+    let mut coarse: Vec<DemoSection> =
+        demo_coarse_regions_masked(columns, materials, pack, &masks, &bands.owned)
+            .into_values()
+            .flatten()
+            .collect();
     let (partial_sections, partial) = if include_partial {
         let sections: Vec<DemoSection> =
-            demo_coarse_regions_masked(columns, materials, pack, &bands.partial)
+            demo_coarse_regions_masked(columns, materials, pack, &bands.partial, &bands.owned)
                 .into_values()
                 .flatten()
                 .collect();
@@ -284,7 +299,8 @@ pub(crate) fn demo_coarse_regions(
             )
         })
         .collect();
-    demo_coarse_regions_masked(columns, materials, pack, &masks)
+    let owned: BTreeSet<(i32, i32)> = masks.values().flatten().copied().collect();
+    demo_coarse_regions_masked(columns, materials, pack, &masks, &owned)
 }
 
 /// Meshes `2x2` regions, treating every column outside its mask as air.
@@ -294,11 +310,24 @@ pub(crate) fn demo_coarse_regions(
 /// rim or LOD0-boundary column without drawing over a neighbour that another
 /// band already owns. A clipped region's key may be any column, not only an
 /// even-aligned base; see [`coarse_bands`].
+///
+/// `owned` is the set of columns the active coarse bands draw. A coarse section
+/// whose mask is entirely owned is a coarse-drawn section; its padded neighbour
+/// cells over columns *outside* `owned` belong to the LOD0 band, which the
+/// coarse mesher must not cull against. Those cells are hidden only where the
+/// whole adjacent fine `2x2x2` group is opaque. A conservative downsample snaps
+/// a cell up when a single block in the group is solid, which would cull the
+/// band-edge wall even though the drawn fine surface is lower; a group with
+/// any air therefore counts as air and the wall is emitted. A group that
+/// is fully opaque keeps the cull, so a flush band edge adds nothing and an
+/// interior coarse side between two owned regions is untouched.
+#[allow(clippy::too_many_lines)]
 pub(crate) fn demo_coarse_regions_masked(
     columns: &BTreeMap<(i32, i32), Arc<[section::Section; COLUMN_SECTIONS]>>,
     materials: &mesher2::MaterialProps,
     pack: &content::ContentPack,
     masks: &BTreeMap<(i32, i32), BTreeSet<(i32, i32)>>,
+    owned: &BTreeSet<(i32, i32)>,
 ) -> BTreeMap<(i32, i32), Vec<DemoSection>> {
     if masks.is_empty() {
         return BTreeMap::new();
@@ -364,8 +393,12 @@ pub(crate) fn demo_coarse_regions_masked(
         }
     }
 
+    let section_size = i32::try_from(description::SECTION_SIZE).unwrap_or(32);
     let mut out: BTreeMap<(i32, i32), Vec<DemoSection>> = BTreeMap::new();
     for &(x, z) in masks.keys() {
+        let mask_owned = masks
+            .get(&(x, z))
+            .is_some_and(|mask| mask.iter().all(|column| owned.contains(column)));
         let mut sections = Vec::new();
         for j in 0..(COLUMN_SECTIONS / 2) {
             let j = i32::try_from(j).unwrap_or(0);
@@ -381,7 +414,18 @@ pub(crate) fn demo_coarse_regions_masked(
                         .get(&(x + dx * 2, j + dy, z + dz * 2))
                         .or(Some(&air))
                 });
-            let blocks = padded::PaddedBlocks::from_sections(coarse, &neighbours);
+            let mut blocks = padded::PaddedBlocks::from_sections(coarse, &neighbours);
+            if mask_owned {
+                mask_fine_band_pad(
+                    &mut blocks,
+                    columns,
+                    materials,
+                    owned,
+                    (x, z),
+                    j,
+                    section_size,
+                );
+            }
             let mut mesh = mesher2::mesh_coarse(&blocks, materials, mesher2::MeshLod::Lod1, 0);
             mesher2::add_skirts(&mut mesh, mesher2::SkirtEdges::ALL, mesher2::MeshLod::Lod1);
             if mesher2::quad_count(&mesh) == 0 {
@@ -397,6 +441,95 @@ pub(crate) fn demo_coarse_regions_masked(
         out.insert((x, z), sections);
     }
     out
+}
+
+/// Airs the padded cells of a coarse band edge that the fine band owns.
+///
+/// Only the one-cell pad is tested. A coarse section's own cells are either
+/// coarse-owned or already air through a clipped mask. Pad columns outside
+/// `owned` are drawn at LOD0, so a cell there may cull the coarse wall only
+/// when all eight fine blocks of its `2x2x2` group are opaque. A group with any
+/// air is left at air, which emits the boundary wall over the exposed part of
+/// the coarse cell. A fully opaque group keeps the downsample, so a flush edge
+/// and every interior coarse-to-coarse side stay culled.
+fn mask_fine_band_pad(
+    blocks: &mut padded::PaddedBlocks,
+    columns: &BTreeMap<(i32, i32), Arc<[section::Section; COLUMN_SECTIONS]>>,
+    materials: &mesher2::MaterialProps,
+    owned: &BTreeSet<(i32, i32)>,
+    base: (i32, i32),
+    sy: i32,
+    section_size: i32,
+) {
+    let origin_x = base.0 * section_size;
+    let origin_y = sy * section_size * 2;
+    let origin_z = base.1 * section_size;
+    for ly in padded::LOCAL_MIN..=padded::LOCAL_MAX {
+        for along in padded::LOCAL_MIN..=padded::LOCAL_MAX {
+            for (lx, lz) in [
+                (padded::LOCAL_MIN, along),
+                (padded::LOCAL_MAX, along),
+                (along, padded::LOCAL_MIN),
+                (along, padded::LOCAL_MAX),
+            ] {
+                let x = origin_x + 2 * lx;
+                let y = origin_y + 2 * ly;
+                let z = origin_z + 2 * lz;
+                let column = (x.div_euclid(section_size), z.div_euclid(section_size));
+                if owned.contains(&column) {
+                    continue;
+                }
+                if !fine_group_is_opaque(columns, materials, (x, y, z), section_size) {
+                    blocks.set(lx, ly, lz, 0);
+                }
+            }
+        }
+    }
+}
+
+/// Whether every fine block of one LOD1 group is an opaque full cube.
+///
+/// The group is aligned to two blocks, so it never crosses a fine section or a
+/// column boundary; one section lookup covers all eight cells.
+fn fine_group_is_opaque(
+    columns: &BTreeMap<(i32, i32), Arc<[section::Section; COLUMN_SECTIONS]>>,
+    materials: &mesher2::MaterialProps,
+    (x, y, z): (i32, i32, i32),
+    section_size: i32,
+) -> bool {
+    if y < 0 {
+        return false;
+    }
+    let column = (x.div_euclid(section_size), z.div_euclid(section_size));
+    let Some(stack) = columns.get(&column) else {
+        return false;
+    };
+    let Ok(sy) = usize::try_from(y.div_euclid(section_size)) else {
+        return false;
+    };
+    let Some(section) = stack.get(sy) else {
+        return false;
+    };
+    let (lx, ly, lz) = (
+        x.rem_euclid(section_size),
+        y.rem_euclid(section_size),
+        z.rem_euclid(section_size),
+    );
+    for dz in 0..2 {
+        for dx in 0..2 {
+            for dy in 0..2 {
+                let id = section.get(
+                    u32::try_from(lx + dx).unwrap_or(0),
+                    u32::try_from(ly + dy).unwrap_or(0),
+                    u32::try_from(lz + dz).unwrap_or(0),
+                );
+                if !materials.material(id).opaque {
+                    return false;
+                }
+            }
+        }
+    }
+    true
 }
 
 /// Derives and meshes the LOD2 sections of `regions` (`N1.4`, `N3.2`).
