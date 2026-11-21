@@ -82,10 +82,10 @@ const MAX_SECTION_JOBS: usize = 11;
 const INTERACTION_DISTANCE: f32 = 6.0;
 const SPAWN_X: i32 = 32;
 const SPAWN_Z: i32 = 32;
-/// Mesh uploads collected per frame. `2` made distance-32 first-load settle in 33 s against 22 s at
-/// `64`, so above this value the cap stops limiting; `8` stays above the worker rate while keeping
-/// each frame's upload burst small.
-const MAX_UPLOADS_PER_FRAME: usize = 8;
+/// Mesh and section uploads collected per frame. The old separate budgets allowed 8 mesh and 8
+/// section results, so a shared cap of 16 preserves that first-load throughput while bounding the
+/// combined burst.
+const MAX_UPLOADS_PER_FRAME: usize = 16;
 /// Consecutive upload failures after which the retry warning is logged once.
 ///
 /// The chunk stays retryable regardless: pool and slot exhaustion are temporary.
