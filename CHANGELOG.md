@@ -46,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The headless terrain stack is exposed through one `engine::terrain::<module>` facade; the 28 flat `engine::<module>` paths are `pub(crate)` only, proven by two `compile_fail` doctests and a facade integration test.
 - The demo now has one app-facing seam: `DemoRuntime` owns the patch, ring, save worker, repair prompt, pending rebuild, and edit queue behind `open/tick/edit/shutdown/repair/stats`, and `App` holds one `demo` field instead of six. The demo stores no renderer and names no `winit`/`wgpu` in production code; behaviour, log lines, and budgets are unchanged.
 - `app.rs` is split into `app/mod.rs` (App, handler, lifecycle, `RunError`), `app/input.rs` (keys, mouse, capture, hotbar, edits), and `app/frame.rs` (frame order, timing, overlay, uploads, streaming), with the frame sequence unchanged.
+- The demo module is split further: `demo/build.rs` owns the incremental rebuild (3x3 light scope, 26-neighbour remesh) and `demo/content.rs` owns the material/light/texture-layer tables, leaving `demo/mod.rs` as the `DemoRuntime` seam. All 32 demo tests are preserved.
 - A non-blocking CI size-budget check reports Rust files over 1,000 lines (currently 21) instead of failing; it tightens into a gate once the tree is under budget.
 
 ### Fixed

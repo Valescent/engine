@@ -441,3 +441,429 @@ pub(crate) fn demo_far_regions(
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::Arc;
+
+    use glam::IVec2;
+
+    use crate::content;
+    use crate::hydro;
+    use crate::mesher2;
+    use crate::section;
+
+    use super::super::content::demo_materials;
+    use super::super::patch::TerrainDemo;
+    use super::super::persist::{build_terrain_demo, build_terrain_demo_extent};
+    use super::super::{TERRAIN_DEMO_FINE_MARGIN, TERRAIN_DEMO_FINE_RADIUS};
+
+    use super::*;
+
+    #[test]
+    fn lod_uses_coarse_regions_away_from_the_player() {
+        let mut demo =
+            build_terrain_demo(0x5EED, IVec2::new(2, -3), 2).expect("the v1 terrain builds");
+        assert!(
+            !demo.coarse.is_empty(),
+            "a radius-2 patch has complete octant regions"
+        );
+        demo.fine_radius = 0;
+        let fine: usize = demo.fine.values().map(Vec::len).sum();
+        demo.select_lod((demo.origin_column.x, demo.origin_column.y));
+        let near_fine: usize = demo
+            .fine
+            .iter()
+            .filter(|(key, _)| {
+                let (x, z) = **key;
+                let (px, pz) = (demo.origin_column.x, demo.origin_column.y);
+                (x - px).abs().max((z - pz).abs()) <= 1
+            })
+            .map(|(_, sections)| sections.len())
+            .sum();
+        assert_eq!(
+            demo.sections.len(),
+            near_fine,
+            "the player's column and its fine ring are full detail"
+        );
+
+        demo.select_lod((demo.origin_column.x + 2, demo.origin_column.y + 2));
+        assert!(
+            demo.sections.len() < fine,
+            "a region two columns away is drawn coarse: {} active vs {fine} fine",
+            demo.sections.len()
+        );
+
+        let coarse: BTreeSet<[i32; 3]> = demo.coarse.iter().map(|section| section.origin).collect();
+        let active_fine = demo
+            .sections
+            .iter()
+            .filter(|section| !coarse.contains(&section.origin))
+            .count();
+        let active_coarse = demo.sections.len() - active_fine;
+        assert!(active_coarse > 0, "at least one coarse section is active");
+        assert!(active_fine > 0, "the player's region stays fine");
+
+        let mut origins = BTreeSet::new();
+        for section in &demo.sections {
+            assert!(
+                origins.insert(section.origin),
+                "fine and coarse sections never overlap"
+            );
+        }
+        assert!(
+            demo.coarse
+                .iter()
+                .any(|section| !section.mesh.skirts.is_empty()),
+            "coarse meshes carry skirts for the fine boundary"
+        );
+    }
+
+    fn stub_section(origin: [i32; 3], scale: u32) -> DemoSection {
+        DemoSection {
+            origin,
+            scale,
+            mesh: mesher2::SectionMesh::default(),
+        }
+    }
+
+    #[test]
+    fn lod2_selects_the_far_band_without_overlapping_lod1() {
+        let mut demo =
+            build_terrain_demo(0x5EED, IVec2::new(0, 0), 0).expect("the v1 terrain builds");
+        demo.origin_column = IVec2::ZERO;
+        demo.fine.clear();
+        demo.coarse = vec![
+            stub_section([4 * 32, 0, 4 * 32], 2),
+            stub_section([8 * 32, 0, 8 * 32], 2),
+            stub_section([10 * 32, 0, 10 * 32], 2),
+        ];
+        demo.far = vec![
+            stub_section([8 * 32, 0, 8 * 32], 4),
+            stub_section([0, 0, 0], 4),
+        ];
+        demo.select_lod((0, 0));
+
+        let origins: BTreeSet<[i32; 3]> = demo.sections.iter().map(|s| s.origin).collect();
+        assert!(origins.contains(&[4 * 32, 0, 4 * 32]), "middle LOD1 region");
+        assert!(
+            origins.contains(&[8 * 32, 0, 8 * 32]),
+            "far LOD2 region replaces its LOD1 copy"
+        );
+        assert!(
+            !origins.contains(&[10 * 32, 0, 10 * 32]),
+            "LOD1 inside an active LOD2 square is suppressed"
+        );
+        assert!(
+            !origins.contains(&[0, 0, 0]),
+            "LOD2 touching the fine buffer is suppressed"
+        );
+        assert_eq!(demo.sections.len(), 2);
+        assert_eq!(
+            demo.far
+                .iter()
+                .find(|s| s.origin == [8 * 32, 0, 8 * 32])
+                .map(|s| s.scale),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn lod2_regions_are_complete_and_skirted() {
+        let mut columns = BTreeMap::new();
+        for x in 0..4 {
+            for z in 0..4 {
+                let stack: [section::Section; COLUMN_SECTIONS] =
+                    std::array::from_fn(|_| section::Section::uniform(1));
+                columns.insert((x, z), Arc::new(stack));
+            }
+        }
+        let regions = BTreeSet::from([(0, 0)]);
+        let far = demo_far_regions(
+            &columns,
+            &demo_materials(),
+            &content::v1_default(),
+            &regions,
+        );
+        let sections = far.get(&(0, 0)).expect("the 4x4 region is complete");
+        assert_eq!(sections.len(), 3, "one 128-block section per third");
+        assert_eq!(
+            sections.iter().map(|s| s.origin).collect::<Vec<_>>(),
+            vec![[0, 0, 0], [0, 128, 0], [0, 256, 0]]
+        );
+        for section in sections {
+            assert_eq!(section.scale, 4);
+            assert!(mesher2::quad_count(&section.mesh) > 0);
+            assert!(
+                !section.mesh.skirts.is_empty(),
+                "LOD2 sections are skirted on every side"
+            );
+        }
+        assert!(
+            demo_far_regions(
+                &columns,
+                &demo_materials(),
+                &content::v1_default(),
+                &BTreeSet::from([(4, 4)])
+            )
+            .get(&(4, 4))
+            .is_none_or(Vec::is_empty),
+            "a region with missing columns is not derived"
+        );
+    }
+
+    /// A stub ring plus the coarse bands for one player column.
+    ///
+    /// Only origins matter here, so a region is one stub section and a fine
+    /// column is one LOD0 stub. That keeps the coverage test independent of
+    /// terrain generation and meshing cost.
+    fn stub_lod_ring(radius: i32) -> TerrainDemo {
+        let hydro = Arc::new(hydro::WorldHydro::solve(&[0.0], 1).expect("world hydro"));
+        let mut demo = TerrainDemo::empty(0, IVec2::ZERO, radius, hydro);
+        let stack: [section::Section; COLUMN_SECTIONS] =
+            std::array::from_fn(|_| section::Section::uniform(0));
+        for x in -radius..=radius {
+            for z in -radius..=radius {
+                demo.columns.insert((x, z), Arc::new(stack.clone()));
+            }
+        }
+        let cutoff = TERRAIN_DEMO_FINE_RADIUS + TERRAIN_DEMO_FINE_MARGIN;
+        for &(x, z) in demo.columns.keys() {
+            if x.abs().max(z.abs()) <= cutoff {
+                demo.fine
+                    .insert((x, z), vec![stub_section([x * 32, 0, z * 32], 1)]);
+            }
+        }
+        let bands = coarse_bands(&demo.columns, (0, 0), radius);
+        let mut bases = bands.coarse.clone();
+        bases.extend(bands.partial.keys().copied());
+        demo.coarse = bases
+            .iter()
+            .map(|&(x, z)| stub_section([x * 32, 0, z * 32], 2))
+            .collect();
+        demo.partial_columns = bands.partial;
+        demo.far = bands
+            .far
+            .iter()
+            .map(|&(x, z)| stub_section([x * 32, 0, z * 32], 4))
+            .collect();
+        demo.select_lod((0, 0));
+        demo
+    }
+
+    /// Active-section count per column footprint.
+    fn active_column_coverage(demo: &TerrainDemo) -> BTreeMap<(i32, i32), usize> {
+        let mut coverage = BTreeMap::new();
+        for section in &demo.sections {
+            let scale = i32::try_from(section.scale).expect("scale fits");
+            let x = section.origin[0] / 32;
+            let z = section.origin[2] / 32;
+            if let Some(columns) = demo.partial_columns.get(&(x, z)) {
+                for &(cx, cz) in columns {
+                    *coverage.entry((cx, cz)).or_insert(0) += 1;
+                }
+                continue;
+            }
+            for dx in 0..scale {
+                for dz in 0..scale {
+                    *coverage.entry((x + dx, z + dz)).or_insert(0) += 1;
+                }
+            }
+        }
+        coverage
+    }
+
+    #[test]
+    fn the_visible_ring_is_fully_covered_by_the_active_lod_set() {
+        for radius in [8, 12, 16] {
+            let demo = stub_lod_ring(radius);
+            let coverage = active_column_coverage(&demo);
+            for x in -radius..=radius {
+                for z in -radius..=radius {
+                    assert_eq!(
+                        coverage.get(&(x, z)).copied(),
+                        Some(1),
+                        "radius {radius}: column ({x}, {z}) must be covered by exactly one LOD"
+                    );
+                }
+            }
+            let mut origins = BTreeSet::new();
+            for section in &demo.sections {
+                assert!(
+                    origins.insert(section.origin),
+                    "radius {radius}: duplicate active section origin {:?}",
+                    section.origin
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn clipped_lod1_regions_cover_only_unowned_columns() {
+        let cutoff = TERRAIN_DEMO_FINE_RADIUS + TERRAIN_DEMO_FINE_MARGIN;
+        for radius in [8, 12, 16] {
+            let demo = stub_lod_ring(radius);
+            let bands = coarse_bands(&demo.columns, (0, 0), radius);
+            let ring = |x: i32, z: i32| x.abs().max(z.abs());
+
+            // Complete coverage that `select_lod` will actually draw.
+            let mut complete = BTreeSet::new();
+            for &(x, z) in &bands.far {
+                assert_eq!(x.rem_euclid(4), 0, "LOD2 base {x} is not 4-aligned");
+                assert_eq!(z.rem_euclid(4), 0, "LOD2 base {z} is not 4-aligned");
+                for dx in 0..4 {
+                    for dz in 0..4 {
+                        assert!(
+                            demo.columns.contains_key(&(x + dx, z + dz)),
+                            "LOD2 base ({x}, {z}) is not complete"
+                        );
+                        complete.insert((x + dx, z + dz));
+                    }
+                }
+            }
+            for &(x, z) in &bands.coarse {
+                let clear = (0..2).all(|dx| (0..2).all(|dz| ring(x + dx, z + dz) > cutoff));
+                if clear {
+                    for dx in 0..2 {
+                        for dz in 0..2 {
+                            complete.insert((x + dx, z + dz));
+                        }
+                    }
+                }
+            }
+
+            let mut partial = BTreeSet::new();
+            for (&(x, z), columns) in &bands.partial {
+                assert!(
+                    columns.len() < 4,
+                    "a clipped base must leave at least one cell air: ({x}, {z})"
+                );
+                assert!(
+                    !bands.far.contains(&(x, z)),
+                    "LOD2 must not be used for a partial region ({x}, {z})"
+                );
+                for &(cx, cz) in columns {
+                    assert_eq!(
+                        cx - cx.rem_euclid(2),
+                        x,
+                        "column ({cx}, {cz}) is outside base ({x}, {z})"
+                    );
+                    assert_eq!(cz - cz.rem_euclid(2), z);
+                    assert!(
+                        ring(cx, cz) > cutoff && ring(cx, cz) <= radius,
+                        "partial column ({cx}, {cz}) is not a leftover ring column"
+                    );
+                    assert!(
+                        !complete.contains(&(cx, cz)),
+                        "partial column ({cx}, {cz}) overlaps a complete region"
+                    );
+                    assert!(
+                        partial.insert((cx, cz)),
+                        "column ({cx}, {cz}) is covered by two clipped bases"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn clipped_lod1_mesh_is_air_outside_its_mask() {
+        let mut columns = BTreeMap::new();
+        let stack: [section::Section; COLUMN_SECTIONS] =
+            std::array::from_fn(|_| section::Section::uniform(1));
+        columns.insert((0, 0), Arc::new(stack));
+        let masks = BTreeMap::from([((0, 0), BTreeSet::from([(0, 0)]))]);
+        let regions =
+            demo_coarse_regions_masked(&columns, &demo_materials(), &content::v1_default(), &masks);
+        let sections = regions.get(&(0, 0)).expect("the clipped region meshes");
+        assert!(!sections.is_empty());
+        for section in sections {
+            assert_eq!(section.scale, 2);
+            for quad in section
+                .mesh
+                .opaque
+                .iter()
+                .chain(&section.mesh.cutout)
+                .chain(&section.mesh.water)
+            {
+                assert!(quad.x() <= 16, "the missing +x column stays air");
+                assert!(quad.z() <= 16, "the missing +z column stays air");
+            }
+        }
+    }
+
+    #[test]
+    fn coarse_bands_follow_a_smaller_ring() {
+        let columns = |radius: i32| {
+            let mut columns = BTreeMap::new();
+            for x in -radius..=radius {
+                for z in -radius..=radius {
+                    let stack: [section::Section; COLUMN_SECTIONS] =
+                        std::array::from_fn(|_| section::Section::uniform(0));
+                    columns.insert((x, z), Arc::new(stack));
+                }
+            }
+            columns
+        };
+
+        // Default 12: complete squares at base 8 and -12 are far.
+        let bands12 = coarse_bands(&columns(12), (0, 0), 12);
+        for base in [(8, 8), (8, -12), (-12, 8), (-12, -12)] {
+            assert!(bands12.far.contains(&base), "missing far base {base:?}");
+        }
+        assert!(
+            !bands12.coarse.is_empty(),
+            "the middle band still owns regions"
+        );
+        // 2r+1 positive-rim bases plus the seven bases that clip the negative
+        // edge of the LOD0 square (x = -4 / z = -4 at the default cutoff).
+        assert_eq!(
+            bands12.partial.len(),
+            32,
+            "radius 12 rim and LOD0-boundary clipped bases"
+        );
+
+        // Radius 8: no 4x4 square is both complete and beyond the LOD1 radius.
+        let bands8 = coarse_bands(&columns(8), (0, 0), 8);
+        assert!(
+            bands8.far.is_empty(),
+            "LOD2 has no complete region at radius 8"
+        );
+        assert!(!bands8.coarse.is_empty(), "the ring falls back to LOD1");
+        assert_eq!(
+            bands8.partial.len(),
+            24,
+            "radius 8 rim and LOD0-boundary clipped bases"
+        );
+
+        let bands16 = coarse_bands(&columns(16), (0, 0), 16);
+        assert_eq!(
+            bands16.partial.len(),
+            40,
+            "radius 16 rim and LOD0-boundary clipped bases"
+        );
+    }
+
+    #[test]
+    fn the_demo_tile_is_lod_selected_at_spawn() {
+        let (mut demo, replay) =
+            build_terrain_demo_extent(0x5EED, IVec2::new(0, 0), 0, 3, 0, 3, &[], &[], 0)
+                .expect("the one-tile demo builds");
+        assert_eq!(replay.keys, Vec::<section::SectionKey>::new());
+        assert_eq!(
+            demo.columns.keys().min(),
+            Some(&(0, 0)),
+            "the tile is one 128-block generation unit"
+        );
+        assert_eq!(demo.columns.keys().max(), Some(&(3, 3)));
+        let fine: usize = demo.fine.values().map(Vec::len).sum();
+        demo.fine_radius = 0;
+        demo.select_lod((0, 0));
+        assert!(
+            demo.sections.len() < fine,
+            "the far corner is coarse at spawn: {} active vs {fine} fine",
+            demo.sections.len(),
+        );
+    }
+}

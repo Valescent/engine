@@ -1,5 +1,5 @@
 //! The resident demo patch: column storage, block access, light/mesh
-//! installation, LOD selection, and the material tables.
+//! installation, and LOD selection.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -16,8 +16,9 @@ use crate::player;
 use crate::section;
 
 #[cfg(test)]
-use super::edit::{DemoEdit, demo_rebuild};
-use super::edit::{DemoPatch, DemoRebuild};
+use super::build::{DemoEdit, demo_rebuild};
+use super::build::{DemoPatch, DemoRebuild};
+use super::content::{demo_materials, solid_table};
 use super::lod::{coarse_bands, demo_coarse_regions_masked, demo_lod_sets};
 use super::{COLUMN_SECTIONS, TERRAIN_DEMO_FINE_MARGIN, TERRAIN_DEMO_FINE_RADIUS};
 
@@ -620,17 +621,6 @@ impl TerrainDemo {
     }
 }
 
-/// `solid[id]` from the pack's collision flag (`A5.2`).
-pub(crate) fn solid_table(pack: &content::ContentPack) -> Vec<bool> {
-    let mut solid = vec![false; pack.len()];
-    for record in pack.records() {
-        if let Some(id) = pack.id(&record.name) {
-            solid[id as usize] = record.collision;
-        }
-    }
-    solid
-}
-
 /// Heap bytes held by one section's palette data.
 pub(crate) fn section_bytes(section: &section::Section) -> usize {
     std::mem::size_of_val(section.words()) + section.palette().len() * 2
@@ -639,35 +629,6 @@ pub(crate) fn section_bytes(section: &section::Section) -> usize {
 /// Heap bytes held by one mesh's quad lists.
 pub(crate) fn mesh_bytes(section: &DemoSection) -> usize {
     mesher2::quad_count(&section.mesh) * std::mem::size_of::<mesher2::Quad>()
-}
-
-/// The mesher material table for the built-in v1 content pack.
-///
-/// Ids come from [`content::v1_default`], the same pack [`pipeline::Terrain::new`]
-/// resolves, so sections and this table always agree. The pack has no texture
-/// references yet, so [`demo_texture_layer`] maps names onto the renderer's
-/// procedural array as a placeholder.
-pub(crate) fn demo_materials() -> mesher2::MaterialProps {
-    let pack = content::v1_default();
-    let mut props = mesher2::MaterialProps::new();
-    for record in pack.records() {
-        let id = pack.id(&record.name).expect("every pack record has an id");
-        props.set(
-            id,
-            mesher2::Material {
-                solid: record.collision,
-                opaque: record.opacity >= content::LIGHT_LEVELS,
-                water: record.liquid,
-                cross_quad: record.render_shape == content::RenderShape::CrossQuad,
-                texture_top: demo_texture_layer(&record.textures.top),
-                texture_side: demo_texture_layer(&record.textures.side),
-                texture_bottom: demo_texture_layer(&record.textures.bottom),
-                tint: 0,
-                emissive: record.emission > 0,
-            },
-        );
-    }
-    props
 }
 
 /// The light scratch for one section, with the *real* neighbour light on the
@@ -905,27 +866,107 @@ pub(crate) fn demo_light_table() -> light2::LightTable {
     table
 }
 
-/// Placeholder texture-array layer for a stable block name.
-///
-/// The v1 pack carries no texture refs (W22 note), so this is the only place the
-/// demo maps names onto `renderer.rs`'s eleven procedural layers.
-/// Maps a stable texture reference onto the renderer's procedural array.
-///
-/// The array is still placeholder art (`ADR-0007`, `ADR-0015`): a reference is
-/// resolved by name, and an unknown name falls back to stone. Grass and wood
-/// are the only blocks with three distinct faces today.
-pub(crate) fn demo_texture_layer(name: &str) -> u16 {
-    match name {
-        "core:dirt" | "core:clay" | "core:grass_bottom" => 1,
-        "core:grass_top" => 2,
-        "core:grass_side" => 3,
-        "core:wood_top" => 5,
-        "core:wood_side" => 6,
-        "core:leaves" | "core:plant" => 7,
-        "core:lamp" => 8,
-        "core:water" | "core:ice" => 9,
-        "core:sand" | "core:snow" => 10,
-        // Stone, bedrock, boulder, gravel, ores, and anything unknown.
-        _ => 0,
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use glam::{IVec2, IVec3, Vec3};
+
+    use crate::description;
+    use crate::player::BlockSource;
+    use crate::raycast::raycast_where;
+    use crate::renderer;
+
+    use super::super::persist::build_terrain_demo;
+
+    #[test]
+    fn demo_raycast_hits_the_spawn_surface() {
+        let demo = build_terrain_demo(0x5EED, IVec2::new(2, -3), 0).expect("the v1 terrain builds");
+        let origin = demo.spawn + Vec3::Y * 20.0;
+        let hit = raycast_where(|cell| demo.is_solid(cell), origin, -Vec3::Y, 64.0)
+            .expect("a downward ray hits the patch");
+        #[allow(clippy::cast_possible_truncation)]
+        let expected = demo.spawn.y.round() as i32 - 1;
+        assert_eq!(hit.block.y, expected);
+        assert_eq!(hit.normal, IVec3::Y);
+    }
+
+    #[test]
+    #[allow(clippy::cast_possible_truncation)]
+    fn demo_edit_breaks_a_block_and_relights() {
+        let mut demo =
+            build_terrain_demo(0x5EED, IVec2::new(2, -3), 0).expect("the v1 terrain builds");
+        let cell = IVec3::new(
+            demo.spawn.x.floor() as i32,
+            demo.spawn.y.round() as i32 - 1,
+            demo.spawn.z.floor() as i32,
+        );
+        let air = demo.air;
+        assert_ne!(demo.block_at(cell), Some(air), "the spawn block is solid");
+        assert!(demo.edit(cell, air), "the break changes the patch");
+        assert_eq!(demo.block_at(cell), Some(air));
+        assert!(!demo.edit(cell, air), "a no-op edit reports no change");
+        assert!(demo.quads > 0, "the patch still meshes after the edit");
+    }
+
+    #[test]
+    #[allow(clippy::cast_possible_truncation)]
+    fn terrain_demo_builds_packed_quads_for_one_column() {
+        let started = Instant::now();
+        let demo = build_terrain_demo(0x5EED, IVec2::new(2, -3), 0).expect("the v1 terrain builds");
+        let elapsed = started.elapsed();
+        eprintln!(
+            "terrain demo: {} sections, {} quads, {elapsed:?}",
+            demo.sections.len(),
+            demo.quads
+        );
+
+        assert!(
+            demo.sections
+                .iter()
+                .any(|section| !section.mesh.opaque.is_empty()),
+            "at least one section emits opaque quads"
+        );
+        assert_eq!(demo.origin_column, IVec2::new(2, -3));
+
+        // Collision is live: the block under the spawn is solid and the spawn
+        // sits exactly one block above it.
+        let feet = IVec3::new(
+            demo.spawn.x.floor() as i32,
+            demo.spawn.y.round() as i32 - 1,
+            demo.spawn.z.floor() as i32,
+        );
+        let solid = demo.solid_blocks_in(feet, feet);
+        assert_eq!(
+            solid,
+            vec![feet],
+            "the spawn column stands on solid terrain"
+        );
+        for section in &demo.sections {
+            for coordinate in section.origin {
+                assert_eq!(
+                    coordinate.rem_euclid(i32::try_from(description::SECTION_SIZE).unwrap()),
+                    0,
+                    "origins are section-aligned multiples of 32"
+                );
+            }
+            for raw in section
+                .mesh
+                .opaque
+                .iter()
+                .chain(&section.mesh.cutout)
+                .chain(&section.mesh.water)
+            {
+                let quad = renderer::decode_quad(raw.bits());
+                assert!(quad.normal <= 7, "reserved quad normal code");
+            }
+        }
+        // A gross-regression guard, not a benchmark: the suite runs tests in
+        // parallel on shared cores, and one column also pays the first
+        // whole-world hydrology solve on this thread.
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "one-column demo build took {elapsed:?}"
+        );
     }
 }

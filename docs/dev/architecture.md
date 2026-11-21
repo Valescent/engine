@@ -25,12 +25,14 @@ src/
 │   ├── input.rs            # key/mouse mapping, capture, hotbar, edit actions
 │   └── frame.rs            # tick/redraw order, timing, overlay, streaming
 ├── demo/
-│   ├── mod.rs              # DemoRuntime seam, constants, re-exports, tests
-│   ├── patch.rs            # TerrainDemo, block access, LOD apply, materials
+│   ├── mod.rs              # DemoRuntime seam, frame/stats, constants, re-exports
+│   ├── patch.rs            # TerrainDemo, block access, light/mesh apply, LOD apply
+│   ├── build.rs            # incremental relight/remesh over an edit batch
 │   ├── lod.rs              # LOD0/1/2 bands, clipped LOD1, LOD2
 │   ├── stream.rs           # column ring, worker pool, jobs
-│   ├── edit.rs             # edit record, incremental rebuild, save queue
-│   └── persist.rs          # replay, repair prompt, recovered journal
+│   ├── edit.rs             # edit queue, journal/section save queueing
+│   ├── persist.rs          # replay, repair prompt, recovered journal
+│   └── content.rs          # material table, collision table, texture layers
 ├── v0/                     # frozen legacy stack
 ├── renderer.rs, camera.rs, player.rs, raycast.rs, sky.rs, overlay.rs, frustum.rs
 ├── block.rs, config.rs, headless.rs, metrics.rs
@@ -45,12 +47,14 @@ src/
 | `src/app/mod.rs` | `App` (fields and construction), the `winit` application handler and window-event dispatch, window/renderer lifecycle, `RunError`, and the module declarations. |
 | `src/app/input.rs` | Key mapping, cursor capture/release, focus and mouse-look handling, hotbar selection, movement-key helpers, repair-key mapping, and the break/place/demo-edit actions. |
 | `src/app/frame.rs` | Per-frame work: tick and redraw order, frame delta and timing accumulation, `FrameAccumulator`, overlay text and stats, resize, mesh request/upload and column streaming, and the demo-to-renderer upload adapter. |
-| `src/demo/mod.rs` | `DemoRuntime`, the demo's one app-facing seam: it owns the patch, ring, save worker, repair prompt, pending rebuild, and edit queue, and exposes `open`, `tick`, `edit`, `shutdown`, `repair`, `stats`, and the read-only overlay/upload accessors. Also shared constants and the test fixtures. |
-| `src/demo/patch.rs` | `TerrainDemo` state, resident columns, block access and collision, light/mesh installation, LOD selection, and the material/light tables. |
-| `src/demo/lod.rs` | LOD0/1/2 band selection, complete and clipped LOD1 regions, and LOD2 derivation. |
-| `src/demo/stream.rs` | The column ring: worker pool, generation and light/mesh jobs, the coarse job, snapshots, and in-flight bookkeeping. |
-| `src/demo/edit.rs` | The edit record, incremental relight/remesh, and journal/section save queueing per edit. |
-| `src/demo/persist.rs` | Save replay, the repair prompt, and the recovered-journal path that runs before the ring opens. |
+| `src/demo/mod.rs` | `DemoRuntime`, the demo's one app-facing seam: it owns the patch, ring, save worker, repair prompt, pending rebuild, and edit queue, and exposes `open`, `tick`, `edit`, `save`, `shutdown`, `repair`, `stats`, and the read-only overlay/upload accessors. Also `DemoFrame`, `DemoStats`, shared constants, and the runtime tests. |
+| `src/demo/patch.rs` | `TerrainDemo` state, resident columns, block access and collision, light/mesh installation, LOD selection, and the light table. |
+| `src/demo/build.rs` | The incremental rebuild over a batch of edits: the 3x3 light scope, the 26-neighbour remesh, `DemoEdit`/`DemoPatch`/`DemoRebuild`, and their tests. |
+| `src/demo/content.rs` | The material table and face-texture layer map from the v1 pack, the collision (`solid`) table, and the material test. |
+| `src/demo/lod.rs` | LOD0/1/2 band selection, complete and clipped LOD1 regions, LOD2 derivation, and LOD tests. |
+| `src/demo/stream.rs` | The column ring: worker pool, generation and light/mesh jobs, the coarse job, snapshots, in-flight bookkeeping, and build/window tests. |
+| `src/demo/edit.rs` | The edit queue and journal/section save queueing per edit, with its queue test. |
+| `src/demo/persist.rs` | Save replay, the repair prompt, the recovered-journal path that runs before the ring opens, and replay tests. |
 | `src/camera.rs` | Look state, yaw/pitch math, view-projection, and tests. Position comes from the player eye. |
 | `src/block.rs` | Block types, stable IDs, hotbar mapping, and face texture layers. |
 | `src/player.rs` | Player physics, gravity, jumping, swept AABB collision, and tests. |
