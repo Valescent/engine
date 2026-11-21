@@ -803,8 +803,8 @@ the same recursive projected refinement and parent retention as level 2; childre
 | Visible nodes (sections + L0 chunks) | 1,259 |
 | Visible vertices | 5.15 M |
 | Draw calls | 2 |
-| Frame | 0.577 ms |
-| GPU scene | 0.323 ms |
+| Frame | 0.55-0.56 ms |
+| GPU scene | 0.327 ms |
 | Allocated quads | 74.62 MB |
 | Visible quads | 9.83 MB |
 | Geometry reservation | 94.24 MB |
@@ -821,6 +821,25 @@ the same recursive projected refinement and parent retention as level 2; childre
 - The far view extends the water and land to the horizon; the hierarchy 2 km and L0 controls agree on
   the visible island and cave patches.
 
+#### Steady-frame pass
+
+The horizon caches its occluded chunk and section sets at each 250 ms rebuild, so a settled frame does
+hash lookups instead of rerunning the azimuth-bin scan for every node. The quad renderer iterates a
+compact list of slots with geometry instead of all 20,480 slots. At the spawn 8 km view:
+
+| Metric | Before | After |
+|---|---:|---:|
+| Frame | 0.58-0.69 ms | **0.55-0.56 ms** |
+| GPU scene | 0.323 ms | 0.327 ms |
+| Horizon rebuild | ~0.74 ms / 250 ms | ~1.38 ms / 250 ms |
+| Per-frame horizon bin scans | ~1,259 | 0 |
+
+The four profiling scopes now cover `input`, `player update`, `camera update`, `stream columns`,
+`hierarchy`, `mesh request`, `mesh upload`, and `record frame`. The next capture should attribute the
+remaining frame self time. Reusing the swapchain view and batching timestamp queries were evaluated
+and left alone: the view belongs to the acquired frame, and `wgpu-profiler` 0.28 resolves queries
+per frame.
+
 #### Section horizon
 
 `Horizon` now takes the uploaded sections' conservative bounds. For each section, `Section::bounds`
@@ -834,19 +853,23 @@ across its whole angular footprint.
 
 #### Parallel section builds
 
-Coarse sections now run as `Job::Section` on the shared worker pool instead of the main thread. The
-main thread builds the edit overlay and uploads finished opaque/water meshes and horizon bounds; up
-to eight section jobs are in flight. Timing from `generated world ready` to `target=4908 queue=0`:
+Coarse sections run as `Job::Section` on the shared worker pool instead of the main thread. The main
+thread builds the edit overlay and uploads finished opaque/water meshes and horizon bounds. Timing
+from `generated world ready` to `target=4908 queue=0`:
 
-| | Main-thread build | Pooled build |
-|---|---:|---:|
-| Hierarchy settle (4,908 sections) | 22.9 s | **6.4-6.9 s** |
-| First logged frame | 4.14 ms | **2.36 ms** |
-| Settled frame / GPU | 0.69 / 0.33 ms | 0.58-0.69 / 0.32-0.33 ms |
+| | Main-thread build | Pooled (8 jobs) | Pooled + bounded (11 jobs) |
+|---|---:|---:|---:|
+| Hierarchy settle (4,908 sections) | 22.9 s | 6.4-6.9 s | **5.69 s** |
+| First logged frame | 4.14 ms | 2.36 ms | 2.36-2.65 ms |
+| Settled frame / GPU | 0.69 / 0.33 ms | 0.58-0.69 / 0.32-0.33 ms | **0.55-0.56 / 0.327 ms** |
 
 - The pool has 11 workers and also serves chunk generation, light, and meshing. Section jobs use
   `Priority::Background`, so a saturated chunk load delays them rather than blocking the frame.
-- The steady frame is unchanged, as expected: the work moved off the main thread, it did not shrink.
+- Bounds-limited meshing and bulk column generation cut the far level-3 section build from
+  1,793/1,784/1,139 µs (generate/opaque/water) to **1,135/642/248 µs**. Level-1 sections span almost
+  the whole grid vertically, so they improve mainly on generation (629 -> 480 µs).
+- Raising `MAX_SECTION_JOBS` from 8 to 11 matched the worker count and cut the settle from 6.53 s to
+  5.69 s in consecutive runs.
 - The full 4,908-section target still meshes to the same 5.15 M visible vertices after the horizon
   pass. `sections_in_flight` in the frame log shows the queue draining.
 
@@ -854,14 +877,14 @@ to eight section jobs are in flight. Timing from `generated world ready` to `tar
 
 The first hierarchy slice adds `src/section.rs`: `SectionKey` math, a level-1 coarse generator using
 the conservative `2 × 2` footprint maximum, a modified-chunk overlay, per-column coarse sky light,
-and a sample-space greedy mesh through `build_section_mesh`. It is not wired into streaming or the
-renderer yet. `bench_section` compares one level-1 section with the eight LOD1 chunk meshes covering
-the same `64³` region at seed 42's spawn:
+and a sample-space greedy mesh through `build_section_mesh`. It is wired into the hierarchy path.
+`bench_section` compares one level-1 section with the eight LOD1 chunk meshes covering the same `64³`
+region at seed 42's spawn:
 
 | Metric | One level-1 section | Eight LOD1 chunks |
 |---|---:|---:|
-| Generation | 629 µs (p95 868) | not timed |
-| Mesh | 1,053 µs (p95 1,184) | 2,360 µs |
+| Generation | 480 µs (p95 577) | not timed |
+| Mesh | 1,221 µs (p95 1,285) | 2,360 µs |
 | Quads | 2,193 | 3,613 |
 | Vertices | 8,772 | 14,452 |
 | Samples / storage | 32,768 B | 131,072 B |

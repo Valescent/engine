@@ -27,10 +27,10 @@ Baseline at `0b65acc`:
 
 | ID | Item | Expected | Effort | Status |
 |---|---|---|---|---|
-| SF1 | Cache horizon occlusion at the 250 ms rebuild; make `occludes` / `occludes_section` hash lookups | High | S | todo |
-| SF2 | Iterate occupied quad-pool slots instead of all 20,480 | High | S-M | todo |
-| SF3 | Add scopes to `stream_columns`, `request_levels`, `ensure_hierarchy`, `record_frame`; attribute the 283 µs `frame` self time | Enables SF1-SF2 follow-up | S | todo |
-| SF4 | Reuse the per-frame texture view and resolve GPU timestamp queries every N frames | Low-medium | S | todo |
+| SF1 | Cache horizon occlusion at the 250 ms rebuild; make `occludes` / `occludes_section` hash lookups | High | S | done |
+| SF2 | Iterate occupied quad-pool slots instead of all 20,480 | High | S-M | done |
+| SF3 | Add scopes to `stream_columns`, `request_levels`, `ensure_hierarchy`, `record_frame`; attribute the 283 µs `frame` self time | Enables SF1-SF2 follow-up | S | done |
+| SF4 | Reuse the per-frame texture view and resolve GPU timestamp queries every N frames | Low-medium | S | deferred; the view is the acquired swapchain texture and timestamp batching is unsafe in `wgpu-profiler` 0.28 |
 | SF5 | Cross-section greedy merging for coplanar top faces | Medium (GPU) | M-H | deferred |
 | SF6 | Hi-Z or software occlusion beyond the heightmap horizon | Low for the far heightmap | M-H | deferred |
 
@@ -38,12 +38,28 @@ Baseline at `0b65acc`:
 
 | ID | Item | Expected | Effort | Status |
 |---|---|---|---|---|
-| HL1 | Bounds-limit the section mesher to the solid/water y range | High (2-4x mesh) | M | todo |
-| HL2 | Fill generated columns in bulk instead of per-sample `set_sample` | High (2-3x generate) | M | todo |
-| HL3 | Add `section generate` / `section bounds` / `section light` / `section mesh` scopes | Enables HL1-HL2 | S | todo |
-| HL4 | Tune `MAX_SECTION_JOBS` and section priority on the shared pool | Medium (settle) | S | todo |
+| HL1 | Bounds-limit the section mesher to the solid/water y range | High (2-4x mesh) | M | done |
+| HL2 | Fill generated columns in bulk instead of per-sample `set_sample` | High (2-3x generate) | M | done |
+| HL3 | Add `section generate` / `section bounds` / `section light` / `section mesh` scopes | Enables HL1-HL2 | S | done |
+| HL4 | Tune `MAX_SECTION_JOBS` and section priority on the shared pool | Medium (settle) | S | done; 8 -> 11 jobs, 6.53 s -> 5.69 s |
 | HL5 | Optimize the chunk-light BFS (bitsets or a flatter queue) | Medium (load) | M | todo |
 | HL6 | Reduce the L0 detail radius | High, but lowers near detail | S | rejected |
+
+## Current results
+
+Measured after SF1-SF3 and HL1-HL4, on the same spawn view:
+
+| Gate | Before | Current |
+|---|---:|---:|
+| 8 km steady frame / GPU | 0.58-0.69 / 0.323 ms | **0.55-0.56 / 0.327 ms** |
+| 8 km hierarchy settle | 6.4-6.9 s (22.9 s before the pool) | **5.69 s** |
+| Visible nodes / vertices | 1,259 / 5.15 M | unchanged |
+| L3 far section generation | 1,793 µs | **1,135 µs** |
+| L3 far opaque mesh | 1,784 µs | **642 µs** |
+| L3 far water mesh | 1,139 µs | **248 µs** |
+| Horizon rebuild | ~0.74 ms | ~1.38 ms every 250 ms; zero per-frame bin scans |
+
+The section-job cap test used two settled runs: `MAX_SECTION_JOBS=8` gave 6.53 s and 11 gave 5.69 s. The pool has 11 workers, so 11 is the natural cap; chunk work still uses `Priority::Background` ordering. The far-section mesher is the main win because far sections hold only a few solid/water layers; near level-1 sections span almost the whole grid and improve less.
 
 ## Rules
 

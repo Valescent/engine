@@ -50,11 +50,11 @@ a BMP with `ENGINE_CAPTURE=<path>`; the capture waits `ENGINE_CAPTURE_DELAY` sec
 chunks around the player (default `16`, 512 m), and derived 64/128/256/512 m sections fill the
 rings out to 8 km. Levels 1-2 and the level-3/4 roots use projected refinement, parent retention,
 and coarse BFS light; sections generate and mesh on the shared worker pool (the 4,908-section target
-fills in about 7 s), and the hierarchy pool is 8M quads for the 8 km view. On the reference machine
+fills in about 5.7 s), and the hierarchy pool is 8M quads for the 8 km view. On the reference machine
 (RTX 4060, 1280x720, Vulkan), distance 32 settles at about 0.6 ms per frame with 2 draws and
 39.31 MiB of geometry reservation. The level-1/2 2 km slice measured 0.466 ms (0.235 ms GPU,
 3.58 M vertices, 2 draws, 30.94 MB of quads); the full 8 km hierarchy with the section horizon
-measures 0.577 ms (0.323 ms GPU, 5.15 M vertices, 1,259 visible nodes, 2 draws, 74.62 MB of quads,
+measures 0.55-0.56 ms (0.327 ms GPU, 5.15 M vertices, 1,259 visible nodes, 2 draws, 74.62 MB of quads,
 94.24 MB of geometry reservation). The horizon removes 646 of 1,330 in-frustum sections.
 
 See [`docs/dev/controls.md`](docs/dev/controls.md) for the full binding table.
