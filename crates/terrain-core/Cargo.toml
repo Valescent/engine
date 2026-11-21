@@ -13,7 +13,7 @@ path = "src/lib.rs"
 
 [[bin]]
 name = "terrain-gen"
-path = "src/terrain_gen.rs"
+path = "src/bin/terrain-gen/main.rs"
 
 [dependencies]
 fastnoise-lite = "1.1.1"

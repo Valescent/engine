@@ -9,6 +9,11 @@ Both commands honour the global options. Output is identical for every `--thread
 every `--order` value, `--json` prints exactly one JSON object on stdout, and diagnostics go to
 stderr. Seeds are always `1..=n`.
 
+The binary lives in `crates/terrain-core/src/bin/terrain-gen/`, with one module per subcommand
+(`gen.rs`, `golden.rs`, `seams.rs`, `sweep.rs`, `counters.rs`, `calibrate.rs`, `describe.rs`,
+`verify.rs`, `replay.rs`, `repair.rs`, `migrate.rs`, `map.rs`) over the shared `cli.rs` and
+`output.rs`.
+
 ## calibrate-blend
 
 `docs/specs/terrain.md` §8.4 and `E3.6` require the biome blend to be measured rather than

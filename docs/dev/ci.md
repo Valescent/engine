@@ -192,17 +192,21 @@ the decision that size budgets are warnings, not failures, until the refactor br
 under the limits. Remove `continue-on-error` and make the checker exit non-zero once no tracked
 Rust file exceeds 1,000 lines.
 
-On 2026-11-20 the merged tree has **22 files over 1,000 lines** and **29 files over 600 lines**
-out of 62 tracked Rust files (the 600-line count includes the 1,000-line offenders; 7 files sit
+On 2026-11-20 the merged tree has **21 files over 1,000 lines** and **29 files over 600 lines**
+out of 77 tracked Rust files (the 600-line count includes the 1,000-line offenders; 8 files sit
 between 601 and 1,000). The five largest are:
 
 | Lines | File |
 |---:|---|
-| 6,900 | `src/lib.rs` |
-| 4,646 | `crates/terrain-core/src/terrain_gen.rs` |
+| 6,896 | `src/lib.rs` |
 | 2,688 | `crates/terrain-core/src/mesher2.rs` |
 | 2,681 | `src/renderer.rs` |
 | 2,129 | `crates/terrain-core/src/light2.rs` |
+| 2,089 | `crates/terrain-core/src/pipeline.rs` |
+
+The `terrain-gen` tool now lives under `crates/terrain-core/src/bin/terrain-gen/`, one module
+per subcommand; its largest module is 969 lines, so the split removed the last 4,000-line
+offender from this list.
 
 `sh scripts/size-budgets.test.sh` builds a throwaway Git work tree with exactly 600-line and
 1,001-line fixtures and asserts the annotation, both counts, the 600-line boundary, and the zero
