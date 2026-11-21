@@ -87,15 +87,20 @@ light buffer, and it saves 8 MB against a 40 MB target that 12 bytes already mee
 ### 2.2 Pool
 
 - One flat array of 12-byte records, divided into pages of 64 quads (768 bytes).
-- A chunk reserves a contiguous run of pages sized to its quad count; a surface chunk of about 2,000
-  quads takes 32 pages. The run is first-fit from a coalescing free list keyed by first page. A
-  draw-relative vertex maps to `first_quad + vertex_index / 4` on the indexed path and
+- Each mesh range (an opaque LOD or water) reserves a contiguous run of pages sized to its quad
+  count; a surface chunk's opaque run of about 2,000 quads takes 32 pages. The run is first-fit from
+  a coalescing free list keyed by first page. A draw-relative vertex maps to
+  `first_quad + vertex_index / 4` on the indexed path and
   `first_quad + vertex_index / 6` on the non-indexed path.
 - Freed runs wait two frames in a deferred list, then coalesce into the free list. A remesh allocates
   the new run before freeing the old one, so a transition cannot read freed data.
-- Water uses the same pool with a separate range in the chunk record.
-- Capacity is a fixed budget of 3.2M quads (38.4 MB). A chunk that does not fit falls back to the
-  per-chunk path; growth by reallocation is a later decision.
+- Water uses the same pool with a separate range in the chunk record, so a slot can hold an opaque
+  range and a water range at the same time.
+- Capacity is a fixed budget of 3.2M quads (38.4 MB). A range that does not fit stays unuploaded:
+  the finished mesh is dropped, any previous mesh remains drawn, and the build is re-requested on a
+  later frame while ranges retire. Chunk uploads retry a bounded number of times (eight) and then
+  keep the previous mesh; a failed section upload is marked dirty and rebuilt later. It does not
+  fall back to the per-chunk path. Growth by reallocation is a later decision.
 - No readback: the CPU mesher knows the quad count, so it writes the draw arguments directly.
 
 ### 2.3 Chunk table
@@ -210,7 +215,7 @@ Compute culling needs the pool and chunk table first.
 | **Pool lifetime bugs are the worst failure mode.** | Accepted with qualification. Fixed pages and a coalescing free list reduce fragmentation but cannot remove it, because live allocations can leave separated free runs that cannot satisfy a larger contiguous request. A two-frame age protects in-flight reads; the fallback path remains. |
 | **12 bytes costs 8 MB over the 8-byte form.** | Accepted. The target is 40 MB; preserving smooth lighting is worth 8 MB. |
 | **`first_instance` is not universal.** | Accepted. The existing per-chunk vertex/index path is used when it is unavailable; the pool and its batching are lost. |
-| **Page rounding wastes space.** | Accepted. Pages are 64 quads, so a chunk wastes at most 63 quads; the slice measures the total against the 40 MB gate. |
+| **Page rounding wastes space.** | Accepted. Pages are 64 quads, so each allocated range wastes at most 63 quads. A slot can hold an opaque range and a separate water range, so a chunk can waste up to 126 quads; the slice measures total pool waste against the 40 MB gate. |
 | **Indirect draws add a CPU args upload.** | Accepted. About 50 KB per frame at 2,500 visible chunks; one write. |
 | **The 256 MiB buffer cap could bite later.** | Accepted with qualification. 38.4 MB now; slabs or a raised limit when the pool grows. |
 | **The fallback doubles the render paths.** | Accepted. It is required for Metal feature gaps and for regression comparison. |
@@ -250,7 +255,7 @@ Compute culling needs the pool and chunk table first.
 | Pool lifetime bug corrupts geometry | Fixed pages, two-frame age, page swap; oracle tests and a debug validator |
 | Vertex pulling is slower on a target GPU | A/B the slice against the shared-index path at distance 32; keep the fallback |
 | Indirect draws unsupported or emulated | `INDIRECT_EXECUTION` check; per-chunk fallback; Metal count draws stay off |
-| Page rounding exceeds the budget | 64-quad pages bound waste to 63 quads per chunk; the slice measured 37.6 MiB |
+| Page rounding exceeds the budget | 64-quad pages bound waste to 63 quads per allocated range; a slot can hold an opaque range and a water range. The slice measured 37.6 MiB total. |
 | Light interpolation changes | Keep the corner packing exact; compare rendered frames and vertex values |
 | Buffer or binding limits | 38.4 MB pool under 256 MiB; chunk table under 128 MiB; slab later |
 

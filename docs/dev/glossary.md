@@ -55,7 +55,7 @@ something else; it does not ban the word everywhere.
 | [revision](../specs/v0.0.5.md) | Version number for a chunk mesh or job; results from older revisions are discarded. | Current (v0.0.5) | version, when you mean the package version |
 | [stress scene](../specs/v0.0.5.md) | Exact 64-chunk in-memory fixture selected by `ENGINE_STRESS_SCENE=1`. | Current (v0.0.5) | benchmark, when you mean the fixture |
 | [upload budget](../specs/v0.0.5.md) | Maximum completed chunk meshes uploaded per frame; fixed at two. | Current (v0.0.5) | frame budget |
-| [draw call](architecture.md#rendering-resources) | One draw submission to the GPU. The quad path issues two indirect draws (opaque and water); the per-chunk fallback issues one per visible mesh. | Current (v0.0.9) | pass |
+| [draw call](architecture.md#rendering-resources) | One draw submission to the GPU. The quad path normally issues two indirect draws (opaque and water), with additional non-indexed draws for meshes above 16,383 quads; the per-chunk fallback issues one per visible mesh. | Current (v0.0.9) | pass |
 | [frame time](debugging.md#logging) | Time to produce one frame, logged as `frame_ms`. | Current | FPS |
 | [FPS](debugging.md#logging) | Frames per second; the reciprocal of frame time. | Current | frame time |
 | [debug overlay](debugging.md#profiling) | On-screen FPS and frame time, toggled with `F3` and refreshed once per second. | Current | HUD |

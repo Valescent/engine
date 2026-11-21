@@ -494,7 +494,7 @@ places no lamps, so almost every chunk keeps only the sky plane, 19.2 KiB instea
 
 The sparsity is per neighbourhood, not per chunk: a lamp keeps the block plane for the 27 chunks
 around it, adding 19.2 KiB each. The distance-32 figure is under the 350 MB definition of done with
-no lamps placed, and a lamp costs 0.6% of that budget.
+no lamps placed, and a lamp costs about 0.15% of that budget (518 KiB across the 27 chunks).
 
 ### Cheap wins after the baseline
 
@@ -817,7 +817,9 @@ the same recursive projected refinement and parent retention as level 2; childre
   from 0.780 ms to 0.323 ms.
 - `bench_horizon_sections` reproduces the target and culling counts without a window:
   `target=4908 bounds=4641 frustum=1330 occluded=646 visible=684`.
-- The 8 km gate holds: 60 FPS, under 500 MB working set, and 2 draws.
+- The 8 km frame and draw gates hold: 60 FPS and 2 draws. The 500 MB working-set gate is
+  unverified: the table records L0 resident blocks and light plus the geometry reservation, not
+  total process working set, and no full working-set measurement exists.
 - The far view extends the water and land to the horizon; the hierarchy 2 km and L0 controls agree on
   the visible island and cave patches.
 
