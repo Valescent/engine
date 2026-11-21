@@ -634,6 +634,11 @@ and `git diff --color-moved` stay useful.
 | 6 | Visibility and error pass: `pub(crate)` audit, re-export decision, `RunError` wrapping | ~927 `pub` items | `clippy` with `unreachable_pub`, `cargo doc`, integration tests | revert per module | Narrows the surface; API-visible. Medium risk. |
 | 7 | Optional: `crates/terrain-demo` | ~5,000 lines | full gates plus a measured build-time check | revert | Only with a trigger (the demo must not link `wgpu`, a second frontend, or a measured build win). High cost. |
 
+**Stage status (2026-11-20):** the `v0/` grouping from Stage 2 has landed. `world`, `light`, `mesh`,
+`mesher`, `generation`, `streaming`, and `voxel` now live under `src/v0/`, and the crate root
+re-exports them, so every existing module path is unchanged. The two type moves in Stage 2 have not
+landed yet.
+
 ### 6.1 Stage detail
 
 **Stage 1: split the root.**
