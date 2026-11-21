@@ -487,8 +487,14 @@ fn clipped_lod1_mesh_is_air_outside_its_mask() {
         std::array::from_fn(|_| section::Section::uniform(1));
     columns.insert((0, 0), Arc::new(stack));
     let masks = BTreeMap::from([((0, 0), BTreeSet::from([(0, 0)]))]);
-    let regions =
-        demo_coarse_regions_masked(&columns, &demo_materials(), &content::v1_default(), &masks);
+    let owned = BTreeSet::from([(0, 0)]);
+    let regions = demo_coarse_regions_masked(
+        &columns,
+        &demo_materials(),
+        &content::v1_default(),
+        &masks,
+        &owned,
+    );
     let sections = regions.get(&(0, 0)).expect("the clipped region meshes");
     assert!(!sections.is_empty());
     for section in sections {
@@ -735,6 +741,111 @@ fn skirt_depth_covers_the_actual_coarse_step() {
             );
         }
     }
+}
+
+/// A demo whose active set has one LOD1 band edge against the fine band.
+///
+/// The fine square is the `7x7` around the player, so its east edge is column
+/// `3` and the complete LOD1 region at base `(4, 0)` is its first coarse
+/// neighbour. `edge_top` is the highest solid block of the boundary fine
+/// column and `coarse_top` the highest solid block of the coarse region; both
+/// are top-block indices, so their top faces are one block higher.
+fn band_edge_demo(coarse_top: i32, edge_top: i32) -> TerrainDemo {
+    let radius = 5;
+    let mut demo = stub_ring_demo(radius, (0, 0), (0, 0));
+    for x in -radius..=radius {
+        for z in -radius..=radius {
+            let top = if (4..=5).contains(&x) && (0..=1).contains(&z) {
+                coarse_top
+            } else if x == 3 && (0..=1).contains(&z) {
+                edge_top
+            } else {
+                9
+            };
+            demo.columns.insert((x, z), flat_stack(top));
+        }
+    }
+    install_fine_stubs(&mut demo, (0, 0));
+    let bands = coarse_bands(&demo.columns, (0, 0), radius);
+    let mut masks = BTreeMap::new();
+    for &(x, z) in &bands.coarse {
+        if bands.partial.contains_key(&(x, z)) {
+            continue;
+        }
+        masks.insert(
+            (x, z),
+            BTreeSet::from([(x, z), (x + 1, z), (x, z + 1), (x + 1, z + 1)]),
+        );
+    }
+    let built = demo_coarse_regions_masked(
+        &demo.columns,
+        &demo.materials,
+        &demo.pack,
+        &masks,
+        &bands.owned,
+    );
+    demo.coarse = built.values().flatten().cloned().collect();
+    demo.partial_columns = bands.partial;
+    demo.select_lod((0, 0));
+    demo
+}
+
+/// The active LOD1 section at one region base and vertical section.
+fn active_coarse_section(demo: &TerrainDemo, x: i32, z: i32, y: i32) -> &DemoSection {
+    demo.sections
+        .iter()
+        .find(|section| section.scale == 2 && section.origin == [x * 32, y, z * 32])
+        .unwrap_or_else(|| panic!("the LOD1 section at ({x}, {y}, {z}) is active"))
+}
+
+#[test]
+fn a_coarse_band_edge_emits_the_wall_above_a_snapped_fine_top() {
+    // The boundary fine column is solid through y = 10 (top face 11), so the
+    // conservative 2x2x2 vote snaps the LOD0-side cell up to the coarse top
+    // face 12. The coarse mesher used to cull the whole boundary cell against
+    // that vote, leaving the air between 11 and 12 open.
+    let demo = band_edge_demo(11, 10);
+    let section = active_coarse_section(&demo, 4, 0, 0);
+    assert!(
+        section
+            .mesh
+            .opaque
+            .iter()
+            .any(|quad| { quad.normal() == 1 && quad.x() == 0 && quad.z() == 0 && quad.y() == 5 }),
+        "the coarse cell whose top is above the fine top must emit its west wall"
+    );
+}
+
+#[test]
+fn a_flush_coarse_band_edge_adds_no_wall() {
+    // Both surfaces top out at block 11 (face 12), so the adjacent fine group
+    // is fully opaque and the existing cull already covers the side.
+    let demo = band_edge_demo(11, 11);
+    let section = active_coarse_section(&demo, 4, 0, 0);
+    assert!(
+        !section
+            .mesh
+            .opaque
+            .iter()
+            .any(|quad| quad.normal() == 1 && quad.x() == 0 && quad.y() == 5),
+        "a flush band edge must not duplicate the coarse wall"
+    );
+}
+
+#[test]
+fn an_owned_coarse_neighbour_keeps_its_cull() {
+    // Base (6, 0) is the next complete LOD1 region and is owned by the coarse
+    // band, so the east face between them stays culled.
+    let demo = band_edge_demo(11, 10);
+    let section = active_coarse_section(&demo, 4, 0, 0);
+    assert!(
+        !section
+            .mesh
+            .opaque
+            .iter()
+            .any(|quad| quad.normal() == 0 && quad.x() == 31 && quad.y() == 5),
+        "an interior coarse-to-coarse side remains culled"
+    );
 }
 
 #[test]

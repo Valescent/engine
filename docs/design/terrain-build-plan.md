@@ -174,7 +174,7 @@ Queued next:
    `demo_texture_layer` still maps names onto eleven procedural placeholder layers.
 2. **Persistence follow-ups:** a decoder for an older section record format, and a richer world-repair dialog.
 
-Verification at the 2026-11-20 ring merge point: `fmt`, `clippy`, `cargo test` (698 lib, 2 ignored,
+Verification at the 2026-11-20 ring merge point: `fmt`, `clippy`, `cargo test` (701 lib, 2 ignored,
 3 light_preview, 30 integration) and `golden check` exit 0. Start the demo with `TERRAIN_DEMO=1`
 and `cargo run --bin engine`; it needs `world/seed` (or `ENGINE_STRESS_SCENE=1`).
 
