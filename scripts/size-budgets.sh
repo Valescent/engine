@@ -1,11 +1,11 @@
 #!/bin/sh
-# Report Rust file size budgets. Findings are warnings, never failures.
+# Report Rust file size budgets. Over 1,000 lines is a hard gate.
 #
-# Design: docs/design/modular-structure.md §5.6 and §8. Files over 1,000 lines
-# are reported individually as GitHub warning annotations. Files over 600 lines
-# are the advisory tier and are summarised as a count. The script exits 0 even
-# when it finds offenders; the CI step becomes a hard gate only once the tree is
-# under budget.
+# Design: docs/design/modular-structure.md §5.6. Files over 1,000 lines are
+# reported individually as GitHub warning annotations and make the script exit
+# 1. Files over 600 lines are the advisory tier and are summarised as a count;
+# they never fail the run. The script exits 0 only when no counted file exceeds
+# 1,000 lines.
 #
 # src/v0/ is the frozen legacy stack: it is the default run path only until the
 # terrain demo becomes the default, at which point it is deleted. Its files are
@@ -68,11 +68,10 @@ advisory=$((over_600 - over_1000))
 echo "Size budgets: $total tracked Rust files ($excluded_total under src/v0/ excluded from the budgets); $over_1000 over 1,000 lines; $over_600 over 600 lines"
 echo "size-budgets: excluding src/v0/ (frozen legacy, deleted when the terrain demo is the default): $excluded_total file(s), $excluded_1000 over 1,000 and $excluded_600 over 600 lines"
 
-# Every counted file over the hard-warning budget gets a line annotation. The
-# annotation is a warning so it appears in the CI summary without failing the
-# run.
+# Every counted file over the hard budget gets a line annotation. The annotation
+# is a warning so it appears in the CI summary beside the non-zero exit.
 awk -F '\t' '$1 > 1000 {
-	printf "::warning file=%s,line=1::%s has %s lines; the 1,000-line file budget is a warning until the tree is under budget\n", $2, $2, $1
+	printf "::warning file=%s,line=1::%s has %s lines; the 1,000-line file budget is a hard limit\n", $2, $2, $1
 }' "$counted"
 
 echo "size-budgets: $over_1000 file(s) over 1,000 lines"
@@ -85,5 +84,10 @@ fi
 echo "size-budgets: largest files:"
 sort -k1,1nr -k2,2 "$counted" | head -n 5 | awk -F '\t' '{ printf "  %5s %s\n", $1, $2 }'
 
-echo "size-budgets: warnings only; exiting 0 (the gate tightens once the tree is under budget)"
+if [ "$over_1000" -gt 0 ]; then
+	echo "size-budgets: failing: $over_1000 file(s) over the 1,000-line hard budget"
+	exit 1
+fi
+
+echo "size-budgets: no counted file exceeds the 1,000-line hard budget; exiting 0"
 exit 0

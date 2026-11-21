@@ -616,6 +616,12 @@ The numbers are deliberately not a "defect threshold". Koru et al. found a subli
 relationship, so a per-line defect argument would be false. The budget protects review and change
 locality, which is what the change-coupling data shows is actually failing here.
 
+The gate is hard as of 2026-11-21: `scripts/size-budgets.sh` exits 1 when any counted file exceeds
+1,000 lines and CI no longer sets `continue-on-error`, because the backlog is gone (0 files over
+1,000) and a failure now means a regression rather than unfinished work. The advisory tier stays at
+600 lines instead of following the hard limit upward: 600 is the review-size signal, so it surfaces
+a module that is getting expensive to read while leaving room to split it deliberately.
+
 ### 5.7 Module file layout
 
 - `lib.rs` is a table of contents: crate docs, `mod` declarations, `pub use`. It contains no `fn` body

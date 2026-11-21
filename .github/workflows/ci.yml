@@ -87,12 +87,10 @@ jobs:
       - name: Size budget checker self-test
         run: sh scripts/size-budgets.test.sh
 
-      # Size budgets are warnings until the refactor is under budget
-      # (docs/design/modular-structure.md §5.6 and §8). Remove
-      # continue-on-error to make this a hard gate once no tracked Rust file
-      # exceeds 1,000 lines.
+      # Hard gate as of 2026-11-21: no counted Rust file exceeds 1,000 lines,
+      # so a regression now fails the job. The 600-line advisory tier still
+      # only reports (docs/design/modular-structure.md §5.6).
       - name: Size budgets
-        continue-on-error: true
         run: sh scripts/size-budgets.sh
 
       - name: Crate graph (terrain-core is headless)

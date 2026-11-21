@@ -182,46 +182,54 @@ ignores `target/`, `book/`, and `world/`, and reports `src/v0/` as excluded:
 
 ```console
 sh scripts/size-budgets.sh
+sh scripts/size-budgets.test.sh
 ```
 
 The thresholds come from [Modular structure](../design/modular-structure.md#56-size-budgets)
-§5.6. Every file over **1,000 lines** is printed as a GitHub warning annotation
-(`::warning file=...,line=1::`), and files over **600 lines** are counted as the advisory tier.
+§5.6. The gate has two tiers:
+
+- **Hard, 1,000 lines.** Every counted file over **1,000 lines** is printed as a GitHub warning
+  annotation (`::warning file=...,line=1::`) and the script exits 1, so the CI step fails the job.
+  The annotation still appears in the job summary beside the failure.
+- **Advisory, 600 lines.** Files over **600 lines** are counted and reported as the advisory tier.
+  They never change the exit status.
+
 `src/v0/` is the frozen legacy stack: it remains the default run path only until the terrain demo
 becomes the default, at which point it is deleted. Its files are therefore reported as excluded
 and never annotated or counted, because splitting code that is scheduled for deletion is
 pointless churn. The output always includes one line with that exclusion and its file counts.
-The script always exits 0 on findings, and the CI step sets `continue-on-error: true`: §8 records
-the decision that size budgets are warnings, not failures, until the refactor brings the tree
-under the limits. Remove `continue-on-error` and make the checker exit non-zero once no counted
-Rust file exceeds 1,000 lines.
 
-On 2026-11-21 the tree has **114 tracked Rust files**, of which **8 sit under `src/v0/`**; those
-8 are excluded, including 2 over 1,000 lines and 4 over 600. The counted set is **14 files over
-1,000 lines** and **32 files over 600 lines** (the 600-line count includes the 1,000-line
-offenders; 18 files sit between 601 and 1,000). The five largest counted files are:
+The gate became hard on 2026-11-21, when the tree was under the 1,000-line limit; the CI step no
+longer sets `continue-on-error`. The advisory tier stays at 600 lines so new and growing modules
+still surface in the summary before they reach the hard limit.
+
+On 2026-11-21 the tree has **173 tracked Rust files**, of which **8 sit under `src/v0/`**; those
+8 are excluded, including 2 over 1,000 lines and 4 over 600. The counted set is **0 files over
+1,000 lines** and **30 files over 600 lines**, so all 30 sit in the 601-1,000 advisory tier. The
+five largest counted files are:
 
 | Lines | File |
 |---:|---|
-| 2,681 | `src/renderer.rs` |
-| 1,741 | `crates/terrain-core/src/description.rs` |
-| 1,656 | `crates/terrain-core/src/section.rs` |
-| 1,633 | `crates/terrain-core/src/surface.rs` |
-| 1,553 | `crates/terrain-core/src/climate.rs` |
+| 987 | `crates/terrain-core/src/metrics2.rs` |
+| 977 | `crates/terrain-core/src/features/apply.rs` |
+| 972 | `src/demo/patch.rs` |
+| 969 | `crates/terrain-core/src/bin/terrain-gen/calibrate.rs` |
+| 958 | `src/demo/stream.rs` |
 
 The excluded `src/v0/` files are 8 in total; the largest offenders there are
-`src/v0/world.rs` (1,598 lines) and `src/v0/mesh.rs` (1,233), which is why the checker prints the
-exclusion count instead of hiding them.
+`src/v0/world.rs` (1,403 lines) and `src/v0/mesh.rs` (1,094), which is why the checker prints the
+exclusion count instead of hiding them. They do not affect the gate.
 
 The `terrain-gen` tool now lives under `crates/terrain-core/src/bin/terrain-gen/`, one module
 per subcommand; its largest module is 969 lines, so the split removed the last 4,000-line
 offender from this list.
 
-`sh scripts/size-budgets.test.sh` builds a throwaway Git work tree with exactly 600-line and
-1,001-line fixtures plus a 1,001-line `src/v0/` fixture, and asserts the annotation, both counts,
-the 600-line boundary, the `src/v0/` exclusion line and counts, the absence of a warning for the
-v0 file, and the zero exit. It runs as a separate, blocking step before the checker, because a
-broken checker should fail even while its findings stay advisory.
+`sh scripts/size-budgets.test.sh` builds two throwaway Git work trees. The first has exactly
+600-line and 1,001-line fixtures plus a 1,001-line `src/v0/` fixture; it asserts exit 1, the warning
+annotation, both counts, the 600-line boundary staying quiet, the `src/v0/` exclusion line and
+counts, and the absence of a warning for the v0 file. The second is entirely under budget; it
+asserts exit 0 and no annotations. The self-test runs as a separate, blocking step before the
+checker, so a broken checker fails before it can report on the tree.
 
 `calibrate-blend` is not part of this PR job: it passes at 16 seeds against the shipped generator
 version 4, but the pair 2-3 margin is too thin to gate every pull request (p90 57.68 against 64,
