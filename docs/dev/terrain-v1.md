@@ -144,6 +144,22 @@ at 12 or ~46 s at 16 after the narrow border relight (`ENGINE_NO_VSYNC=1`).
   offsets, cross quads, and UVs. Culling uses `32 * scale`.
 - `section_revision` includes scale, so an origin changing detail level re-uploads.
 
+## Textures
+
+- The block array holds one 16×16 RGBA8 layer per tile (eleven layers) and a full five-level mip
+  chain (16, 8, 4, 2, and 1 texels). Levels are generated at startup by averaging each 2×2 group
+  of the level below; level 0 is byte-identical to the procedural tile generator and alpha stays
+  255 (`ADR-0016`).
+- The sampler magnifies nearest, minifies linear, blends mip levels linearly, repeats in U and V,
+  and clamps anisotropy to 1. Close-up art stays crisp while distant terrain stops shimmering.
+- The chain adds 3,740 bytes (15,004 bytes total, up from 11,264) and about 18 µs of one-off
+  startup work.
+- Layers stay isolated: each level is generated from its own layer, and array sampling never
+  filters across layers, so there is no atlas padding or UV inset. Greedy UVs and the shader's
+  sample call are unchanged.
+- Tile artwork, the layer table, and per-face references are still placeholder content; the
+  texture pipeline page records the remaining asset-pipeline gap.
+
 ## Camera-relative rendering
 
 Both draw paths share one convention (spec 14.3):

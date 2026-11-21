@@ -1,7 +1,7 @@
 # Why I Chose a Texture Array over a Flat Atlas for Block Textures
 
 **Document type:** Architecture Decision Record / Devlog Entry  
-**Status:** Accepted  
+**Status:** Accepted; mipmap and sampling policy extended by ADR-0016  
 **Date:** 2026-11-15  
 **Project:** Valescent Engine  
 **Owner:** Project Owner  
