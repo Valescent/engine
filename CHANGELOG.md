@@ -44,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The frozen v0 stack (`world`, `light`, `mesh`, `mesher`, `generation`, `streaming`, `voxel`) now lives under `src/v0/` with crate-root re-exports, so every existing path keeps working; `terrain-gen` is split into `src/bin/terrain-gen/` with one module per subcommand, with byte-identical goldens, counters, and calibration output.
 - The crate root is now 34 lines: `startup.rs` owns `run`/config/seed/world choice, `app.rs` owns the winit app/frame/input, and `src/demo/` owns the terrain runtime (`patch`, `lod`, `stream`, `edit`, `persist`). Pure moves with all 59 tests preserved and no public-surface change.
 - The headless terrain stack is exposed through one `engine::terrain::<module>` facade; the 28 flat `engine::<module>` paths are `pub(crate)` only, proven by two `compile_fail` doctests and a facade integration test.
+- The demo now has one app-facing seam: `DemoRuntime` owns the patch, ring, save worker, repair prompt, pending rebuild, and edit queue behind `open/tick/edit/shutdown/repair/stats`, and `App` holds one `demo` field instead of six. The demo stores no renderer and names no `winit`/`wgpu` in production code; behaviour, log lines, and budgets are unchanged.
 - A non-blocking CI size-budget check reports Rust files over 1,000 lines (currently 21) instead of failing; it tightens into a gate once the tree is under budget.
 
 ### Fixed

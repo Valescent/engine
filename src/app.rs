@@ -1,7 +1,7 @@
 //! The `winit` application: window and renderer lifecycle, the frame loop,
 //! input mapping, overlay/stats, and the demo-to-renderer upload adapter.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -20,14 +20,7 @@ use crate::block::Block;
 use crate::camera::Camera;
 use crate::config::{Config, ConfigError};
 use crate::content;
-use crate::demo::{
-    BuildJob, COLUMN_NEIGHBOURS, CoarseBuilt, CoarseJob, DemoEdit, DemoRebuild, DemoSection,
-    GenerateJob, PoolJob, PoolResult, RepairPrompt, RingStream, TERRAIN_DEMO_COARSE_MS,
-    TERRAIN_DEMO_UPLOAD_MS, TerrainDemo, build_margin, build_window_ready, coarse_bands,
-    coarse_snapshot_intact, demo_rebuild, neighbourhood_intact, queue_demo_edit, section_key,
-    snapshot_around,
-};
-use crate::description;
+use crate::demo::DemoRuntime;
 use crate::frustum::Frustum;
 use crate::mesh::Lod;
 use crate::mesher::{MeshKind, MeshPool, MeshQueue, Priority, collect_finished, create_pool};
@@ -35,15 +28,12 @@ use crate::metrics;
 use crate::player::{Player, PlayerInput};
 use crate::raycast::{RaycastHit, raycast, raycast_where};
 use crate::renderer::{FrameStats, Renderer, RendererError, TerrainSection};
-use crate::residency;
 use crate::save;
-use crate::section;
 use crate::sky::Sky;
 use crate::startup::{insert_generated_chunk, no_vsync_requested, release_column, save_directory};
 use crate::streaming::Streaming;
 use crate::voxel::build_highlight_mesh;
 use crate::world::{CHUNK_COLUMN, ChunkCoord, DirtyChunks, SaveError, World};
-use crate::world_save;
 
 const WINDOW_TITLE: &str = concat!("Valescent Engine ", env!("CARGO_PKG_VERSION"));
 const MAX_FRAME_DELTA: Duration = Duration::from_millis(100);
@@ -70,10 +60,10 @@ pub enum RunError {
     Terrain(#[from] crate::error::TerrainError),
 }
 
-/// Uploads a built demo patch through the renderer's packed-quad path.
-fn upload_terrain_demo(renderer: &mut Renderer, demo: &TerrainDemo) -> Result<(), RendererError> {
+/// Uploads the demo's active section set through the renderer's packed-quad path.
+fn upload_terrain_demo(renderer: &mut Renderer, demo: &DemoRuntime) -> Result<(), RendererError> {
     let sections: Vec<TerrainSection<'_>> = demo
-        .sections
+        .sections()
         .iter()
         .map(|section| TerrainSection {
             origin: section.origin,
@@ -152,17 +142,8 @@ pub(crate) struct App {
     pub(crate) config: Config,
     pub(crate) streaming: Option<Streaming>,
     pub(crate) seed: Option<u64>,
-    pub(crate) terrain_demo: Option<TerrainDemo>,
-    /// Background writer for the v1 terrain world, when the demo has one.
-    pub(crate) terrain_save: Option<world_save::SaveWorker>,
-    /// Column-ring streaming state and workers.
-    pub(crate) terrain_ring: Option<RingStream>,
-    /// A corrupt section blocking saves until the player chooses an action.
-    pub(crate) repair_prompt: Option<RepairPrompt>,
-    /// In-flight background rebuild of the patch.
-    pub(crate) demo_build: Option<std::sync::mpsc::Receiver<DemoRebuild>>,
-    /// Edits waiting for the in-flight rebuild to finish, so clicks coalesce.
-    pub(crate) demo_edits: Vec<DemoEdit>,
+    /// The v1 terrain demo: patch, ring, saves, repair, and pending rebuild.
+    pub(crate) demo: Option<DemoRuntime>,
     pub(crate) save_directory: Option<PathBuf>,
     pub(crate) level_work: HashSet<ChunkCoord>,
     pub(crate) level_player_chunk: ChunkCoord,
@@ -244,12 +225,7 @@ impl App {
             config: Config::default(),
             streaming: None,
             seed: None,
-            terrain_demo: None,
-            terrain_save: None,
-            terrain_ring: None,
-            repair_prompt: None,
-            demo_build: None,
-            demo_edits: Vec::new(),
+            demo: None,
             save_directory: save_directory(stress).map(Path::to_path_buf),
             level_work: world.iter_chunks().map(|(chunk, _)| chunk).collect(),
             level_player_chunk: ChunkCoord::from_world(spawn.floor().as_ivec3()).0,
@@ -480,7 +456,7 @@ impl App {
     fn target_hit(&self) -> Option<RaycastHit> {
         let origin = self.player.eye_position();
         let direction = self.camera.forward();
-        match &self.terrain_demo {
+        match &self.demo {
             // The patch is what the player can see and stand on, so interaction
             // must target it, not the legacy world underneath (`F1.5`).
             Some(demo) => raycast_where(
@@ -494,7 +470,7 @@ impl App {
     }
 
     fn break_block(&mut self) {
-        if self.terrain_demo.is_some() {
+        if self.demo.is_some() {
             self.demo_edit(true);
             return;
         }
@@ -507,7 +483,7 @@ impl App {
     }
 
     fn place_block(&mut self) {
-        if self.terrain_demo.is_some() {
+        if self.demo.is_some() {
             self.demo_edit(false);
             return;
         }
@@ -525,61 +501,22 @@ impl App {
         self.invalidate_chunks(&dirty);
     }
 
-    /// Applies the player's `world-repair` choice, reloads sections, and starts
-    /// the save worker.
+    /// Applies the player's `world-repair` choice and uploads the reloaded set.
     fn resolve_repair(&mut self, action: save::RepairAction) {
-        let Some(prompt) = self.repair_prompt.take() else {
-            return;
-        };
-        let key = prompt.key;
-        let world = prompt.world;
-        match world.sections.repair(key, action) {
-            Ok(outcome) => info!(?outcome, "world repair applied"),
-            Err(error) => {
-                error!(%error, "world repair failed");
-                self.repair_prompt = Some(RepairPrompt { world, key });
-                return;
-            }
-        }
-        match world.read_sections() {
-            Ok(saved) => {
-                if let Some(demo) = &mut self.terrain_demo {
-                    demo.apply_saved(&saved);
-                }
-                if let Some(ring) = &mut self.terrain_ring {
-                    let mut grouped: BTreeMap<(i32, i32), Vec<section::SavedSection>> =
-                        BTreeMap::new();
-                    for record in saved {
-                        grouped
-                            .entry((record.key.column[0], record.key.column[1]))
-                            .or_default()
-                            .push(record);
-                    }
-                    ring.saved = grouped;
-                    ring.coarse_dirty = true;
-                    ring.upload_dirty = true;
-                }
-                match world_save::SaveWorker::start(world, 64) {
-                    Ok(worker) => self.terrain_save = Some(worker),
-                    Err(error) => {
-                        warn!(%error, "terrain save worker unavailable; edits will not persist");
-                    }
-                }
-                self.upload_demo();
-            }
-            Err(error) => {
-                error!(%error, "saved terrain is still unreadable after repair");
-                self.repair_prompt = Some(RepairPrompt { world, key });
-            }
+        let column = Streaming::column_at(self.player.position);
+        let column = (column.x, column.y);
+        let repaired = self
+            .demo
+            .as_mut()
+            .is_some_and(|demo| demo.repair(action, column));
+        if repaired {
+            self.upload_demo();
         }
     }
 
     fn save_world(&mut self) {
-        if let Some(save) = self.terrain_save.take() {
-            match save.shutdown() {
-                Ok(()) => debug!("terrain world saved"),
-                Err(error) => error!(%error, "failed to save the terrain world"),
-            }
+        if let Some(demo) = &mut self.demo {
+            demo.shutdown();
         }
         let Some(directory) = &self.save_directory else {
             debug!("stress scene is not saved");
@@ -606,20 +543,19 @@ impl App {
         }
     }
 
-    /// Applies one break or place to the demo patch and re-uploads it.
+    /// Applies one break or place to the demo patch.
     ///
-    /// `C4.2`: `y = 0` is indestructible, and a placement must not intersect the
-    /// player. The block is resolved by stable name (`A5.1`), never by the legacy
-    /// numeric id.
+    /// The demo owns the `y = 0` rule, the empty-cell rule, the save queue, and
+    /// the rebuild; the app resolves the target and the selected block name.
     fn demo_edit(&mut self, break_it: bool) {
         let Some(hit) = self.target_hit() else {
             return;
         };
-        if break_it && hit.block.y == 0 {
-            return;
-        }
-        let (cell, selected) = if break_it {
-            (hit.block, None)
+        let (cell, id) = if break_it {
+            let Some(demo) = &self.demo else {
+                return;
+            };
+            (hit.block, demo.air())
         } else {
             let Some(cell) = place_position(hit) else {
                 return;
@@ -627,504 +563,59 @@ impl App {
             if self.player.aabb().intersects_block(cell) {
                 return;
             }
-            (cell, Some(self.selected_block))
+            let Some(id) = content::v1_default().id(legacy_block_name(self.selected_block)) else {
+                return;
+            };
+            (cell, id)
         };
-        let Some(demo) = &mut self.terrain_demo else {
-            return;
-        };
-        let id = match selected {
-            None => demo.air,
-            Some(block) => {
-                let Some(id) = content::v1_default().id(legacy_block_name(block)) else {
-                    return;
-                };
-                id
-            }
-        };
-        if !break_it && !demo.is_empty(cell) {
-            return;
+        if let Some(demo) = &mut self.demo {
+            demo.edit(cell, id);
         }
-        let key = section_key(cell);
-        let baseline = demo.baseline_for(key);
-        let old_name = demo
-            .block_at(cell)
-            .and_then(|old| demo.pack.name(old).map(str::to_owned));
-        let new_name = demo.pack.name(id).map(str::to_owned);
-        if !demo.set_block(cell, id) {
-            return;
-        }
-        let size = i32::try_from(description::SECTION_SIZE).unwrap_or(32);
-        let column = (cell.x.div_euclid(size), cell.z.div_euclid(size));
-        demo.unsaved.insert(column);
-        let queued = if let (false, Some(save), Some(old_name), Some(new_name)) = (
-            demo.read_only,
-            self.terrain_save.as_ref(),
-            old_name,
-            new_name,
-        ) {
-            queue_demo_edit(save, demo, cell, key, baseline, old_name, new_name);
-            true
-        } else {
-            false
-        };
-        if queued {
-            demo.unsaved.remove(&column);
-        }
-        if let Some(ring) = &mut self.terrain_ring {
-            ring.coarse_dirty = true;
-            ring.upload_dirty = true;
-        }
-        self.demo_edits.push(DemoEdit { cell });
-        self.rebuild_demo();
     }
 
-    /// Queues a rebuild; rapid clicks coalesce into one worker at a time.
+    /// Advances the demo one frame and applies its player and renderer results.
     ///
-    /// The click has already mutated the section, so the frame stays responsive;
-    /// [`Self::poll_demo_rebuild`] starts the next worker when this one lands.
-    fn rebuild_demo(&mut self) {
-        if self.demo_build.is_some() {
-            return;
+    /// The runtime owns the ring, the rebuild, and the throttles; the app places
+    /// the spawned player and uploads the section set it reports.
+    fn tick_demo(&mut self, player_column: (i32, i32)) {
+        let focused = self.focused;
+        let frame = self
+            .demo
+            .as_mut()
+            .map(|demo| demo.tick(Instant::now(), player_column, focused))
+            .unwrap_or_default();
+        if let Some(spawn) = frame.spawn {
+            self.set_spawn(spawn);
+            info!(?spawn, "standing on the centre terrain column");
         }
-        self.start_demo_rebuild();
+        let upload_started = Instant::now();
+        if frame.upload {
+            self.upload_demo();
+        }
+        let upload_ms = upload_started.elapsed().as_secs_f64() * 1000.0;
+        if let Some(rebuild) = frame.rebuild {
+            debug!(
+                light_ms = rebuild.light_ms,
+                mesh_ms = rebuild.mesh_ms,
+                upload_ms,
+                patches = rebuild.patches,
+                "terrain rebuild applied"
+            );
+        }
     }
 
-    /// Starts a worker for every edit queued since the last rebuild.
-    fn start_demo_rebuild(&mut self) {
-        let Some(demo) = &self.terrain_demo else {
+    /// Rebuilds the renderer's demo buffers.
+    fn upload_demo(&mut self) {
+        let Some(demo) = self.demo.as_ref() else {
             return;
         };
-        if self.demo_edits.is_empty() {
-            return;
-        }
-        let columns = demo.columns.clone();
-        let light = demo.light.clone();
-        let materials = demo.materials.clone();
-        let edits = std::mem::take(&mut self.demo_edits);
-        let (sender, receiver) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = sender.send(demo_rebuild(&columns, &light, &materials, &edits));
-        });
-        self.demo_build = Some(receiver);
-    }
-
-    /// Installs a finished rebuild if it is still current.
-    fn poll_demo_rebuild(&mut self) {
-        let received = self
-            .demo_build
-            .as_ref()
-            .map(std::sync::mpsc::Receiver::try_recv);
-        match received {
-            Some(Ok(rebuild)) => {
-                let light_ms = rebuild.light_time.as_secs_f64() * 1000.0;
-                let mesh_ms = rebuild.mesh_time.as_secs_f64() * 1000.0;
-                let patches = rebuild.patches.len();
-                self.demo_build = None;
-                if let Some(demo) = &mut self.terrain_demo {
-                    demo.apply_rebuild(rebuild);
-                }
-                let upload_started = Instant::now();
-                self.upload_demo();
-                let upload_ms = upload_started.elapsed().as_secs_f64() * 1000.0;
-                debug!(
-                    light_ms,
-                    mesh_ms, upload_ms, patches, "terrain rebuild applied"
-                );
-                if !self.demo_edits.is_empty() {
-                    self.start_demo_rebuild();
-                }
-            }
-            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
-                self.demo_build = None;
-                if !self.demo_edits.is_empty() {
-                    self.start_demo_rebuild();
-                }
-            }
-            Some(Err(std::sync::mpsc::TryRecvError::Empty)) | None => {}
-        }
-    }
-
-    /// Rebuilds the renderer's demo buffers after an edit.
-    fn upload_demo(&mut self) {
-        let column = Streaming::column_at(self.player.position);
-        let column = (column.x, column.y);
-        if let Some(demo) = &mut self.terrain_demo
-            && demo.lod_column != column
-        {
-            demo.select_lod(column);
-        }
-        let (Some(demo), Some(renderer)) = (self.terrain_demo.as_ref(), self.renderer.as_mut())
-        else {
+        let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
         if let Err(error) = upload_terrain_demo(renderer, demo) {
             error!(%error, "terrain upload failed");
         }
     }
-
-    /// Advances the column ring: applies finished jobs, then plans and starts a
-    /// bounded batch of generate, build, and evict work for this frame.
-    ///
-    /// Returns whether the player's current column has light, so the caller can
-    /// keep movement frozen while the centre column streams in.
-    #[allow(clippy::too_many_lines)]
-    fn poll_ring(&mut self) -> bool {
-        let Some(demo) = self.terrain_demo.as_ref() else {
-            return true;
-        };
-        let player = Streaming::column_at(self.player.position);
-        let player_column = (player.x, player.y);
-        let centre_ready = demo.column_ready(player_column);
-
-        let mut results = Vec::new();
-        if let Some(ring) = &self.terrain_ring {
-            while results.len() < 16 {
-                let Some(result) = ring.pool.try_recv() else {
-                    break;
-                };
-                results.push(result);
-            }
-        }
-        for result in results {
-            self.apply_ring_result(result);
-        }
-
-        let (Some(demo), Some(ring)) = (self.terrain_demo.as_ref(), self.terrain_ring.as_ref())
-        else {
-            return centre_ready;
-        };
-        let resident: BTreeSet<[i32; 2]> = demo.columns.keys().map(|&(x, z)| [x, z]).collect();
-        let needs_build: BTreeSet<[i32; 2]> = resident
-            .iter()
-            .copied()
-            .filter(|&column| {
-                let ring = (column[0] - player_column.0)
-                    .abs()
-                    .max((column[1] - player_column.1).abs());
-                let key = (column[0], column[1]);
-                let lit = demo.light.contains_key(&key);
-                // Wait until the columns this job reads are resident, so a
-                // build is not repeatedly discarded while its neighbourhood
-                // fills. A mesh-only upgrade reads one column less.
-                (!lit || (ring <= demo.fine_radius && !demo.fine.contains_key(&key)))
-                    && build_window_ready(
-                        &demo.columns,
-                        key,
-                        build_margin(!lit),
-                        player_column,
-                        demo.view_radius,
-                    )
-            })
-            .collect();
-        let in_flight: BTreeSet<[i32; 2]> = ring.in_flight.iter().map(|&(x, z)| [x, z]).collect();
-        let protected: BTreeSet<[i32; 2]> = demo.unsaved.iter().map(|&(x, z)| [x, z]).collect();
-        let plan = residency::plan_ring(
-            [player_column.0, player_column.1],
-            demo.view_radius,
-            &resident,
-            &in_flight,
-            &needs_build,
-            &protected,
-            residency::RingBudget::v1(),
-        );
-        let assets = ring.assets.clone();
-        let saved = ring.saved.clone();
-        let mut jobs = Vec::new();
-        for &column in &plan.generate {
-            let column = (column[0], column[1]);
-            jobs.push((
-                column,
-                PoolJob::Generate(GenerateJob {
-                    column,
-                    saved: saved.get(&column).cloned().unwrap_or_default(),
-                }),
-            ));
-        }
-        for &column in &plan.build {
-            let column = (column[0], column[1]);
-            let full = !demo.light.contains_key(&column);
-            let ring_distance = (column.0 - player_column.0)
-                .abs()
-                .max((column.1 - player_column.1).abs());
-            let detailed = !full || ring_distance <= demo.fine_radius;
-            let margin = build_margin(full);
-            let mut previous_light = BTreeMap::new();
-            let mut fine_columns = BTreeSet::new();
-            for (dx, dz) in COLUMN_NEIGHBOURS {
-                let key = (column.0 + dx, column.1 + dz);
-                if let Some(light) = demo.light.get(&key) {
-                    previous_light.insert(key, light.clone());
-                }
-                if demo.fine.contains_key(&key) {
-                    fine_columns.insert(key);
-                }
-            }
-            if let Some(light) = demo.light.get(&column) {
-                previous_light.insert(column, light.clone());
-            }
-            if demo.fine.contains_key(&column) {
-                fine_columns.insert(column);
-            }
-            jobs.push((
-                column,
-                PoolJob::Build(BuildJob {
-                    centre: column,
-                    full,
-                    detailed,
-                    margin,
-                    columns: snapshot_around(&demo.columns, column, margin),
-                    previous_light,
-                    fine_columns,
-                    materials: Arc::clone(&assets.materials),
-                    light_table: Arc::clone(&assets.light_table),
-                }),
-            ));
-        }
-        let mut evicted = Vec::new();
-        for &column in &plan.evict {
-            evicted.push((column[0], column[1]));
-        }
-        if let Some(ring) = self.terrain_ring.as_mut() {
-            for (column, job) in jobs {
-                if ring.in_flight.contains(&column) {
-                    continue;
-                }
-                ring.in_flight.insert(column);
-                if !ring.pool.submit(job) {
-                    ring.in_flight.remove(&column);
-                    warn!(?column, "terrain ring job could not be submitted");
-                }
-            }
-        }
-        if let Some(demo) = self.terrain_demo.as_mut() {
-            for &column in &evicted {
-                debug!(?column, "evicting terrain column");
-                demo.remove_column(column);
-            }
-            if let Some(ring) = self.terrain_ring.as_mut()
-                && !evicted.is_empty()
-            {
-                ring.coarse_dirty = true;
-                ring.upload_dirty = true;
-                demo.select_lod(player_column);
-            }
-        }
-
-        // Coarse LOD is disposable and rebuilt whole; keep one job in flight and
-        // let it lag a frame behind the fine ring. LOD2 shares this job and
-        // throttle; an edit only marks it dirty so the edit path stays cheap.
-        let now = Instant::now();
-        let (dirty, busy, elapsed, changed) =
-            self.terrain_ring
-                .as_ref()
-                .map_or((false, true, Duration::ZERO, false), |ring| {
-                    let changed = self
-                        .terrain_demo
-                        .as_ref()
-                        .is_some_and(|demo| demo.lod_column != player_column);
-                    let far_dirty = self
-                        .terrain_demo
-                        .as_ref()
-                        .is_some_and(|demo| demo.far_dirty);
-                    (
-                        ring.coarse_dirty || far_dirty,
-                        ring.coarse_busy,
-                        now.saturating_duration_since(ring.last_coarse),
-                        changed,
-                    )
-                });
-        if changed {
-            if let Some(ring) = self.terrain_ring.as_mut() {
-                ring.coarse_dirty = true;
-            }
-            self.upload_demo();
-        }
-        if (dirty || changed) && !busy && elapsed >= Duration::from_millis(TERRAIN_DEMO_COARSE_MS) {
-            let (Some(demo), Some(ring)) = (self.terrain_demo.as_ref(), self.terrain_ring.as_mut())
-            else {
-                return centre_ready;
-            };
-            // Clipped sections are the costly part of a coarse pass. Reuse them
-            // while their masks are unchanged; a new rim column, an eviction, or
-            // an edit makes the next pass rebuild them.
-            let partial = demo.partial_dirty
-                || coarse_bands(&demo.columns, player_column, demo.view_radius).partial
-                    != demo.partial_columns;
-            let job = PoolJob::Coarse(CoarseJob {
-                columns: demo.columns.clone(),
-                player: player_column,
-                radius: demo.view_radius,
-                partial,
-                materials: Arc::clone(&ring.assets.materials),
-                pack: Arc::clone(&ring.assets.pack),
-            });
-            ring.coarse_busy = true;
-            ring.last_coarse = Instant::now();
-            if !ring.pool.submit(job) {
-                ring.coarse_busy = false;
-                warn!("terrain coarse job could not be submitted");
-            }
-        }
-        if let Some(ring) = self.terrain_ring.as_mut()
-            && ring.upload_dirty
-            && now.saturating_duration_since(ring.last_upload)
-                >= Duration::from_millis(TERRAIN_DEMO_UPLOAD_MS)
-        {
-            ring.upload_dirty = false;
-            ring.last_upload = now;
-            self.upload_demo();
-        }
-        centre_ready
-    }
-
-    /// Installs one finished ring job.
-    #[allow(clippy::too_many_lines)]
-    fn apply_ring_result(&mut self, result: PoolResult) {
-        let player = Streaming::column_at(self.player.position);
-        let player_column = (player.x, player.y);
-        match result {
-            PoolResult::Generated(column, result) => {
-                if let Some(ring) = &mut self.terrain_ring {
-                    ring.in_flight.remove(&column);
-                }
-                match *result {
-                    Ok(generated) => {
-                        debug!(
-                            column = ?generated.column,
-                            generate_ms = generated.generate_ms,
-                            "terrain column generated"
-                        );
-                        if let Some(demo) = &mut self.terrain_demo {
-                            let radius = demo.view_radius + residency::UNLOAD_MARGIN;
-                            let ring_position = (generated.column.0 - player_column.0)
-                                .abs()
-                                .max((generated.column.1 - player_column.1).abs());
-                            if ring_position > radius {
-                                debug!(?generated.column, "late column is outside the ring");
-                                return;
-                            }
-                            for (key, baseline) in generated.applied {
-                                demo.baselines.insert(key, baseline);
-                            }
-                            demo.read_only |= generated.read_only;
-                            demo.insert_column(generated.column, generated.stack);
-                            if generated.column == (demo.origin_column.x, demo.origin_column.y) {
-                                demo.settle_spawn();
-                            }
-                        }
-                        if let Some(ring) = &mut self.terrain_ring {
-                            ring.coarse_dirty = true;
-                            ring.upload_dirty = true;
-                        }
-                    }
-                    Err(error) => {
-                        warn!(%error, "terrain column generation failed");
-                    }
-                }
-            }
-            PoolResult::Built(built) => {
-                if let Some(ring) = &mut self.terrain_ring {
-                    ring.in_flight.remove(&built.centre);
-                }
-                let mut spawn = None;
-                if let Some(demo) = &mut self.terrain_demo {
-                    if neighbourhood_intact(
-                        &demo.columns,
-                        &built.snapshot,
-                        built.centre,
-                        built.margin,
-                    ) {
-                        demo.apply_light(built.light);
-                        for (column, sections) in built.replace {
-                            demo.fine.insert(column, sections);
-                        }
-                        demo.apply_patches(built.patches);
-                        // A new or repaired fine mesh must join the active set
-                        // immediately; otherwise it waits for the next coarse
-                        // rebuild even though the player may be standing on it.
-                        demo.select_lod(demo.lod_column);
-                        if built.centre == (demo.origin_column.x, demo.origin_column.y)
-                            && demo.spawn_ready
-                        {
-                            spawn = Some(demo.spawn);
-                        }
-                        debug!(
-                            column = ?built.centre,
-                            light_ms = built.light_ms,
-                            mesh_ms = built.mesh_ms,
-                            "terrain column ready"
-                        );
-                    } else {
-                        debug!(column = ?built.centre, "discarded stale terrain build");
-                    }
-                }
-                if let Some(ring) = &mut self.terrain_ring {
-                    ring.upload_dirty = true;
-                }
-                if let Some(spawn) = spawn {
-                    let announce = self.terrain_ring.as_ref().is_some_and(|ring| !ring.spawned);
-                    if announce {
-                        self.set_spawn(spawn);
-                        if let Some(ring) = &mut self.terrain_ring {
-                            ring.spawned = true;
-                        }
-                        info!(?spawn, "standing on the centre terrain column");
-                    }
-                }
-            }
-            PoolResult::Coarse(coarse) => {
-                let intact = self.terrain_demo.as_ref().is_some_and(|demo| {
-                    demo.lod_column == coarse.player
-                        && coarse_snapshot_intact(&demo.columns, &coarse.snapshot)
-                });
-                if let Some(demo) = &mut self.terrain_demo {
-                    if intact {
-                        let changed = demo.columns.len() != coarse.snapshot.len();
-                        let CoarseBuilt {
-                            coarse: complete,
-                            partial,
-                            far,
-                            ..
-                        } = coarse;
-                        let kept: Vec<DemoSection> = if partial.is_none() {
-                            demo.coarse
-                                .iter()
-                                .filter(|section| {
-                                    demo.partial_columns.contains_key(&(
-                                        section.origin[0] / 32,
-                                        section.origin[2] / 32,
-                                    ))
-                                })
-                                .cloned()
-                                .collect()
-                        } else {
-                            Vec::new()
-                        };
-                        demo.coarse = complete;
-                        demo.coarse.extend(kept);
-                        if let Some((sections, masks)) = partial {
-                            demo.coarse.extend(sections);
-                            demo.partial_columns = masks;
-                            demo.partial_dirty = false;
-                        }
-                        demo.coarse.sort_by_key(|section| section.origin);
-                        demo.far = far;
-                        demo.far_dirty = false;
-                        demo.select_lod(demo.lod_column);
-                        if let Some(ring) = &mut self.terrain_ring {
-                            ring.coarse_busy = false;
-                            ring.coarse_dirty = changed;
-                            ring.upload_dirty = true;
-                        }
-                    } else if let Some(ring) = &mut self.terrain_ring {
-                        ring.coarse_busy = false;
-                        ring.coarse_dirty = true;
-                    }
-                }
-            }
-        }
-    }
-
     fn update_highlight(&mut self) {
         if self.renderer.is_none() {
             return;
@@ -1177,12 +668,12 @@ impl App {
         };
         profiling::scope!("player update");
         let streaming = self.streaming.as_ref();
-        let demo = self.terrain_demo.as_ref();
+        let demo = self.demo.as_ref();
         let ready = |position: Vec3| match demo {
-            Some(demo) => demo.aabb_ready(position),
+            Some(demo) => demo.is_ready(position),
             None => streaming.is_none_or(|streaming| streaming.aabb_ready(position)),
         };
-        let source: &dyn crate::player::BlockSource = match &self.terrain_demo {
+        let source: &dyn crate::player::BlockSource = match &self.demo {
             Some(demo) => demo,
             None => &self.world,
         };
@@ -1198,15 +689,17 @@ impl App {
 
         profiling::scope!("frame");
 
-        self.poll_demo_rebuild();
-
         let now = Instant::now();
         let elapsed = now.saturating_duration_since(self.last_frame);
         self.last_frame = now;
 
         if self.focused {
             self.record_frame(elapsed);
-            self.poll_ring();
+        }
+        let player = Streaming::column_at(self.player.position);
+        let player_column = (player.x, player.y);
+        self.tick_demo(player_column);
+        if self.focused {
             let delta_seconds = elapsed.min(MAX_FRAME_DELTA).as_secs_f32();
             self.step_player(delta_seconds);
             self.sky.advance(delta_seconds);
@@ -1241,16 +734,16 @@ impl App {
         let player_column = Streaming::column_at(self.player.position);
         let player_column = (player_column.x, player_column.y);
         if self
-            .terrain_demo
-            .as_ref()
-            .is_some_and(|demo| demo.lod_column != player_column)
+            .demo
+            .as_mut()
+            .is_some_and(|demo| demo.advance_lod(player_column))
         {
             self.upload_demo();
         }
-        let overlay = if let Some(prompt) = &self.repair_prompt {
+        let overlay = if let Some(key) = self.demo.as_ref().and_then(DemoRuntime::repair_key) {
             Some(format!(
                 "REPAIR c.{}.{}.{}: R RESTORE  Q QUARANTINE  S SALVAGE  (OR CLICK LEFT/MID/RIGHT)",
-                prompt.key.column[0], prompt.key.column[1], prompt.key.section
+                key.column[0], key.column[1], key.section
             ))
         } else {
             self.show_overlay.then(|| {
@@ -1319,32 +812,26 @@ impl App {
                 on_ground = self.player.on_ground,
                 "frame timing"
             );
-            if let Some(demo) = &self.terrain_demo {
-                let wanted =
-                    usize::try_from((2 * demo.view_radius + 1) * (2 * demo.view_radius + 1))
-                        .unwrap_or(0);
-                let resident = demo.columns.len();
-                let ready = demo.light.len();
-                let fine = demo.fine.len();
-                let coarse: usize = demo.coarse.len();
-                let lod2: usize = demo.far.len();
-                let quads = demo.quads;
-                let bytes = demo.footprint_bytes();
-                let in_flight = self
-                    .terrain_ring
-                    .as_ref()
-                    .map_or(0, |ring| ring.in_flight.len());
+            if let Some(demo) = &mut self.demo {
+                let stats = demo.stats();
                 info!(
-                    wanted,
-                    resident, ready, fine, coarse, lod2, quads, in_flight, bytes, "terrain ring"
+                    wanted = stats.wanted,
+                    resident = stats.resident,
+                    ready = stats.ready,
+                    fine = stats.fine,
+                    coarse = stats.coarse,
+                    lod2 = stats.lod2,
+                    quads = stats.quads,
+                    in_flight = stats.in_flight,
+                    bytes = stats.bytes,
+                    "terrain ring"
                 );
-                let full = resident >= wanted;
-                if let Some(ring) = &mut self.terrain_ring
-                    && full
-                    && !ring.announced_full
-                {
-                    ring.announced_full = true;
-                    info!(wanted, bytes, "terrain ring complete");
+                if stats.complete {
+                    info!(
+                        wanted = stats.wanted,
+                        bytes = stats.bytes,
+                        "terrain ring complete"
+                    );
                 }
             }
             self.overlay_fps = frames / seconds;
@@ -1365,7 +852,11 @@ impl App {
                 if event.repeat {
                     return;
                 }
-                if self.repair_prompt.is_some() {
+                if self
+                    .demo
+                    .as_ref()
+                    .is_some_and(|demo| demo.repair_key().is_some())
+                {
                     if let Some(action) = repair_action(code) {
                         self.resolve_repair(action);
                     }
@@ -1592,7 +1083,7 @@ impl ApplicationHandler for App {
             };
 
         // One upload at startup; the patch is static, so nothing rebuilds it.
-        let upload = match &self.terrain_demo {
+        let upload = match &self.demo {
             Some(demo) => upload_terrain_demo(&mut renderer, demo),
             None => Ok(()),
         };
@@ -1638,7 +1129,11 @@ impl ApplicationHandler for App {
                 button: MouseButton::Left,
                 ..
             } => {
-                if self.repair_prompt.is_some() {
+                if self
+                    .demo
+                    .as_ref()
+                    .is_some_and(|demo| demo.repair_key().is_some())
+                {
                     let width = self
                         .window
                         .as_ref()
@@ -1731,8 +1226,7 @@ mod tests {
     use crate::light;
     use crate::mesh;
     use crate::mesher::{Job, JobResult, MeshResult};
-    use crate::pipeline;
-    use crate::section;
+    use crate::residency;
     use crate::startup::stress_world;
 
     use super::*;
@@ -1775,108 +1269,6 @@ mod tests {
         world.set_block(IVec3::new(34, 3, 34), Block::Wood);
         world.set_block(IVec3::new(34, 4, 34), Block::Leaves);
         world
-    }
-
-    #[test]
-    #[allow(clippy::cast_precision_loss)]
-    fn the_ring_caps_generation_and_gates_on_the_centre() {
-        let seed = 0x5EED;
-        let column = IVec2::new(2, -3);
-        let hydro = pipeline::Terrain::new(seed)
-            .expect("the description compiles")
-            .solve_world_hydro()
-            .expect("the hydrology solves");
-        let demo = TerrainDemo::empty(seed, column, residency::DEMO_VIEW_RADIUS, hydro);
-        let mut app = App::with_world(World::default(), true);
-        app.terrain_ring = Some(RingStream::new(&demo, Vec::new(), 2));
-        app.terrain_demo = Some(demo);
-        app.player.position = Vec3::new(
-            column.x as f32 * 32.0 + 16.5,
-            64.0,
-            column.y as f32 * 32.0 + 16.5,
-        );
-
-        // The centre column starts unready, so physics refuses movement.
-        assert!(
-            !app.terrain_demo
-                .as_ref()
-                .is_some_and(|demo| demo.aabb_ready(app.player.position))
-        );
-        app.poll_ring();
-        let in_flight = &app
-            .terrain_ring
-            .as_ref()
-            .expect("the ring exists")
-            .in_flight;
-        assert_eq!(in_flight.len(), 2, "two columns per frame");
-        assert!(
-            in_flight.contains(&(column.x, column.y)),
-            "the centre column is generated first"
-        );
-
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while !app.terrain_demo.as_ref().is_some_and(|demo| {
-            demo.column_ready((column.x, column.y)) && demo.fine.contains_key(&(column.x, column.y))
-        }) {
-            assert!(
-                Instant::now() < deadline,
-                "the centre column did not become ready"
-            );
-            app.poll_ring();
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        let demo = app.terrain_demo.as_ref().expect("the demo exists");
-        assert!(demo.spawn_ready, "the spawn surface was measured");
-        assert!(
-            demo.fine.contains_key(&(column.x, column.y)),
-            "the centre column was meshed at LOD0"
-        );
-        assert!(
-            demo.sections.iter().any(|active| {
-                active.scale == 1
-                    && active.origin[0].div_euclid(32) == column.x
-                    && active.origin[2].div_euclid(32) == column.y
-            }),
-            "the centre column's mesh is in the active render set"
-        );
-        assert!(
-            demo.aabb_ready(demo.spawn),
-            "the centre column now accepts movement"
-        );
-    }
-    #[test]
-    fn the_ring_evicts_beyond_the_margin_but_keeps_unsaved_edits() {
-        let seed = 0x5EED;
-        let column = IVec2::new(0, 0);
-        let hydro = pipeline::Terrain::new(seed)
-            .expect("the description compiles")
-            .solve_world_hydro()
-            .expect("the hydrology solves");
-        let mut demo = TerrainDemo::empty(seed, column, residency::DEMO_VIEW_RADIUS, hydro);
-        demo.view_radius = 0;
-        for key in [(0, 0), (5, 0), (6, 0)] {
-            demo.insert_column(key, std::array::from_fn(|_| section::Section::uniform(0)));
-        }
-        demo.unsaved.insert((6, 0));
-        let mut app = App::with_world(World::default(), true);
-        app.terrain_ring = Some(RingStream::new(&demo, Vec::new(), 1));
-        app.terrain_demo = Some(demo);
-        app.player.position = Vec3::new(16.5, 64.0, 16.5);
-
-        app.poll_ring();
-        let demo = app.terrain_demo.as_ref().expect("the demo exists");
-        assert!(
-            !demo.columns.contains_key(&(5, 0)),
-            "a column beyond radius + 2 is evicted"
-        );
-        assert!(
-            demo.columns.contains_key(&(6, 0)),
-            "an edit whose save is not queued is never evicted"
-        );
-        assert!(
-            demo.columns.contains_key(&(0, 0)),
-            "the player's column stays resident"
-        );
     }
 
     #[test]

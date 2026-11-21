@@ -644,6 +644,8 @@ and `git diff --color-moved` stay useful.
 re-exports them, so every existing module path is unchanged. The two type moves in Stage 2 have not
 landed yet.
 
+**Stage 4 status (2026-11-21):** landed. `DemoRuntime` owns the patch, ring, save worker, repair prompt, pending rebuild, and edit queue; `App` holds one `demo: Option<DemoRuntime>` and performs the renderer upload, and `demo` names no renderer, `winit`, or `wgpu`.
+
 ### 6.1 Stage detail
 
 **Stage 1: split the root.**
