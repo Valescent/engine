@@ -48,6 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `app.rs` is split into `app/mod.rs` (App, handler, lifecycle, `RunError`), `app/input.rs` (keys, mouse, capture, hotbar, edits), and `app/frame.rs` (frame order, timing, overlay, uploads, streaming), with the frame sequence unchanged.
 - The demo module is split further: `demo/build.rs` owns the incremental rebuild (3x3 light scope, 26-neighbour remesh) and `demo/content.rs` owns the material/light/texture-layer tables, leaving `demo/mod.rs` as the `DemoRuntime` seam. All 32 demo tests are preserved.
 - `mesher2` and `light2` are split into submodules behind unchanged parent paths: `mesher2/{record,material,lod,greedy,cross,skirt,tests}` and `light2/{table,column,bfs,repair,tests}`. Both add a pinned output hash (mesh records and column light) taken before the split and unchanged after it.
+- `pipeline` and `volume` are split the same way: `pipeline/{terrain,stages,hydro,tests}` and `volume/{detail,caves,spans,tests}`, with a pinned column/section digest added for pipeline and the existing golden columns covering volume. Files over 1,000 lines are down from 22 to 17.
 - A non-blocking CI size-budget check reports Rust files over 1,000 lines (currently 21) instead of failing; it tightens into a gate once the tree is under budget.
 
 ### Fixed
