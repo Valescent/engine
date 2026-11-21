@@ -88,6 +88,8 @@ const TERRAIN_DEMO_FINE_RADIUS: i32 = 2;
 /// Fine meshes are kept one ring beyond the fine radius, so a column change
 /// does not leave a gap while the new fine mesh builds.
 const TERRAIN_DEMO_FINE_MARGIN: i32 = 1;
+/// Chebyshev radius drawn at LOD0: the fine radius plus its transition buffer.
+const TERRAIN_DEMO_FINE_CUTOFF: i32 = TERRAIN_DEMO_FINE_RADIUS + TERRAIN_DEMO_FINE_MARGIN;
 /// Outer radius of the LOD1 band in columns. A complete LOD2 region is a
 /// `4x4` column square entirely beyond this radius.
 ///
@@ -443,6 +445,12 @@ struct DemoSection {
     mesh: mesher2::SectionMesh,
 }
 
+/// Columns drawn by each clipped LOD1 base.
+type PartialMasks = BTreeMap<(i32, i32), BTreeSet<(i32, i32)>>;
+
+/// Clipped LOD1 sections and the masks they were built from.
+type PartialBuild = (Vec<DemoSection>, PartialMasks);
+
 /// A corrupt section that must be repaired before saving can resume.
 struct RepairPrompt {
     world: world_save::WorldSave,
@@ -450,6 +458,7 @@ struct RepairPrompt {
 }
 
 /// The static new-pipeline terrain patch, built once before the window opens.
+#[allow(clippy::struct_excessive_bools)]
 struct TerrainDemo {
     seed: u64,
     /// Column the patch is centred on, `Streaming` column coordinates.
@@ -466,12 +475,17 @@ struct TerrainDemo {
     fine: BTreeMap<(i32, i32), Vec<DemoSection>>,
     /// LOD1 sections for every complete 2x2 region in the middle band.
     coarse: Vec<DemoSection>,
+    /// Columns drawn by each clipped LOD1 base in `coarse`.
+    partial_columns: BTreeMap<(i32, i32), BTreeSet<(i32, i32)>>,
     /// LOD2 sections for every complete 4x4 region beyond the LOD1 band.
     far: Vec<DemoSection>,
     /// A deferred LOD2 rebuild is due after an edit. LOD2 is expensive, so it
     /// waits for the throttled whole-ring coarse job instead of rebuilding in
     /// the edit path.
     far_dirty: bool,
+    /// Clipped LOD1 sections must be remeshed even if their masks are unchanged.
+    /// Set by an edit so the next coarse job refreshes the rim geometry.
+    partial_dirty: bool,
     /// Mesher and light material tables, resolved once from the pack.
     materials: mesher2::MaterialProps,
     /// The content pack, for resolving stable names on save (`A5.1`).
@@ -547,8 +561,10 @@ impl TerrainDemo {
             light: BTreeMap::new(),
             fine: BTreeMap::new(),
             coarse: Vec::new(),
+            partial_columns: BTreeMap::new(),
             far: Vec::new(),
             far_dirty: false,
+            partial_dirty: true,
             materials: demo_materials(),
             pack,
             baselines: BTreeMap::new(),
@@ -647,6 +663,7 @@ impl TerrainDemo {
     /// Inserts a generated column. Replacing a column also drops its light and
     /// fine mesh, so the next build pass recomputes them.
     fn insert_column(&mut self, column: (i32, i32), stack: [section::Section; COLUMN_SECTIONS]) {
+        self.invalidate_partial_near(column);
         self.columns.insert(column, Arc::new(stack));
         self.light.remove(&column);
         self.fine.remove(&column);
@@ -654,9 +671,22 @@ impl TerrainDemo {
 
     /// Drops a column and everything derived from it.
     fn remove_column(&mut self, column: (i32, i32)) {
+        self.invalidate_partial_near(column);
         self.columns.remove(&column);
         self.light.remove(&column);
         self.fine.remove(&column);
+    }
+
+    /// A clipped region culls against its neighbours, so a column within one
+    /// expanded base (`2` columns) invalidates the cached clipped meshes.
+    fn invalidate_partial_near(&mut self, column: (i32, i32)) {
+        if self
+            .partial_columns
+            .keys()
+            .any(|&(x, z)| (column.0 - x).abs() <= 2 && (column.1 - z).abs() <= 2)
+        {
+            self.partial_dirty = true;
+        }
     }
 
     /// Installs computed light for the columns a build job returned.
@@ -762,11 +792,21 @@ impl TerrainDemo {
         if changed {
             self.light = demo_column_light(&self.columns);
             self.fine = demo_fine_all(&self.columns, &self.light, &self.materials);
-            let (coarse, far) =
-                demo_lod_sets(&self.columns, &self.materials, &self.pack, self.lod_column);
-            self.coarse = coarse;
-            self.far = far;
+            let sets = demo_lod_sets(
+                &self.columns,
+                &self.materials,
+                &self.pack,
+                self.lod_column,
+                self.view_radius,
+                true,
+            );
+            self.coarse = sets.coarse;
+            self.coarse.extend(sets.partial_sections);
+            self.coarse.sort_by_key(|section| section.origin);
+            self.partial_columns = sets.partial;
+            self.far = sets.far;
             self.far_dirty = false;
+            self.partial_dirty = false;
             self.select_lod(self.lod_column);
         }
         changed
@@ -813,6 +853,7 @@ impl TerrainDemo {
         // so it is rebuilt by the next throttled whole-ring job.
         self.refresh_coarse_around(&rebuild.columns);
         self.far_dirty = true;
+        self.partial_dirty = true;
         self.select_lod(self.lod_column);
     }
 
@@ -831,7 +872,23 @@ impl TerrainDemo {
         if regions.is_empty() {
             return;
         }
-        let rebuilt = demo_coarse_regions(&self.columns, &self.materials, &self.pack, &regions);
+        // A rim or LOD0-boundary region is clipped, so use the mask the current
+        // band selection assigns to each base rather than requiring all four.
+        let bands = coarse_bands(&self.columns, self.lod_column, self.view_radius);
+        let mut masks: BTreeMap<(i32, i32), BTreeSet<(i32, i32)>> = BTreeMap::new();
+        for &region in &regions {
+            let columns = bands.partial.get(&region).cloned().unwrap_or_else(|| {
+                BTreeSet::from([
+                    region,
+                    (region.0 + 1, region.1),
+                    (region.0, region.1 + 1),
+                    (region.0 + 1, region.1 + 1),
+                ])
+            });
+            masks.insert(region, columns);
+        }
+        let rebuilt =
+            demo_coarse_regions_masked(&self.columns, &self.materials, &self.pack, &masks);
         self.coarse
             .retain(|section| !regions.contains(&(section.origin[0] / 32, section.origin[2] / 32)));
         for (&region, sections) in &rebuilt {
@@ -840,15 +897,26 @@ impl TerrainDemo {
             }
         }
         self.coarse.sort_by_key(|section| section.origin);
+        self.partial_columns
+            .retain(|base, _| !regions.contains(base));
+        for (&base, columns) in &bands.partial {
+            if regions.contains(&base) {
+                self.partial_columns.insert(base, columns.clone());
+            }
+        }
     }
 
     /// Chooses LOD0 near the player, LOD1 for the middle band, and LOD2 far.
     ///
     /// Fine meshes are kept one ring beyond the fine radius as a transition
-    /// buffer. An LOD1 region is active only when all four of its columns are
+    /// buffer. An LOD1 region is active only when all of its drawn columns are
     /// outside that buffer and it is not covered by an active LOD2 region, so
     /// the three bands never overlap. LOD2 regions are complete 4x4 column
-    /// squares built entirely beyond [`TERRAIN_DEMO_LOD1_RADIUS`].
+    /// squares built entirely beyond [`TERRAIN_DEMO_LOD1_RADIUS`]. The clipped
+    /// LOD1 regions in `coarse` cover the positive rim and the LOD0-boundary
+    /// leftovers that no complete 2x2 square can own; they follow the same
+    /// far/near rules as a complete region, so a clipped region never overlaps
+    /// an LOD2 square.
     fn select_lod(&mut self, player_column: (i32, i32)) {
         self.lod_column = player_column;
         let cutoff = self.fine_radius + TERRAIN_DEMO_FINE_MARGIN;
@@ -881,14 +949,19 @@ impl TerrainDemo {
 
         for section in &self.coarse {
             let region = (section.origin[0] / 32, section.origin[2] / 32);
-            let near = [
-                region,
-                (region.0 + 1, region.1),
-                (region.0, region.1 + 1),
-                (region.0 + 1, region.1 + 1),
-            ]
-            .into_iter()
-            .any(|column| ring(column) <= cutoff);
+            let near = self.partial_columns.get(&region).map_or_else(
+                || {
+                    [
+                        region,
+                        (region.0 + 1, region.1),
+                        (region.0, region.1 + 1),
+                        (region.0 + 1, region.1 + 1),
+                    ]
+                    .into_iter()
+                    .any(|column| ring(column) <= cutoff)
+                },
+                |columns| columns.iter().any(|&column| ring(column) <= cutoff),
+            );
             let far_base = (region.0.div_euclid(4) * 4, region.1.div_euclid(4) * 4);
             if !near && !far_regions.contains(&far_base) {
                 active.push(section.clone());
@@ -1325,14 +1398,19 @@ fn build_terrain_demo_extent(
         .collect();
     demo.light = demo_column_light(&demo.columns);
     demo.fine = demo_fine_all(&demo.columns, &demo.light, &demo.materials);
-    let (coarse, far) = demo_lod_sets(
+    let sets = demo_lod_sets(
         &demo.columns,
         &demo.materials,
         &demo.pack,
         (column.x, column.y),
+        demo.view_radius,
+        true,
     );
-    demo.coarse = coarse;
-    demo.far = far;
+    demo.coarse = sets.coarse;
+    demo.coarse.extend(sets.partial_sections);
+    demo.coarse.sort_by_key(|section| section.origin);
+    demo.partial_columns = sets.partial;
+    demo.far = sets.far;
     demo.settle_spawn();
     demo.select_lod((column.x, column.y));
 
@@ -1630,18 +1708,42 @@ fn demo_coarse(
 }
 
 /// The LOD1 and LOD2 region bases selected for one player column.
-type BandSets = (BTreeSet<(i32, i32)>, BTreeSet<(i32, i32)>);
+///
+/// `partial` holds aligned `2x2` bases clipped by an already-covered column or
+/// by the ring edge: the ring is `2r+1` columns wide, so the outermost positive
+/// base has no `+1` neighbour and cannot be a complete LOD1 region. Each value
+/// is the set of columns that region actually draws; the rest of its aligned
+/// footprint is air.
+#[derive(Debug, Default)]
+struct BandRegions {
+    /// Complete LOD1 `2x2` regions.
+    coarse: BTreeSet<(i32, i32)>,
+    /// Clipped LOD1 `2x2` regions and the columns they cover.
+    partial: BTreeMap<(i32, i32), BTreeSet<(i32, i32)>>,
+    /// Complete LOD2 `4x4` regions.
+    far: BTreeSet<(i32, i32)>,
+}
 
-/// The complete LOD1 and LOD2 region bases for a player column.
+/// The LOD1 and LOD2 region bases for a player column.
 ///
 /// LOD2 owns a `4x4` column square only when all 16 columns are resident and
 /// every one of them is beyond [`TERRAIN_DEMO_LOD1_RADIUS`]. LOD1 regions in
 /// that square are dropped, so a later selection can never draw both levels
 /// over the same columns.
+///
+/// Every column in the visible ring (`ring <= view_radius`) is covered by
+/// LOD0, a complete LOD1 region, a clipped LOD1 region, or LOD2. Two kinds of
+/// column fall through the complete bands: the positive edge of a ring with an
+/// even radius, and the negative edge of the fine square where an aligned
+/// `2x2` base straddles the LOD0 boundary. Both get a clipped `2x2` base whose
+/// mask names the columns it draws. A clipped base only ever uses its other
+/// columns as air; it never overlaps a complete region, so coverage is a
+/// partition, not an overlap.
 fn coarse_bands(
     columns: &BTreeMap<(i32, i32), Arc<[section::Section; COLUMN_SECTIONS]>>,
     player: (i32, i32),
-) -> BandSets {
+    view_radius: i32,
+) -> BandRegions {
     let ring = |column: (i32, i32)| (column.0 - player.0).abs().max((column.1 - player.1).abs());
     let mut far = BTreeSet::new();
     for &(x, z) in columns.keys() {
@@ -1671,29 +1773,122 @@ fn coarse_bands(
             coarse.insert((x, z));
         }
     }
-    (coarse, far)
+
+    // Footprints of the bands that `select_lod` will actually activate. A
+    // complete LOD1 base that touches LOD0 is suppressed, so its outside
+    // columns stay leftover and must be covered by a clipped region.
+    let mut covered = BTreeSet::new();
+    for &(x, z) in &far {
+        for dx in 0..4 {
+            for dz in 0..4 {
+                covered.insert((x + dx, z + dz));
+            }
+        }
+    }
+    for &(x, z) in &coarse {
+        let clear =
+            (0..2).all(|dx| (0..2).all(|dz| ring((x + dx, z + dz)) > TERRAIN_DEMO_FINE_CUTOFF));
+        if clear {
+            for dx in 0..2 {
+                for dz in 0..2 {
+                    covered.insert((x + dx, z + dz));
+                }
+            }
+        }
+    }
+
+    let mut leftover = BTreeSet::new();
+    for x in player.0 - view_radius..=player.0 + view_radius {
+        for z in player.1 - view_radius..=player.1 + view_radius {
+            let column = (x, z);
+            if ring(column) > TERRAIN_DEMO_FINE_CUTOFF
+                && !covered.contains(&column)
+                && columns.contains_key(&column)
+            {
+                leftover.insert(column);
+            }
+        }
+    }
+
+    let mut partial: BTreeMap<(i32, i32), BTreeSet<(i32, i32)>> = BTreeMap::new();
+    for column in leftover {
+        let base = (
+            column.0 - column.0.rem_euclid(2),
+            column.1 - column.1.rem_euclid(2),
+        );
+        partial.entry(base).or_default().insert(column);
+    }
+
+    BandRegions {
+        coarse,
+        partial,
+        far,
+    }
+}
+
+/// A built coarse band and the masks of its clipped regions.
+struct LodSets {
+    /// Complete LOD1 sections for the middle band.
+    coarse: Vec<DemoSection>,
+    /// Clipped LOD1 sections, rebuilt only when their masks change.
+    partial_sections: Vec<DemoSection>,
+    /// LOD2 sections for the far band.
+    far: Vec<DemoSection>,
+    /// Columns drawn by each clipped LOD1 base.
+    partial: BTreeMap<(i32, i32), BTreeSet<(i32, i32)>>,
 }
 
 /// Builds the LOD1 and LOD2 section sets for `player`.
+///
+/// `include_partial` controls the costly clipped-region pass. The live ring
+/// keeps its clipped sections and only rebuilds them when [`coarse_bands`]
+/// reports a different mask; a full rebuild (startup, repair) always asks for
+/// them.
 fn demo_lod_sets(
     columns: &BTreeMap<(i32, i32), Arc<[section::Section; COLUMN_SECTIONS]>>,
     materials: &mesher2::MaterialProps,
     pack: &content::ContentPack,
     player: (i32, i32),
-) -> (Vec<DemoSection>, Vec<DemoSection>) {
-    let (coarse_regions, far_regions) = coarse_bands(columns, player);
-    let mut coarse: Vec<DemoSection> =
-        demo_coarse_regions(columns, materials, pack, &coarse_regions)
-            .into_values()
-            .flatten()
-            .collect();
-    let mut far: Vec<DemoSection> = demo_far_regions(columns, materials, pack, &far_regions)
+    view_radius: i32,
+    include_partial: bool,
+) -> LodSets {
+    let bands = coarse_bands(columns, player, view_radius);
+    let mut masks: BTreeMap<(i32, i32), BTreeSet<(i32, i32)>> = BTreeMap::new();
+    for &(x, z) in &bands.coarse {
+        if bands.partial.contains_key(&(x, z)) {
+            continue;
+        }
+        masks.insert(
+            (x, z),
+            BTreeSet::from([(x, z), (x + 1, z), (x, z + 1), (x + 1, z + 1)]),
+        );
+    }
+    let mut coarse: Vec<DemoSection> = demo_coarse_regions_masked(columns, materials, pack, &masks)
+        .into_values()
+        .flatten()
+        .collect();
+    let (partial_sections, partial) = if include_partial {
+        let sections: Vec<DemoSection> =
+            demo_coarse_regions_masked(columns, materials, pack, &bands.partial)
+                .into_values()
+                .flatten()
+                .collect();
+        (sections, bands.partial)
+    } else {
+        (Vec::new(), BTreeMap::new())
+    };
+    let mut far: Vec<DemoSection> = demo_far_regions(columns, materials, pack, &bands.far)
         .into_values()
         .flatten()
         .collect();
     coarse.sort_by_key(|section| section.origin);
     far.sort_by_key(|section| section.origin);
-    (coarse, far)
+    LodSets {
+        coarse,
+        partial_sections,
+        far,
+        partial,
+    }
 }
 
 /// Meshes the coarse sections of `regions`.
@@ -1703,13 +1898,38 @@ fn demo_lod_sets(
 /// produce sections. Every region in `regions` is rebuilt; the surrounding ring
 /// is derived too, so a coarse mesh culls against a real neighbour when present
 /// and falls back to air at the ring edge.
+#[cfg(test)]
 fn demo_coarse_regions(
     columns: &BTreeMap<(i32, i32), Arc<[section::Section; COLUMN_SECTIONS]>>,
     materials: &mesher2::MaterialProps,
     pack: &content::ContentPack,
     regions: &BTreeSet<(i32, i32)>,
 ) -> BTreeMap<(i32, i32), Vec<DemoSection>> {
-    if regions.is_empty() {
+    let masks: BTreeMap<(i32, i32), BTreeSet<(i32, i32)>> = regions
+        .iter()
+        .map(|&(x, z)| {
+            (
+                (x, z),
+                BTreeSet::from([(x, z), (x + 1, z), (x, z + 1), (x + 1, z + 1)]),
+            )
+        })
+        .collect();
+    demo_coarse_regions_masked(columns, materials, pack, &masks)
+}
+
+/// Meshes `2x2` regions, treating every column outside its mask as air.
+///
+/// A mask names the columns a region actually draws. A clipped mask leaves one
+/// or more of the four cells air, so the aligned `2x2` footprint still covers a
+/// rim or LOD0-boundary column without drawing over a neighbour that another
+/// band already owns.
+fn demo_coarse_regions_masked(
+    columns: &BTreeMap<(i32, i32), Arc<[section::Section; COLUMN_SECTIONS]>>,
+    materials: &mesher2::MaterialProps,
+    pack: &content::ContentPack,
+    masks: &BTreeMap<(i32, i32), BTreeSet<(i32, i32)>>,
+) -> BTreeMap<(i32, i32), Vec<DemoSection>> {
+    if masks.is_empty() {
         return BTreeMap::new();
     }
     let water = pack.id("core:water").unwrap_or(0);
@@ -1719,9 +1939,10 @@ fn demo_coarse_regions(
         .filter(|record| record.render_shape == content::RenderShape::CrossQuad)
         .filter_map(|record| pack.id(&record.name))
         .collect();
+    let air = section::Section::uniform(0);
 
     let mut expanded = BTreeSet::new();
-    for &(x, z) in regions {
+    for &(x, z) in masks.keys() {
         for dx in -1..=1_i32 {
             for dz in -1..=1_i32 {
                 expanded.insert((x + 2 * dx, z + 2 * dz));
@@ -1731,11 +1952,25 @@ fn demo_coarse_regions(
 
     let mut derived: BTreeMap<(i32, i32, i32), section::Section> = BTreeMap::new();
     for &(x, z) in &expanded {
-        if !columns.contains_key(&(x + 1, z))
-            || !columns.contains_key(&(x, z + 1))
-            || !columns.contains_key(&(x + 1, z + 1))
-            || !columns.contains_key(&(x, z))
-        {
+        let Some(mask) = masks.get(&(x, z)) else {
+            // A neighbour outside the requested set is derived whole when it
+            // is complete, only so the requested mesh culls against real data.
+            if (0..2).all(|dx| (0..2).all(|dz| columns.contains_key(&(x + dx, z + dz)))) {
+                for j in 0..(COLUMN_SECTIONS / 2) {
+                    let octants: [&section::Section; 8] = std::array::from_fn(|slot| {
+                        let dx = i32::try_from(slot & 1).unwrap_or(0);
+                        let dz = i32::try_from((slot >> 1) & 1).unwrap_or(0);
+                        let dy = (slot >> 2) & 1;
+                        &columns[&(x + dx, z + dz)][2 * j + dy]
+                    });
+                    if let Ok(coarse) = lod::downsample(&octants, water, &scatter) {
+                        derived.insert((x, i32::try_from(j).unwrap_or(0), z), coarse);
+                    }
+                }
+            }
+            continue;
+        };
+        if !mask.iter().all(|column| columns.contains_key(column)) {
             continue;
         }
         for j in 0..(COLUMN_SECTIONS / 2) {
@@ -1743,7 +1978,14 @@ fn demo_coarse_regions(
                 let dx = i32::try_from(slot & 1).unwrap_or(0);
                 let dz = i32::try_from((slot >> 1) & 1).unwrap_or(0);
                 let dy = (slot >> 2) & 1;
-                &columns[&(x + dx, z + dz)][2 * j + dy]
+                let column = (x + dx, z + dz);
+                if mask.contains(&column) {
+                    columns
+                        .get(&column)
+                        .map_or(&air, |stack| &stack[2 * j + dy])
+                } else {
+                    &air
+                }
             });
             if let Ok(coarse) = lod::downsample(&octants, water, &scatter) {
                 derived.insert((x, i32::try_from(j).unwrap_or(0), z), coarse);
@@ -1751,9 +1993,8 @@ fn demo_coarse_regions(
         }
     }
 
-    let air = section::Section::uniform(0);
     let mut out: BTreeMap<(i32, i32), Vec<DemoSection>> = BTreeMap::new();
-    for &(x, z) in regions {
+    for &(x, z) in masks.keys() {
         let mut sections = Vec::new();
         for j in 0..(COLUMN_SECTIONS / 2) {
             let j = i32::try_from(j).unwrap_or(0);
@@ -2034,6 +2275,10 @@ struct CoarseJob {
     columns: ColumnMap,
     /// Player column the LOD1/LOD2 split was built for.
     player: (i32, i32),
+    /// Chebyshev radius of the visible ring, for clipped rim regions.
+    radius: i32,
+    /// Rebuild clipped LOD1 sections in this pass.
+    partial: bool,
     materials: Arc<mesher2::MaterialProps>,
     pack: Arc<content::ContentPack>,
 }
@@ -2067,6 +2312,8 @@ struct CoarseBuilt {
     player: (i32, i32),
     /// LOD1 sections for the middle band.
     coarse: Vec<DemoSection>,
+    /// Clipped LOD1 sections and masks, present only when this pass rebuilt them.
+    partial: Option<PartialBuild>,
     /// LOD2 sections for the far band.
     far: Vec<DemoSection>,
 }
@@ -2421,19 +2668,63 @@ fn light_cell_differs(
 
 /// Builds the coarse LOD sets for the whole resident ring.
 fn build_coarse(job: CoarseJob) -> CoarseBuilt {
-    let (coarse, far) = demo_lod_sets(&job.columns, &job.materials, &job.pack, job.player);
+    let sets = demo_lod_sets(
+        &job.columns,
+        &job.materials,
+        &job.pack,
+        job.player,
+        job.radius,
+        job.partial,
+    );
+    let rim_x = job.player.0 + job.radius;
+    let rim_z = job.player.1 + job.radius;
+    let on_rim =
+        |section: &DemoSection| section.origin[0] / 32 == rim_x || section.origin[2] / 32 == rim_z;
+    let partial_sections = sets.partial_sections.len();
+    let rim_sections = sets
+        .partial_sections
+        .iter()
+        .filter(|section| on_rim(section))
+        .count();
+    let partial_quads: usize = sets
+        .partial_sections
+        .iter()
+        .map(|section| mesher2::quad_count(&section.mesh))
+        .sum();
+    let rim_quads: usize = sets
+        .partial_sections
+        .iter()
+        .filter(|section| on_rim(section))
+        .map(|section| mesher2::quad_count(&section.mesh))
+        .sum();
+    let partial_bytes: usize = sets.partial_sections.iter().map(mesh_bytes).sum();
+    let rim_bytes: usize = sets
+        .partial_sections
+        .iter()
+        .filter(|section| on_rim(section))
+        .map(mesh_bytes)
+        .sum();
     debug!(
         player = ?job.player,
-        coarse = coarse.len(),
-        far = far.len(),
+        coarse = sets.coarse.len(),
+        far = sets.far.len(),
         columns = job.columns.len(),
+        partial = sets.partial.len(),
+        partial_sections,
+        rim_sections,
+        boundary_sections = partial_sections - rim_sections,
+        partial_quads,
+        rim_quads,
+        partial_bytes,
+        rim_bytes,
         "terrain coarse built"
     );
     CoarseBuilt {
         snapshot: job.columns,
         player: job.player,
-        coarse,
-        far,
+        coarse: sets.coarse,
+        partial: job.partial.then_some((sets.partial_sections, sets.partial)),
+        far: sets.far,
     }
 }
 
@@ -3673,9 +3964,17 @@ impl App {
             else {
                 return centre_ready;
             };
+            // Clipped sections are the costly part of a coarse pass. Reuse them
+            // while their masks are unchanged; a new rim column, an eviction, or
+            // an edit makes the next pass rebuild them.
+            let partial = demo.partial_dirty
+                || coarse_bands(&demo.columns, player_column, demo.view_radius).partial
+                    != demo.partial_columns;
             let job = PoolJob::Coarse(CoarseJob {
                 columns: demo.columns.clone(),
                 player: player_column,
+                radius: demo.view_radius,
+                partial,
                 materials: Arc::clone(&ring.assets.materials),
                 pack: Arc::clone(&ring.assets.pack),
             });
@@ -3796,8 +4095,35 @@ impl App {
                 if let Some(demo) = &mut self.terrain_demo {
                     if intact {
                         let changed = demo.columns.len() != coarse.snapshot.len();
-                        demo.coarse = coarse.coarse;
-                        demo.far = coarse.far;
+                        let CoarseBuilt {
+                            coarse: complete,
+                            partial,
+                            far,
+                            ..
+                        } = coarse;
+                        let kept: Vec<DemoSection> = if partial.is_none() {
+                            demo.coarse
+                                .iter()
+                                .filter(|section| {
+                                    demo.partial_columns.contains_key(&(
+                                        section.origin[0] / 32,
+                                        section.origin[2] / 32,
+                                    ))
+                                })
+                                .cloned()
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
+                        demo.coarse = complete;
+                        demo.coarse.extend(kept);
+                        if let Some((sections, masks)) = partial {
+                            demo.coarse.extend(sections);
+                            demo.partial_columns = masks;
+                            demo.partial_dirty = false;
+                        }
+                        demo.coarse.sort_by_key(|section| section.origin);
+                        demo.far = far;
                         demo.far_dirty = false;
                         demo.select_lod(demo.lod_column);
                         if let Some(ring) = &mut self.terrain_ring {
@@ -4811,6 +5137,186 @@ mod tests {
         );
     }
 
+    /// A stub ring plus the coarse bands for one player column.
+    ///
+    /// Only origins matter here, so a region is one stub section and a fine
+    /// column is one LOD0 stub. That keeps the coverage test independent of
+    /// terrain generation and meshing cost.
+    fn stub_lod_ring(radius: i32) -> TerrainDemo {
+        let hydro = Arc::new(hydro::WorldHydro::solve(&[0.0], 1).expect("world hydro"));
+        let mut demo = TerrainDemo::empty(0, IVec2::ZERO, radius, hydro);
+        let stack: [section::Section; COLUMN_SECTIONS] =
+            std::array::from_fn(|_| section::Section::uniform(0));
+        for x in -radius..=radius {
+            for z in -radius..=radius {
+                demo.columns.insert((x, z), Arc::new(stack.clone()));
+            }
+        }
+        let cutoff = TERRAIN_DEMO_FINE_RADIUS + TERRAIN_DEMO_FINE_MARGIN;
+        for &(x, z) in demo.columns.keys() {
+            if x.abs().max(z.abs()) <= cutoff {
+                demo.fine
+                    .insert((x, z), vec![stub_section([x * 32, 0, z * 32], 1)]);
+            }
+        }
+        let bands = coarse_bands(&demo.columns, (0, 0), radius);
+        let mut bases = bands.coarse.clone();
+        bases.extend(bands.partial.keys().copied());
+        demo.coarse = bases
+            .iter()
+            .map(|&(x, z)| stub_section([x * 32, 0, z * 32], 2))
+            .collect();
+        demo.partial_columns = bands.partial;
+        demo.far = bands
+            .far
+            .iter()
+            .map(|&(x, z)| stub_section([x * 32, 0, z * 32], 4))
+            .collect();
+        demo.select_lod((0, 0));
+        demo
+    }
+
+    /// Active-section count per column footprint.
+    fn active_column_coverage(demo: &TerrainDemo) -> BTreeMap<(i32, i32), usize> {
+        let mut coverage = BTreeMap::new();
+        for section in &demo.sections {
+            let scale = i32::try_from(section.scale).expect("scale fits");
+            let x = section.origin[0] / 32;
+            let z = section.origin[2] / 32;
+            if let Some(columns) = demo.partial_columns.get(&(x, z)) {
+                for &(cx, cz) in columns {
+                    *coverage.entry((cx, cz)).or_insert(0) += 1;
+                }
+                continue;
+            }
+            for dx in 0..scale {
+                for dz in 0..scale {
+                    *coverage.entry((x + dx, z + dz)).or_insert(0) += 1;
+                }
+            }
+        }
+        coverage
+    }
+
+    #[test]
+    fn the_visible_ring_is_fully_covered_by_the_active_lod_set() {
+        for radius in [8, 12, 16] {
+            let demo = stub_lod_ring(radius);
+            let coverage = active_column_coverage(&demo);
+            for x in -radius..=radius {
+                for z in -radius..=radius {
+                    assert_eq!(
+                        coverage.get(&(x, z)).copied(),
+                        Some(1),
+                        "radius {radius}: column ({x}, {z}) must be covered by exactly one LOD"
+                    );
+                }
+            }
+            let mut origins = BTreeSet::new();
+            for section in &demo.sections {
+                assert!(
+                    origins.insert(section.origin),
+                    "radius {radius}: duplicate active section origin {:?}",
+                    section.origin
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn clipped_lod1_regions_cover_only_unowned_columns() {
+        let cutoff = TERRAIN_DEMO_FINE_RADIUS + TERRAIN_DEMO_FINE_MARGIN;
+        for radius in [8, 12, 16] {
+            let demo = stub_lod_ring(radius);
+            let bands = coarse_bands(&demo.columns, (0, 0), radius);
+            let ring = |x: i32, z: i32| x.abs().max(z.abs());
+
+            // Complete coverage that `select_lod` will actually draw.
+            let mut complete = BTreeSet::new();
+            for &(x, z) in &bands.far {
+                assert_eq!(x.rem_euclid(4), 0, "LOD2 base {x} is not 4-aligned");
+                assert_eq!(z.rem_euclid(4), 0, "LOD2 base {z} is not 4-aligned");
+                for dx in 0..4 {
+                    for dz in 0..4 {
+                        assert!(
+                            demo.columns.contains_key(&(x + dx, z + dz)),
+                            "LOD2 base ({x}, {z}) is not complete"
+                        );
+                        complete.insert((x + dx, z + dz));
+                    }
+                }
+            }
+            for &(x, z) in &bands.coarse {
+                let clear = (0..2).all(|dx| (0..2).all(|dz| ring(x + dx, z + dz) > cutoff));
+                if clear {
+                    for dx in 0..2 {
+                        for dz in 0..2 {
+                            complete.insert((x + dx, z + dz));
+                        }
+                    }
+                }
+            }
+
+            let mut partial = BTreeSet::new();
+            for (&(x, z), columns) in &bands.partial {
+                assert!(
+                    columns.len() < 4,
+                    "a clipped base must leave at least one cell air: ({x}, {z})"
+                );
+                assert!(
+                    !bands.far.contains(&(x, z)),
+                    "LOD2 must not be used for a partial region ({x}, {z})"
+                );
+                for &(cx, cz) in columns {
+                    assert_eq!(
+                        cx - cx.rem_euclid(2),
+                        x,
+                        "column ({cx}, {cz}) is outside base ({x}, {z})"
+                    );
+                    assert_eq!(cz - cz.rem_euclid(2), z);
+                    assert!(
+                        ring(cx, cz) > cutoff && ring(cx, cz) <= radius,
+                        "partial column ({cx}, {cz}) is not a leftover ring column"
+                    );
+                    assert!(
+                        !complete.contains(&(cx, cz)),
+                        "partial column ({cx}, {cz}) overlaps a complete region"
+                    );
+                    assert!(
+                        partial.insert((cx, cz)),
+                        "column ({cx}, {cz}) is covered by two clipped bases"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn clipped_lod1_mesh_is_air_outside_its_mask() {
+        let mut columns = BTreeMap::new();
+        let stack: [section::Section; COLUMN_SECTIONS] =
+            std::array::from_fn(|_| section::Section::uniform(1));
+        columns.insert((0, 0), Arc::new(stack));
+        let masks = BTreeMap::from([((0, 0), BTreeSet::from([(0, 0)]))]);
+        let regions =
+            demo_coarse_regions_masked(&columns, &demo_materials(), &content::v1_default(), &masks);
+        let sections = regions.get(&(0, 0)).expect("the clipped region meshes");
+        assert!(!sections.is_empty());
+        for section in sections {
+            assert_eq!(section.scale, 2);
+            for quad in section
+                .mesh
+                .opaque
+                .iter()
+                .chain(&section.mesh.cutout)
+                .chain(&section.mesh.water)
+            {
+                assert!(quad.x() <= 16, "the missing +x column stays air");
+                assert!(quad.z() <= 16, "the missing +z column stays air");
+            }
+        }
+    }
+
     #[test]
     fn coarse_bands_follow_a_smaller_ring() {
         let columns = |radius: i32| {
@@ -4826,16 +5332,41 @@ mod tests {
         };
 
         // Default 12: complete squares at base 8 and -12 are far.
-        let (coarse12, far12) = coarse_bands(&columns(12), (0, 0));
+        let bands12 = coarse_bands(&columns(12), (0, 0), 12);
         for base in [(8, 8), (8, -12), (-12, 8), (-12, -12)] {
-            assert!(far12.contains(&base), "missing far base {base:?}");
+            assert!(bands12.far.contains(&base), "missing far base {base:?}");
         }
-        assert!(!coarse12.is_empty(), "the middle band still owns regions");
+        assert!(
+            !bands12.coarse.is_empty(),
+            "the middle band still owns regions"
+        );
+        // 2r+1 positive-rim bases plus the seven bases that clip the negative
+        // edge of the LOD0 square (x = -4 / z = -4 at the default cutoff).
+        assert_eq!(
+            bands12.partial.len(),
+            32,
+            "radius 12 rim and LOD0-boundary clipped bases"
+        );
 
         // Radius 8: no 4x4 square is both complete and beyond the LOD1 radius.
-        let (coarse8, far8) = coarse_bands(&columns(8), (0, 0));
-        assert!(far8.is_empty(), "LOD2 has no complete region at radius 8");
-        assert!(!coarse8.is_empty(), "the ring falls back to LOD1");
+        let bands8 = coarse_bands(&columns(8), (0, 0), 8);
+        assert!(
+            bands8.far.is_empty(),
+            "LOD2 has no complete region at radius 8"
+        );
+        assert!(!bands8.coarse.is_empty(), "the ring falls back to LOD1");
+        assert_eq!(
+            bands8.partial.len(),
+            24,
+            "radius 8 rim and LOD0-boundary clipped bases"
+        );
+
+        let bands16 = coarse_bands(&columns(16), (0, 0), 16);
+        assert_eq!(
+            bands16.partial.len(),
+            40,
+            "radius 16 rim and LOD0-boundary clipped bases"
+        );
     }
 
     #[test]
