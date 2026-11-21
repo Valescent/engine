@@ -15,10 +15,37 @@ The repository is a two-package workspace rooted at the `engine` package:
 
 ## Modules
 
+```text
+src/
+├── main.rs                 # thin binary shell
+├── lib.rs                  # crate docs, mod declarations, pub use
+├── startup.rs              # run, config, seed, world choice, demo open
+├── app.rs                  # App, ApplicationHandler, frame, input, overlay
+├── demo/
+│   ├── mod.rs              # constants, re-exports, demo tests
+│   ├── patch.rs            # TerrainDemo, block access, LOD apply, materials
+│   ├── lod.rs              # LOD0/1/2 bands, clipped LOD1, LOD2
+│   ├── stream.rs           # column ring, worker pool, jobs
+│   ├── edit.rs             # edit record, incremental rebuild, save queue
+│   └── persist.rs          # replay, repair prompt, recovered journal
+├── v0/                     # frozen legacy stack
+├── renderer.rs, camera.rs, player.rs, raycast.rs, sky.rs, overlay.rs, frustum.rs
+├── block.rs, config.rs, headless.rs, metrics.rs
+└── *.wgsl                  # shaders stay with the renderer
+```
+
 | Path | Responsibility |
 |---|---|
 | `src/main.rs` | Thin binary entry point; calls `engine::run()`. |
-| `src/lib.rs` | Public entry point, `winit` application handler, input, interaction, frame loop, save-on-exit, error aggregation, and the `v0` and `terrain-core` re-exports. See [Public API](public-api.md). |
+| `src/lib.rs` | Crate table of contents: crate docs, `mod` declarations, and the public re-exports (`run`, `RunError`, `RendererError`, `ChunkCoord`, `SaveError`, `v0`, and `terrain-core`). No logic. See [Public API](public-api.md). |
+| `src/startup.rs` | `run`, tracing setup, configuration and seed loading, world choice (saved, generated, or stress), the v1 demo's open/replay path, and the headless hand-off. |
+| `src/app.rs` | `App`, the `winit` application handler, window/renderer lifecycle, frame and redraw order, input mapping, overlay and stats, and the demo-to-renderer upload adapter. |
+| `src/demo/mod.rs` | The v1 terrain demo module tree: shared constants and the test fixtures. |
+| `src/demo/patch.rs` | `TerrainDemo` state, resident columns, block access and collision, light/mesh installation, LOD selection, and the material/light tables. |
+| `src/demo/lod.rs` | LOD0/1/2 band selection, complete and clipped LOD1 regions, and LOD2 derivation. |
+| `src/demo/stream.rs` | The column ring: worker pool, generation and light/mesh jobs, the coarse job, snapshots, and in-flight bookkeeping. |
+| `src/demo/edit.rs` | The edit record, incremental relight/remesh, and journal/section save queueing per edit. |
+| `src/demo/persist.rs` | Save replay, the repair prompt, and the recovered-journal path that runs before the ring opens. |
 | `src/camera.rs` | Look state, yaw/pitch math, view-projection, and tests. Position comes from the player eye. |
 | `src/block.rs` | Block types, stable IDs, hotbar mapping, and face texture layers. |
 | `src/player.rs` | Player physics, gravity, jumping, swept AABB collision, and tests. |
@@ -50,6 +77,12 @@ and `engine::world` resolve exactly as before. v0 is still the default run path 
 is unset; it receives fixes only, and the whole directory is removed when the terrain demo becomes
 the default. The move is behaviour-preserving and does not change the save format.
 
+`src/startup.rs`, `src/app.rs`, and `src/demo/` split the old crate-root logic by responsibility.
+`lib.rs` is now a table of contents; `startup` owns environment switches and world choice, `app`
+owns `winit`/`wgpu` and the frame loop, and `demo` owns the v1 patch, ring, LOD, edits, and saves.
+`demo` does not name `winit` or `wgpu`; `app` translates its state into renderer submissions.
+These modules are private, so the public surface is unchanged.
+
 ### `terrain-core` modules
 
 | Path | Responsibility |
@@ -78,8 +111,8 @@ The renderer holds an `Arc<Window>` and creates a `Surface<'static>` from it. Th
 ## Startup
 
 1. `main` calls `engine::run`.
-2. `run` initialises tracing and reads `config.toml`. It then loads `world/seed` (creating one when the world is new) and generates the spawn column; saved chunk files are applied over the generated blocks. `ENGINE_STRESS_SCENE=1` builds the in-memory stress scene instead and skips world I/O.
-3. `run` creates the `winit` event loop and `App`.
+2. `startup::run` initialises tracing and reads `config.toml`. It then loads `world/seed` (creating one when the world is new) and generates the spawn column; saved chunk files are applied over the generated blocks. `ENGINE_STRESS_SCENE=1` builds the in-memory stress scene instead and skips world I/O. `TERRAIN_DEMO=1` opens or creates the v1 world, replays recovered edits, and starts the column ring.
+3. `startup::run` creates the `winit` event loop and the `App` from `app.rs`.
 4. `App::resumed` creates the window and renderer.
 5. The renderer selects an adapter, requests a device and queue, configures the surface, builds the pipelines and the texture array, and starts no chunk mesh work itself.
 6. `App` starts the micropool worker pool and queues an urgent LOD0 job for every loaded chunk. Meshes appear as workers finish.
