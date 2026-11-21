@@ -104,6 +104,8 @@ struct Slot {
     active: Option<Lod>,
     water: Option<QuadRange>,
     water_indexed: bool,
+    /// Index into [`QuadRenderer::active_slots`] while the slot has geometry.
+    active_position: Option<usize>,
 }
 
 fn lod_index(lod: Lod) -> usize {
@@ -137,6 +139,33 @@ impl Slot {
     }
 }
 
+/// Adds `position` to the active list when it holds geometry, or drops it.
+fn refresh_active(slots: &mut [Slot], active_slots: &mut Vec<usize>, position: usize) {
+    match (
+        slots[position].has_geometry(),
+        slots[position].active_position,
+    ) {
+        (true, None) => {
+            slots[position].active_position = Some(active_slots.len());
+            active_slots.push(position);
+        }
+        (false, Some(_)) => remove_active(slots, active_slots, position),
+        _ => {}
+    }
+}
+
+/// Removes `position` from the active list, keeping the swapped-in entry's link.
+fn remove_active(slots: &mut [Slot], active_slots: &mut Vec<usize>, position: usize) {
+    let Some(active) = slots[position].active_position.take() else {
+        return;
+    };
+    active_slots.swap_remove(active);
+    if active < active_slots.len() {
+        let moved = active_slots[active];
+        slots[moved].active_position = Some(active);
+    }
+}
+
 /// Bytes held by one hierarchy's pool, chunk table, indirect arguments, and index pattern.
 pub(crate) fn geometry_bytes(capacity_quads: u32) -> u64 {
     pool_bytes(capacity_quads) + INFO_BYTES + ARGS_BYTES + INDEX_BYTES
@@ -158,6 +187,8 @@ pub(crate) struct QuadRenderer {
     geometry_bytes: u64,
     /// Active slots in draw order; `slot_positions` maps a node to its index.
     slots: Vec<Slot>,
+    /// Positions in `slots` that hold geometry, so a draw skips empty slots.
+    active_slots: Vec<usize>,
     slot_positions: HashMap<NodeKey, usize>,
     free_slots: Vec<u32>,
     next_slot: u32,
@@ -332,6 +363,7 @@ impl QuadRenderer {
             pool: QuadPool::new(capacity_quads),
             geometry_bytes: geometry_bytes(capacity_quads),
             slots: Vec::new(),
+            active_slots: Vec::new(),
             slot_positions: HashMap::new(),
             free_slots: Vec::new(),
             next_slot: 0,
@@ -396,6 +428,7 @@ impl QuadRenderer {
         }
         let info = slot.info;
         self.write_info(queue, slot_index, &info);
+        refresh_active(&mut self.slots, &mut self.active_slots, position);
         true
     }
 
@@ -429,6 +462,7 @@ impl QuadRenderer {
         let info = slot.info;
         let slot_index = slot.index;
         self.write_info(queue, slot_index, &info);
+        refresh_active(&mut self.slots, &mut self.active_slots, position);
     }
 
     /// Uploads a water mesh. Returns false when the pool or slot table is full.
@@ -476,6 +510,7 @@ impl QuadRenderer {
         slot.info.water_quads = range.quads;
         let info = slot.info;
         self.write_info(queue, slot_index, &info);
+        refresh_active(&mut self.slots, &mut self.active_slots, position);
         true
     }
 
@@ -522,6 +557,7 @@ impl QuadRenderer {
         slot.info.opaque_quads = range.quads;
         let info = slot.info;
         self.write_info(queue, slot_index, &info);
+        refresh_active(&mut self.slots, &mut self.active_slots, position);
         true
     }
 
@@ -566,6 +602,7 @@ impl QuadRenderer {
         slot.info.water_quads = range.quads;
         let info = slot.info;
         self.write_info(queue, slot_index, &info);
+        refresh_active(&mut self.slots, &mut self.active_slots, position);
         true
     }
 
@@ -594,7 +631,11 @@ impl QuadRenderer {
 
     /// Six vertices per drawn opaque and water quad.
     pub(crate) fn total_vertices(&self) -> u64 {
-        6 * self.slots.iter().map(Slot::drawn_quads).sum::<u64>()
+        6 * self
+            .active_slots
+            .iter()
+            .map(|&position| self.slots[position].drawn_quads())
+            .sum::<u64>()
     }
 
     /// Releases a chunk's ranges and slot after it leaves the world.
@@ -611,10 +652,14 @@ impl QuadRenderer {
         let Some(position) = self.slot_positions.remove(&key) else {
             return;
         };
+        remove_active(&mut self.slots, &mut self.active_slots, position);
         let mut slot = self.slots.swap_remove(position);
         if position < self.slots.len() {
             self.slot_positions
                 .insert(self.slots[position].key, position);
+            if let Some(active) = self.slots[position].active_position {
+                self.active_slots[active] = position;
+            }
         }
         for range in slot.opaque.iter_mut().filter_map(Option::take) {
             self.pool.free(range, frame);
@@ -662,7 +707,9 @@ impl QuadRenderer {
         let mut visible_quads = 0_u64;
         let mut visible_chunks = 0_u32;
 
-        for slot in &self.slots {
+        for active in 0..self.active_slots.len() {
+            let position = self.active_slots[active];
+            let slot = &self.slots[position];
             if !slot.visible {
                 continue;
             }
@@ -776,9 +823,7 @@ impl QuadRenderer {
         let record_bytes = size_of::<QuadRecord>() as u64;
         stats.allocated_bytes = u64::from(allocated_quads) * record_bytes;
         stats.peak_allocated_bytes = u64::from(self.peak_allocated_quads) * record_bytes;
-        stats.total_chunks =
-            u32::try_from(self.slots.iter().filter(|slot| slot.has_geometry()).count())
-                .unwrap_or(u32::MAX);
+        stats.total_chunks = u32::try_from(self.active_slots.len()).unwrap_or(u32::MAX);
 
         let mut index_bound = false;
         if !self.opaque_indexed_args.is_empty() {
@@ -869,6 +914,7 @@ impl QuadRenderer {
             active: None,
             water: None,
             water_indexed: false,
+            active_position: None,
         });
         Some(index)
     }
@@ -910,6 +956,7 @@ impl QuadRenderer {
         let info = slot.info;
         let slot_index = slot.index;
         self.write_info(queue, slot_index, &info);
+        refresh_active(&mut self.slots, &mut self.active_slots, position);
     }
 
     fn clear_water(&mut self, queue: &wgpu::Queue, chunk: ChunkCoord, frame: u64) {
@@ -925,6 +972,7 @@ impl QuadRenderer {
         let info = slot.info;
         let index = slot.index;
         self.write_info(queue, index, &info);
+        refresh_active(&mut self.slots, &mut self.active_slots, position);
     }
 }
 
@@ -1042,6 +1090,7 @@ mod tests {
             active: None,
             water: None,
             water_indexed: false,
+            active_position: None,
         };
         assert!(!empty.has_geometry());
         assert_eq!(empty.drawn_quads(), 0);
@@ -1065,5 +1114,64 @@ mod tests {
         };
         assert!(inactive.has_geometry());
         assert_eq!(inactive.drawn_quads(), 0);
+    }
+
+    fn empty_slot(index: u32, chunk: ChunkCoord) -> Slot {
+        Slot {
+            index,
+            key: NodeKey::Chunk(chunk),
+            visible: true,
+            info: ChunkInfo::default(),
+            opaque: [None; 3],
+            opaque_indexed: [false; 3],
+            active: None,
+            water: None,
+            water_indexed: false,
+            active_position: None,
+        }
+    }
+
+    #[test]
+    fn active_slots_track_geometry_through_upload_and_removal() {
+        let range = QuadRange {
+            first_quad: 0,
+            quads: 3,
+            pages: 1,
+        };
+        let mut slots = vec![
+            empty_slot(0, ChunkCoord::new(0, 0, 0)),
+            empty_slot(1, ChunkCoord::new(1, 0, 0)),
+        ];
+        let mut active_slots = Vec::new();
+
+        refresh_active(&mut slots, &mut active_slots, 0);
+        assert_eq!(active_slots, Vec::<usize>::new());
+
+        // An upload adds one entry, and refreshing again does not duplicate it.
+        slots[0].opaque[0] = Some(range);
+        slots[0].active = Some(Lod::Lod0);
+        refresh_active(&mut slots, &mut active_slots, 0);
+        assert_eq!(active_slots, vec![0]);
+        refresh_active(&mut slots, &mut active_slots, 0);
+        assert_eq!(active_slots, vec![0]);
+
+        slots[1].water = Some(range);
+        refresh_active(&mut slots, &mut active_slots, 1);
+        assert_eq!(active_slots, vec![0, 1]);
+
+        // The active list totals the same drawn quads as a full slot scan.
+        let all = slots.iter().map(Slot::drawn_quads).sum::<u64>();
+        let listed = active_slots
+            .iter()
+            .map(|&position| slots[position].drawn_quads())
+            .sum::<u64>();
+        assert_eq!(all, listed);
+
+        // Removal drops the entry and keeps the swapped-in slot's link correct.
+        slots[0].opaque[0] = None;
+        slots[0].active = None;
+        remove_active(&mut slots, &mut active_slots, 0);
+        assert_eq!(active_slots, vec![1]);
+        assert_eq!(slots[1].active_position, Some(0));
     }
 }

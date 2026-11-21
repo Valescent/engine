@@ -11,7 +11,7 @@
     clippy::cast_possible_wrap
 )]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use glam::{Vec2, Vec3};
 
@@ -36,6 +36,10 @@ pub(crate) struct Horizon {
     tops: HashMap<ChunkCoord, f32>,
     /// Conservative occluder and candidate tops for uploaded sections.
     sections: HashMap<SectionKey, SectionBounds>,
+    /// Chunks hidden by the final bins, computed once per build.
+    occluded_chunks: HashSet<ChunkCoord>,
+    /// Sections hidden by the final bins, computed once per build.
+    occluded_sections: HashSet<SectionKey>,
 }
 
 impl Horizon {
@@ -49,6 +53,7 @@ impl Horizon {
         let mut horizon = Self::empty(camera);
         horizon.add_chunks(world);
         horizon.finish();
+        horizon.cache_chunk_occlusion();
         horizon
     }
 
@@ -65,6 +70,8 @@ impl Horizon {
             horizon.add_section(*key, *bounds);
         }
         horizon.finish();
+        horizon.cache_chunk_occlusion();
+        horizon.cache_section_occlusion();
         horizon
     }
 
@@ -74,6 +81,8 @@ impl Horizon {
             bins: (0..BINS).map(|_| Vec::new()).collect(),
             tops: HashMap::new(),
             sections: HashMap::new(),
+            occluded_chunks: HashSet::new(),
+            occluded_sections: HashSet::new(),
         }
     }
 
@@ -127,8 +136,35 @@ impl Horizon {
         }
     }
 
+    /// Caches the chunks hidden by the finished bins.
+    fn cache_chunk_occlusion(&mut self) {
+        let occluded: Vec<ChunkCoord> = self
+            .tops
+            .keys()
+            .copied()
+            .filter(|&chunk| self.chunk_occluded(chunk))
+            .collect();
+        self.occluded_chunks.extend(occluded);
+    }
+
+    /// Caches the sections hidden by the finished bins.
+    fn cache_section_occlusion(&mut self) {
+        let occluded: Vec<SectionKey> = self
+            .sections
+            .keys()
+            .copied()
+            .filter(|&key| self.section_occluded(key))
+            .collect();
+        self.occluded_sections.extend(occluded);
+    }
+
     /// Returns whether nearer terrain hides this chunk's top.
     pub(crate) fn occludes(&self, chunk: ChunkCoord) -> bool {
+        self.occluded_chunks.contains(&chunk)
+    }
+
+    /// The per-build test behind [`Self::occludes`].
+    fn chunk_occluded(&self, chunk: ChunkCoord) -> bool {
         if self.bins.is_empty() {
             return false;
         }
@@ -170,6 +206,11 @@ impl Horizon {
     /// The candidate uses its nearest point and highest top, so it is culled
     /// only when even that top is below the horizon across the whole footprint.
     pub(crate) fn occludes_section(&self, key: SectionKey) -> bool {
+        self.occluded_sections.contains(&key)
+    }
+
+    /// The per-build test behind [`Self::occludes_section`].
+    fn section_occluded(&self, key: SectionKey) -> bool {
         if self.bins.is_empty() {
             return false;
         }
@@ -428,8 +469,49 @@ mod tests {
     }
 
     #[test]
+    fn cached_occlusion_matches_a_direct_test() {
+        let mut world = World::default();
+        wall(&mut world);
+        world.set_block(IVec3::new(320, 2, 0), Block::Stone);
+        let horizon = Horizon::build(Vec3::new(0.0, 10.0, 0.0), &mut world);
+
+        let hidden = ChunkCoord::new(10, 0, 0);
+        assert!(horizon.occludes(hidden));
+        assert_eq!(horizon.occludes(hidden), horizon.chunk_occluded(hidden));
+
+        let mut clear_world = World::default();
+        clear_world.set_block(IVec3::new(320, 2, 0), Block::Stone);
+        let clear = Horizon::build(Vec3::new(0.0, 10.0, 0.0), &mut clear_world);
+        let visible = ChunkCoord::new(10, 0, 0);
+        assert!(!clear.occludes(visible));
+        assert_eq!(clear.occludes(visible), clear.chunk_occluded(visible));
+
+        let occluder = SectionKey::new(2, IVec3::new(5, 0, 0));
+        let hidden_key = SectionKey::new(2, IVec3::new(10, 0, 0));
+        let clear_key = SectionKey::new(2, IVec3::new(10, 0, 8));
+        let mut sections = HashMap::new();
+        sections.insert(occluder, section_bounds(100.0, 120.0));
+        sections.insert(hidden_key, section_bounds(10.0, 20.0));
+        sections.insert(clear_key, section_bounds(10.0, 20.0));
+        let horizon =
+            Horizon::build_with_sections(Vec3::new(0.0, 10.0, 0.0), &mut world, &sections);
+
+        assert!(horizon.occludes_section(hidden_key));
+        assert!(!horizon.occludes_section(clear_key));
+        assert_eq!(
+            horizon.occludes_section(hidden_key),
+            horizon.section_occluded(hidden_key)
+        );
+        assert_eq!(
+            horizon.occludes_section(clear_key),
+            horizon.section_occluded(clear_key)
+        );
+    }
+
+    #[test]
     fn disabled_never_culls() {
         let horizon = Horizon::disabled();
         assert!(!horizon.occludes(ChunkCoord::new(0, 0, 0)));
+        assert!(!horizon.occludes_section(SectionKey::new(2, IVec3::new(10, 0, 0))));
     }
 }

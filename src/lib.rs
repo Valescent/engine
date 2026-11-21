@@ -1078,7 +1078,7 @@ impl App {
         (forward, right)
     }
 
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(clippy::cast_precision_loss, clippy::too_many_lines)]
     fn redraw(&mut self) {
         if self.occluded {
             return;
@@ -1093,13 +1093,18 @@ impl App {
         if self.focused {
             self.record_frame(elapsed);
 
-            let delta_seconds = elapsed.min(MAX_FRAME_DELTA).as_secs_f32();
-            let (forward_axis, right_axis) = self.move_axes();
-            let input = PlayerInput {
-                forward: forward_axis,
-                right: right_axis,
-                jump: std::mem::take(&mut self.jump_requested),
-                yaw: self.camera.yaw(),
+            let (delta_seconds, input) = {
+                profiling::scope!("input");
+                let (forward_axis, right_axis) = self.move_axes();
+                (
+                    elapsed.min(MAX_FRAME_DELTA).as_secs_f32(),
+                    PlayerInput {
+                        forward: forward_axis,
+                        right: right_axis,
+                        jump: std::mem::take(&mut self.jump_requested),
+                        yaw: self.camera.yaw(),
+                    },
+                )
             };
             {
                 profiling::scope!("player update");
@@ -1110,9 +1115,12 @@ impl App {
                 self.player
                     .update_guarded(&self.world, input, delta_seconds, &ready);
             }
-            self.sky.advance(delta_seconds);
-            self.camera.set_position(self.player.eye_position());
-            self.update_highlight();
+            {
+                profiling::scope!("camera update");
+                self.sky.advance(delta_seconds);
+                self.camera.set_position(self.player.eye_position());
+                self.update_highlight();
+            }
         }
 
         let slow0 = Instant::now();
@@ -1189,6 +1197,7 @@ impl App {
 
     #[allow(clippy::cast_precision_loss)]
     fn record_frame(&mut self, delta: Duration) {
+        profiling::scope!("record frame");
         self.frame_accum += delta;
         self.frame_count += 1;
         if self.frame_accum >= FRAME_LOG_INTERVAL {
@@ -1391,6 +1400,7 @@ impl App {
     /// run in the background and their results are uploaded on the main thread.
     #[allow(clippy::cast_possible_truncation)]
     fn ensure_hierarchy(&mut self, pool: Option<&dyn MeshPool>) {
+        profiling::scope!("hierarchy");
         if !self.hierarchy {
             return;
         }
@@ -1548,6 +1558,7 @@ impl App {
     /// Both the wanted and unloadable lists are rebuilt only when the player
     /// crosses a column, so a settled frame does not rescan the world.
     fn stream_columns(&mut self, pool: &dyn MeshPool) {
+        profiling::scope!("stream columns");
         let Some(seed) = self.seed else {
             return;
         };
