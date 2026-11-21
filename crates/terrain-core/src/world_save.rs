@@ -35,8 +35,10 @@ pub const DESCRIPTION_FILE: &str = "description.toml";
 /// so lake and river levels at a 512-block seam can differ from version 1.
 /// Version 3 normalises the biome dither margin by its block-space gradient
 /// (so a transition is a fixed number of blocks) and applies the per-column
-/// `biome_pick` to the surface rules and the feature footprint.
-pub const GENERATOR_VERSION: u16 = 3;
+/// `biome_pick` to the surface rules and the feature footprint. Version 4 moves
+/// the desert centre to `(0.84, 0.15)` with weight `1.15`, which changes the
+/// biome splits and therefore topsoil and feature placement.
+pub const GENERATOR_VERSION: u16 = 4;
 /// One-past-the-active counter for unique world ids within this process.
 static NEXT_WORLD: AtomicU64 = AtomicU64::new(0);
 

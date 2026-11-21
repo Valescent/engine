@@ -1194,7 +1194,8 @@ fn v1_rules(materials: &TerrainMaterials) -> Vec<BiomeRules> {
 /// The answered v1 climate biome set (`E3.2`), in stable id order:
 /// `0 plains`, `1 forest`, `2 desert`, `3 tundra`.
 ///
-/// All four have weight `1.0` and priority `0`. `ocean` and `beach` are
+/// Desert carries weight `1.15` so its humidity reach matches the measured dry
+/// tail; the other three use weight `1.0`. Every priority is `0`. `ocean` and `beach` are
 /// **override surface sets**, not climate biomes, so they are deliberately
 /// absent here and never enter climate space (`E3.1`, `E3.2`). "Mountains" is
 /// not a biome either: the alpine look comes from snow cap, slope stone,
@@ -1217,9 +1218,9 @@ fn v1_biomes() -> BiomeTable {
         },
         Biome {
             id: 2,
-            temp_c: 0.85,
-            humid_c: 0.10,
-            weight: 1.0,
+            temp_c: 0.84,
+            humid_c: 0.15,
+            weight: 1.15,
             priority: 0,
         },
         Biome {
@@ -1313,7 +1314,7 @@ mod tests {
         let centres = [
             (0_u8, 0.55_f32, 0.45_f32),
             (1, 0.50, 0.75),
-            (2, 0.85, 0.10),
+            (2, 0.84, 0.15),
             (3, 0.10, 0.35),
         ];
         let mut seen = [false; 4];

@@ -643,8 +643,11 @@ v1 climate biomes (starting centres, tuned against the measured climate histogra
 |---|---|---|
 | `plains` | 0.55 | 0.45 |
 | `forest` | 0.50 | 0.75 |
-| `desert` | 0.85 | 0.10 |
+| `desert` | 0.84 | 0.15 |
 | `tundra` | 0.10 | 0.35 |
+
+`desert` uses weight `1.15` so its humidity reach matches the measured dry tail; the other three
+use `1.0`.
 
 `ocean` and `beach` are **override surface sets**, not climate biomes. "Mountains" is not a biome:
 alpine look comes from snow cap, slope stone, strata, and deep rock.
@@ -676,8 +679,8 @@ smooth.
 20–28 blocks, p10 ≥ 8, p90 ≤ 64, per pair, over the sweep seeds. Failures are fixed in biome data
 first; the `q` formula itself is pinned.
 
-v1 status (16 seeds, 2026-11-20): all five pairs are assessed and pass. Medians are 23.33-27.17,
-p10 14.69-18.76, and p90 32.55-63.32. `terrain-gen calibrate-blend --seeds 16` exits `0`; the
+v1 status (16 seeds, 2026-11-20): all five pairs are assessed and pass. Medians are 23.33-24.43,
+p10 14.63-18.77, and p90 32.85-57.68. `terrain-gen calibrate-blend --seeds 16` exits `0`; the
 per-pair table is in [Benchmark results](../dev/benchmarks.md#terrain-blend-calibration-2026-11-20).
 The column pipeline calls `biome_pick` once per column for the surface rules and the `3 x 3`
 feature footprint, so the stored margin is the shipped transition. Both are bit-identical for a
@@ -1446,7 +1449,7 @@ contradict a MUST elsewhere in this document.
   worker, so a basin or river that crosses a 512-block tile seam has one level. This is generator
   version 2. Tile mode remains for tiles outside the solved grid, where the 16-cell halo still
   applies.
-- **Only generator version 3 ships.** No frozen evaluator for versions 1 or 2 is implemented yet,
+- **Only generator version 4 ships.** No frozen evaluator for versions 1-3 is implemented yet,
   so a world pinned to an older version is refused rather than regenerated with different
   hydrology or biome blending.
 - **Snow is a full cube** (§10.5); `snow_layer` step geometry is deferred (§22).
@@ -1468,8 +1471,8 @@ contradict a MUST elsewhere in this document.
 - **`terrain-gen map` is ASCII-only** for now: `--seed --from --size --cell` prints a height/water grid and `--json` rows. PNG modes, `tEXt` metadata, legends, and `--ndjson` are deferred.
 - **The full tooling bundle is deferred.** `verify --report <dir>` writes a manifest plus JSON/text; the zip bundle is not implemented. `calibrate-blend` and the PR counter gate are implemented.
 - **Biome blend calibration passes and the dither is wired.** `terrain-gen calibrate-blend
-  --seeds 16` assesses all five pairs and passes (medians 23.33-27.17, p10 14.69-18.76, p90
-  32.55-63.32) after normalising the margin by its block-space gradient. Generator version 3
+  --seeds 16` assesses all five pairs and passes (medians 23.33-24.43, p10 14.63-18.77, p90
+  32.85-57.68) after normalising the margin by its block-space gradient. Generator version 4
   calls `biome_pick` once per column for the surface rules and the feature footprint, so the
   measured transition is the shipped one. The command is diagnostic and is not a CI gate.
 - **Section-record migration has no older format.** Version 2 records are canonicalised and headers upgrade v1 to v2; there is no normative v1 section record to decode or migrate.

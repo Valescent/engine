@@ -88,51 +88,51 @@ pair. `--json` is one object with sorted pairs and fixed two-decimal values:
 ```
 
 Current v1 status is recorded in [Benchmark results](benchmarks.md#terrain-blend-calibration-2026-11-20).
-Generator version 3 calls `biome_pick` once per column for the surface rules and the feature
+Generator version 4 calls `biome_pick` once per column for the surface rules and the feature
 footprint, so the measured `q` is the shipped transition, not a diagnostic copy.
 
 ### Current margins (16 seeds)
 
-Generator version 3, whole-world window and the default 16-block stride
+Generator version 4, whole-world window and the default 16-block stride
 (`cargo run --locked --quiet --no-default-features --bin terrain-gen -- calibrate-blend --seeds 16`):
 
 | Pair | Transects | Median | p10 | p90 | Assessment |
 |---|---:|---:|---:|---:|---|
-| 0-1 (plains/forest) | 11,769 | 23.57 | 18.76 | 32.55 | passes |
-| 0-2 (plains/desert) | 2,869 | 23.78 | 14.85 | 41.02 | passes |
-| 0-3 (plains/tundra) | 2,179 | 24.40 | 17.58 | 53.12 | passes |
+| 0-1 (plains/forest) | 11,736 | 23.59 | 18.77 | 32.85 | passes |
+| 0-2 (plains/desert) | 3,663 | 23.86 | 15.71 | 44.79 | passes |
+| 0-3 (plains/tundra) | 2,184 | 24.43 | 17.66 | 53.46 | passes |
 | 1-3 (forest/tundra) | 2,249 | 23.33 | 15.04 | 37.69 | passes |
-| 2-3 (desert/tundra) | 36 | 27.17 | 14.69 | **63.32** | thin |
+| 2-3 (desert/tundra) | 37 | 23.83 | 14.63 | 57.68 | passes |
 
 All five pairs are assessed and inside median `20..=28`, p10 `>= 8`, and p90 `<= 64`, so the
-command exits `0`. The **2-3** pair is the thin margin: only 36 transects and p90 63.32 against the
-64-block ceiling. It is not a PR gate for that reason; it runs nightly in `Perf` instead.
+command exits `0`. The thinnest p90 is now 53.46 (pair 0-3); pair **2-3** improved from 63.32 to
+57.68 with 37 transects. The command remains diagnostic and runs nightly in `Perf`.
 
 The per-PR coverage floor is enforced by `biome_coverage_holds_for_pr_seeds` in
 `crates/terrain-core/tests/blend.rs`. It samples the same 16 seeds as `sweep --tier pr` at an
 8-block stride over the finite world and requires at least three biomes per seed and at least 5%
 of land for every biome present (`docs/specs/terrain.md` section 8.3). All four v1 biomes are
-present on every seed in this run. The worst biome is **desert on seed 9 at 5.09%**, 0.09 points
+present on every seed in this run. The worst biome is **desert on seed 9 at 6.89%**, 1.89 points
 above the floor:
 
 | Seed | Plains | Forest | Desert | Tundra |
 |---:|---:|---:|---:|---:|
-| 1 | 39.26% | 34.85% | 6.60% | 19.30% |
-| 2 | 44.24% | 35.14% | 6.50% | 14.12% |
-| 3 | 39.08% | 32.93% | 5.76% | 22.23% |
-| 4 | 37.33% | 31.83% | 6.34% | 24.51% |
-| 5 | 38.43% | 35.64% | 8.05% | 17.87% |
-| 6 | 46.93% | 27.50% | 6.49% | 19.08% |
-| 7 | 38.56% | 35.55% | 6.42% | 19.48% |
-| 8 | 41.26% | 30.56% | 10.34% | 17.84% |
-| 9 | 39.09% | 31.32% | **5.09%** | 24.50% |
-| 10 | 39.75% | 34.02% | 6.81% | 19.42% |
-| 11 | 40.75% | 33.40% | 6.79% | 19.07% |
-| 12 | 36.27% | 32.58% | 7.63% | 23.52% |
-| 13 | 39.41% | 32.30% | 6.28% | 22.01% |
-| 14 | 42.14% | 27.77% | 5.97% | 24.12% |
-| 15 | 42.20% | 34.36% | 6.56% | 16.88% |
-| 16 | 41.16% | 30.37% | 7.82% | 20.65% |
+| 1 | 37.55% | 34.80% | 8.35% | 19.30% |
+| 2 | 41.50% | 35.07% | 9.31% | 14.12% |
+| 3 | 36.95% | 32.90% | 7.93% | 22.22% |
+| 4 | 35.63% | 31.73% | 8.13% | 24.51% |
+| 5 | 35.65% | 35.62% | 10.85% | 17.87% |
+| 6 | 44.99% | 27.47% | 8.47% | 19.08% |
+| 7 | 36.93% | 35.51% | 8.08% | 19.48% |
+| 8 | 38.95% | 30.52% | 12.69% | 17.84% |
+| 9 | 37.36% | 31.25% | **6.89%** | 24.50% |
+| 10 | 37.90% | 33.95% | 8.73% | 19.42% |
+| 11 | 38.33% | 33.34% | 9.27% | 19.06% |
+| 12 | 34.29% | 32.50% | 9.69% | 23.52% |
+| 13 | 37.21% | 32.23% | 8.55% | 22.01% |
+| 14 | 40.16% | 27.69% | 8.03% | 24.12% |
+| 15 | 39.30% | 34.32% | 9.50% | 16.88% |
+| 16 | 39.70% | 30.35% | 9.30% | 20.66% |
 
 A stride of 8 over the whole world is 65,536 sample positions and 25,821 land positions per seed.
 The test parallelises up to eight seeds at a time; it takes 4-10 s on a machine that can run eight

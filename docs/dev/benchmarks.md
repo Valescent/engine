@@ -334,11 +334,11 @@ cargo run --locked --quiet --no-default-features --bin terrain-gen -- calibrate-
 
 | Pair | Transects | Median | p10 | p90 | Assessment |
 |---|---:|---:|---:|---:|---|
-| 0-1 (plains/forest) | 11,769 | 23.57 | 18.76 | 32.55 | passes |
-| 0-2 (plains/desert) | 2,869 | 23.78 | 14.85 | 41.02 | passes |
-| 0-3 (plains/tundra) | 2,179 | 24.40 | 17.58 | 53.12 | passes |
+| 0-1 (plains/forest) | 11,736 | 23.59 | 18.77 | 32.85 | passes |
+| 0-2 (plains/desert) | 3,663 | 23.86 | 15.71 | 44.79 | passes |
+| 0-3 (plains/tundra) | 2,184 | 24.43 | 17.66 | 53.46 | passes |
 | 1-3 (forest/tundra) | 2,249 | 23.33 | 15.04 | 37.69 | passes |
-| 2-3 (desert/tundra) | 36 | 27.17 | 14.69 | 63.32 | passes |
+| 2-3 (desert/tundra) | 37 | 23.83 | 14.63 | 57.68 | passes |
 
 The command exits `0`. All five pairs are assessed and inside median `20..=28`, p10 `>= 8`,
 and p90 `<= 64`.
@@ -366,24 +366,26 @@ Two measurement defects and one generation-data change closed the gap.
    keeps one stencil per global cell so a climate tile's border still matches its neighbour.
 
 The earlier data-only attempt (halving the raw `d2` width to `0.025`) reached medians 26-39 but
-left p90 at 117-161, so the normalising term was required. Biome centres and weights are
-unchanged, and the coverage rules (three biomes per seed, each at least 5% of land) still hold.
+left p90 at 117-161, so the normalising term was required. A later tuning pass moved the desert
+centre from `(0.85, 0.10)` to `(0.84, 0.15)` with weight `1.15`: seed 9 desert coverage rose from
+5.09% to 6.89%, and pair 2-3 p90 fell from 63.32 to 57.68 at 37 transects. The coverage rules
+(three biomes per seed, each at least 5% of land) still hold.
 
-The measured `q` is stored climate state and, in generator version 3, is the shipped
+The measured `q` is stored climate state and, in generator version 4, is the shipped
 transition: the column pipeline calls `biome_pick` once per column for the surface rules and
 once per column of the `3 x 3` feature footprint. The dither is observable in the output, not
 just in the tool: at seed `0x5EED` the plains/desert border near `(-870, -98)` produces grass on
 a column whose nearest centre is desert, and sand one block away. The golden `equator` section
-hash moved from `08ecf2b38fc52eb3` to `dd09269e8fc5b39c`; the PR counters are unchanged because
-a topsoil swap does not change solid, air, or water counts. Across the whole finite world the
-dithered coverage for seed `0x5EED` is plains 39.4%, forest 35.9%, desert 6.3%, tundra 18.4% of
-land. The PR coverage test now samples all 16 `sweep --tier pr` seeds; every seed keeps all four
-biomes, and the thinnest is desert on seed 9 at 5.09% of land against the 5% floor. The per-seed
-table is in [Terrain tools](terrain-tools.md#current-margins-16-seeds).
+hash moved from `dd09269e8fc5b39c` to `6695e3a6f4b70767`, and `inland` from `9ed587e680447750` to
+`aa3f0a3aba9cd41f`; the PR counters are unchanged because a topsoil swap does not change solid,
+air, or water counts. The PR coverage test samples all 16 `sweep --tier pr` seeds; every seed
+keeps all four biomes, and the thinnest is desert on seed 9 at 6.89% of land, 1.89 points above
+the 5% floor. The next thinnest is seed 3 at 7.93%. The per-seed table is in
+[Terrain tools](terrain-tools.md#current-margins-16-seeds).
 
-The tool remains a measurement, not a PR gate: `Perf` runs it nightly because the pair 2-3 margin
-(p90 63.32 against 64) is too thin to attribute a platform float difference safely on every pull
-request. See [CI](ci.md#perf-workflow).
+The tool remains a measurement, not a PR gate: `Perf` runs it nightly as a diagnostic so a
+platform float difference stays visible without failing every pull request. See
+[CI](ci.md#perf-workflow).
 
 ## Terrain PR counters (2026-11-20)
 
