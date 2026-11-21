@@ -250,7 +250,7 @@ See [v0.0.7 scope](dev/v0.0.7-scope.md) for the concrete deliverables, technical
 
 ## v0.0.8: Scale
 
-**Status:** In progress - implementation and acceptance complete; release pending.
+**Status:** In progress - implementation and acceptance complete; release PR open.
 
 **Goal:** Hold the frame budget and resident memory as the render distance grows.
 
@@ -283,7 +283,7 @@ See [v0.0.8 scope](dev/v0.0.8-scope.md) for the deliverables and the
 
 ## v0.0.9: Far View
 
-**Status:** In progress - implementation complete; acceptance, release, and the manual definition-of-done run are pending.
+**Status:** In progress - implementation and acceptance complete; release PR open.
 
 **Goal:** Hold resident memory, VRAM, and frame cost roughly flat while the visible distance grows to kilometres.
 

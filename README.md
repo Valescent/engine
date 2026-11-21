@@ -2,7 +2,7 @@
 
 A voxel engine written in Rust.
 
-**Status: pre-alpha.** `0.0.1` through `0.0.9` are implemented; `0.0.1` through `0.0.7` are released, and the `0.0.8` and `0.0.9` releases are pending. The world is procedurally generated from a saved seed, streams in and out around the player, and keeps player edits. It has voxel lighting, ambient occlusion, a day/night cycle, distance fog, transparent animated water, and a chunk LOD path, with an optional seed-native hierarchy that reaches 8 km.
+**Status: pre-alpha.** `0.0.1` through `0.0.9` are implemented; `0.0.1` through `0.0.7` are released, and the `0.0.8`/`0.0.9` release notes are prepared on the release branch with the PR open. The world is procedurally generated from a saved seed, streams in and out around the player, and keeps player edits. It has voxel lighting, ambient occlusion, a day/night cycle, distance fog, transparent animated water, and a chunk LOD path, with an optional seed-native hierarchy that reaches 8 km.
 
 This is **source-available, not open source**. The code is under the [PolyForm Shield License 1.0.0](LICENSE): you may read, run, modify, and redistribute it, but not use it to provide a product that competes with it. PolyForm Shield is not OSI-approved.
 
