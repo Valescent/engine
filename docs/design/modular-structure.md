@@ -276,6 +276,11 @@ the graph.
 
 ### 3.2 The 20 largest Rust files
 
+These counts are the plan snapshot (commit `48ad37f`). The live check is
+`scripts/size-budgets.sh`; at `b98c30e` it reports **22 files over 1,000 lines** (29 over 600) and
+`src/lib.rs` at **6,900** lines, because the ring, LOD2, and camera work landed after this table was
+measured. Treat the ranking, not the exact numbers, as the durable part.
+
 | Lines | File | Role |
 |---:|---|---|
 | 5,581 | `src/lib.rs` | crate root, startup, demo patch/ring/save/repair, app loop, demo tests |
