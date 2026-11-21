@@ -330,11 +330,11 @@ The existing per-second debug line and Tracy plots should gain section metrics r
 
 | Area | Current code | Change when scheduled |
 |---|---|---|
-| Generation | `src/generation.rs` height, biome, cave, water, trees | Add a coarse surface-only path that shares the height and sea-level helpers. |
-| World data | `src/world.rs` dense L0 chunks, modified set, `VCHK` | Add derived section storage and edit invalidation; keep L0 authority and the save format. |
-| Meshing | `src/mesh.rs` greedy mesher, LOD1/LOD2 downsample | Add a `32³` sample-grid input with a scale and section origin; keep the greedy contract. |
-| Jobs | `src/mesher.rs` generation, light, mesh jobs | Add section jobs with level, coordinate, and revision. |
-| Streaming | `src/streaming.rs` load rings and readiness | Add parent-first section targets and unload rules; L0 streaming stays. |
+| Generation | `src/v0/generation.rs` height, biome, cave, water, trees | Add a coarse surface-only path that shares the height and sea-level helpers. |
+| World data | `src/v0/world.rs` dense L0 chunks, modified set, `VCHK` | Add derived section storage and edit invalidation; keep L0 authority and the save format. |
+| Meshing | `src/v0/mesh.rs` greedy mesher, LOD1/LOD2 downsample | Add a `32³` sample-grid input with a scale and section origin; keep the greedy contract. |
+| Jobs | `src/v0/mesher.rs` generation, light, mesh jobs | Add section jobs with level, coordinate, and revision. |
+| Streaming | `src/v0/streaming.rs` load rings and readiness | Add parent-first section targets and unload rules; L0 streaming stays. |
 | Renderer | `src/renderer.rs` per-chunk LOD buffers | Add per-section buffers, node traversal, and a draw list; GPU indirect later. |
 | Config | `src/config.rs` render distance | Add a hierarchy switch and thresholds during measurement. |
 | Tests | `src/lib.rs` benchmark-shaped tests | Add section coordinate, generation, meshing, and selection tests. |

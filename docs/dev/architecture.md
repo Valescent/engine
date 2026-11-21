@@ -18,30 +18,37 @@ The repository is a two-package workspace rooted at the `engine` package:
 | Path | Responsibility |
 |---|---|
 | `src/main.rs` | Thin binary entry point; calls `engine::run()`. |
-| `src/lib.rs` | Public entry point, `winit` application handler, input, interaction, frame loop, save-on-exit, error aggregation, and `terrain-core` re-exports. See [Public API](public-api.md). |
+| `src/lib.rs` | Public entry point, `winit` application handler, input, interaction, frame loop, save-on-exit, error aggregation, and the `v0` and `terrain-core` re-exports. See [Public API](public-api.md). |
 | `src/camera.rs` | Look state, yaw/pitch math, view-projection, and tests. Position comes from the player eye. |
 | `src/block.rs` | Block types, stable IDs, hotbar mapping, and face texture layers. |
 | `src/player.rs` | Player physics, gravity, jumping, swept AABB collision, and tests. |
 | `src/overlay.rs` | Screen-space debug text geometry and font. |
 | `src/raycast.rs` | DDA voxel traversal, hit result, tie-breaking, and tests. |
-| `src/world.rs` | Chunk and block storage, coordinate conversion, dirty-chunk tracking, the modified set, `VCHK` save/load, and seed file handling. |
-| `src/mesh.rs` | Greedy meshing, the 2x2x2 LOD1 and 4x4x4 LOD2 downsamples, LOD selection, chunk snapshots, border blocks, and tests. |
-| `src/mesher.rs` | Mesh, light, and generation jobs, revisions, the bounded micropool `WorkerPool`, finished-result collection, and tests. |
+| `src/v0/mod.rs` | The frozen v0 stack: module list and docs. Removed once the terrain demo becomes the default run path. |
+| `src/v0/world.rs` | Chunk and block storage, coordinate conversion, dirty-chunk tracking, the modified set, `VCHK` save/load, and seed file handling. |
+| `src/v0/light.rs` | Four-bit packed sky/block light, BFS propagation, padded `LightField` accessors, and direct-light snapshots. |
+| `src/v0/mesh.rs` | Greedy meshing, the 2x2x2 LOD1 and 4x4x4 LOD2 downsamples, LOD selection, chunk snapshots, border blocks, and tests. |
+| `src/v0/mesher.rs` | Mesh, light, and generation jobs, revisions, the bounded micropool `WorkerPool`, finished-result collection, and tests. |
+| `src/v0/generation.rs` | Seeded noise fields, height, biomes, caves, water fill, trees, and the spawn column. |
+| `src/v0/streaming.rs` | Player-centred load rings, forward-first ordering, unload hysteresis, readiness, and the movement guard. |
+| `src/v0/voxel.rs` | The packed 12-byte chunk vertex, the highlight mesh, and the v0.0.4 face-culled mesher kept as a test reference. |
 | `src/frustum.rs` | Six-plane frustum extraction and conservative AABB tests. |
 | `src/metrics.rs` | Tracy plots for frame, GPU, chunk, draw, rebuild, upload, and queue metrics; no-ops without the `tracy` feature. |
-| `src/light.rs` | Four-bit packed sky/block light, BFS propagation, padded `LightField` accessors, and direct-light snapshots. |
-| `src/generation.rs` | Seeded noise fields, height, biomes, caves, water fill, trees, and the spawn column. |
-| `src/streaming.rs` | Player-centred load rings, forward-first ordering, unload hysteresis, readiness, and the movement guard. |
 | `src/config.rs` | `config.toml` parsing for the render distance. |
 | `src/headless.rs` | Windowless fixed-step run selected by `ENGINE_HEADLESS=1`; drives generation, streaming, light, and meshing, then prints one `HEADLESS` summary line. |
 | `crates/terrain-core/src/save.rs`, `crates/terrain-core/src/world_save.rs` | Section files, backup rotation, journal file, replay/trimming, `WorldSave`, save worker, repair, migration/report. See [Terrain v1 runtime](terrain-v1.md) and [Save format](save-format.md). |
 | `crates/terrain-core/src/light2.rs`, `crates/terrain-core/src/mesher2.rs`, `crates/terrain-core/src/lod.rs`, `crates/terrain-core/src/section.rs`, `src/terrain_draw.wgsl` | v1 column light, greedy mesher, coarse LOD, section storage, packed-quad shader. The shader stays with the renderer. |
 | `src/sky.rs` | Day/night cycle, sun direction, sky/ambient/sun colours, and the CPU fog formula. |
-| `src/voxel.rs` | The packed 12-byte chunk vertex, the highlight mesh, and the v0.0.4 face-culled mesher kept as a test reference. |
 | `src/renderer.rs` | `wgpu` device/surface setup, pipelines, block texture array, buffers, depth texture, resizing, and draw submission. |
 | `src/shader.wgsl` | Chunk vertex transform, lit/fogged opaque shading, and the animated water fragment. See [Shader authoring](shaders.md). |
 | `src/highlight.wgsl` | Line-list block outline. |
 | `src/overlay.wgsl` | Screen-space overlay quads. |
+
+`src/v0/` groups the frozen legacy stack. `src/lib.rs` declares `mod v0;` and re-exports
+`v0::{generation, light, mesh, mesher, streaming, voxel, world}`, so paths such as `crate::world`
+and `engine::world` resolve exactly as before. v0 is still the default run path when `TERRAIN_DEMO`
+is unset; it receives fixes only, and the whole directory is removed when the terrain demo becomes
+the default. The move is behaviour-preserving and does not change the save format.
 
 ### `terrain-core` modules
 

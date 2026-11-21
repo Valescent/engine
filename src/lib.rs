@@ -8,20 +8,16 @@ mod block;
 mod camera;
 mod config;
 mod frustum;
-mod generation;
 mod headless;
-mod light;
-mod mesh;
-mod mesher;
 mod metrics;
 mod overlay;
 mod player;
 mod raycast;
 mod renderer;
 mod sky;
-mod streaming;
-mod voxel;
-mod world;
+mod v0;
+
+pub use v0::{generation, light, mesh, mesher, streaming, voxel, world};
 
 pub use terrain_core::{
     climate, content, curve, description, editlog, error, features, graph, hash, header, height,

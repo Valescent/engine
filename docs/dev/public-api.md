@@ -13,7 +13,7 @@ reference.
 | Local rustdoc | Builds with `cargo doc --no-deps` |
 | Missing-docs lint | Not enabled |
 | Public API diff or semver check | Not run |
-| Public items | `run`, `RunError`, `RendererError`, `SaveError`, `ChunkCoord` |
+| Public items | `run`, `RunError`, `RendererError`, `SaveError`, `ChunkCoord`, plus the transitional `terrain_core` and `v0` module re-exports |
 
 ## Current surface
 
@@ -63,9 +63,15 @@ pub struct ChunkCoord(IVec3);
   are public. `RunError::Save` reports world load and save failures.
 - `ChunkCoord` is re-exported so `SaveError` variants can be matched. It has no public constructor
   or accessor; the world-facing methods are `pub(crate)`.
-- `RendererError` is defined in the private `renderer` module, `SaveError` in the private `world`
-  module; their re-exports are public API.
-- There are no public modules, traits, constants, or macros. The crate has two optional Cargo
+- `RendererError` is defined in the private `renderer` module, `SaveError` in the private
+  `v0::world` module; their re-exports are public API.
+- **Transitional re-exports (not part of the intended surface):** `src/lib.rs` currently does
+  `pub use terrain_core::{...}` for the 28 headless terrain modules (`pipeline`, `section`,
+  `content`, `save`, and the rest) and `pub use v0::{generation, light, mesh, mesher, streaming,
+  voxel, world};`. They exist so the tests and tools compile across the crate split. The structure
+  plan narrows them to one `engine::terrain` facade; see [Modular structure](../design/modular-structure.md)
+  §4.2 and §8, decision 2.
+- There are no other public traits, constants, or macros. The crate has two optional Cargo
   features, `tracy` and `rayon-pool`, and both are development aids rather than API surface.
 - None of the error enums or `ChunkCoord` is `#[non_exhaustive]`. Adding a variant is a breaking
   change under the current definition.

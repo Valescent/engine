@@ -19,7 +19,7 @@ tiles.
 ## Current state
 
 - `src/shader.wgsl` samples the `texture_2d_array` with the per-vertex UV and layer.
-- `src/voxel.rs` defines `Vertex { cell, face, texel, texture_layer, reserved, light_ao }`, 12 bytes.
+- `src/v0/voxel.rs` defines `Vertex { cell, face, texel, texture_layer, reserved, light_ao }`, 12 bytes.
 - `src/renderer.rs` has three bind groups: group 0 camera and frame uniform, group 1 per-chunk
   origin, and group 2 texture array plus sampler.
 - The eleven tiles are generated procedurally in `src/renderer.rs`; there is no image decoder or
@@ -110,11 +110,11 @@ Lamp `6`, Water `7`, and Sand `8`. Adding a block ID is a save-format change; fo
 Current code layout:
 
 - `src/block.rs`: `Block`, `FaceLayers`, `Block::layers`, and the stable layer mapping.
-- `src/voxel.rs`: the texture vertex and the highlight mesh; `src/mesh.rs` owns greedy meshing.
+- `src/v0/voxel.rs`: the texture vertex and the highlight mesh; `src/v0/mesh.rs` owns greedy meshing.
 - `src/renderer.rs`: texture array creation, upload, sampler, bind group, and draw path.
 - `src/shader.wgsl`: `texture_2d_array<f32>` and `sampler` sampling.
 
-The v0.0.4 scope lists `src/block.rs`, `src/voxel.rs`, and `src/renderer.rs`. It does not
+The v0.0.4 scope lists `src/block.rs`, `src/v0/voxel.rs`, and `src/renderer.rs`. It does not
 prescribe a separate texture module. Add one only if procedural generation outgrows those files;
 do not create a placeholder module.
 
