@@ -22,7 +22,7 @@ src/
 ├── startup.rs              # run, config, seed, world choice, demo open
 ├── app.rs                  # App, ApplicationHandler, frame, input, overlay
 ├── demo/
-│   ├── mod.rs              # constants, re-exports, demo tests
+│   ├── mod.rs              # DemoRuntime seam, constants, re-exports, tests
 │   ├── patch.rs            # TerrainDemo, block access, LOD apply, materials
 │   ├── lod.rs              # LOD0/1/2 bands, clipped LOD1, LOD2
 │   ├── stream.rs           # column ring, worker pool, jobs
@@ -38,9 +38,9 @@ src/
 |---|---|
 | `src/main.rs` | Thin binary entry point; calls `engine::run()`. |
 | `src/lib.rs` | Crate table of contents: crate docs, `mod` declarations, and the public re-exports (`run`, `RunError`, `RendererError`, `ChunkCoord`, `SaveError`, `v0`, and `terrain-core`). No logic. See [Public API](public-api.md). |
-| `src/startup.rs` | `run`, tracing setup, configuration and seed loading, world choice (saved, generated, or stress), the v1 demo's open/replay path, and the headless hand-off. |
+| `src/startup.rs` | `run`, tracing setup, configuration and seed loading, world choice (saved, generated, or stress), the `DemoRuntime::open` hand-off, and the headless hand-off. |
 | `src/app.rs` | `App`, the `winit` application handler, window/renderer lifecycle, frame and redraw order, input mapping, overlay and stats, and the demo-to-renderer upload adapter. |
-| `src/demo/mod.rs` | The v1 terrain demo module tree: shared constants and the test fixtures. |
+| `src/demo/mod.rs` | `DemoRuntime`, the demo's one app-facing seam: it owns the patch, ring, save worker, repair prompt, pending rebuild, and edit queue, and exposes `open`, `tick`, `edit`, `shutdown`, `repair`, `stats`, and the read-only overlay/upload accessors. Also shared constants and the test fixtures. |
 | `src/demo/patch.rs` | `TerrainDemo` state, resident columns, block access and collision, light/mesh installation, LOD selection, and the material/light tables. |
 | `src/demo/lod.rs` | LOD0/1/2 band selection, complete and clipped LOD1 regions, and LOD2 derivation. |
 | `src/demo/stream.rs` | The column ring: worker pool, generation and light/mesh jobs, the coarse job, snapshots, and in-flight bookkeeping. |
@@ -80,8 +80,29 @@ the default. The move is behaviour-preserving and does not change the save forma
 `src/startup.rs`, `src/app.rs`, and `src/demo/` split the old crate-root logic by responsibility.
 `lib.rs` is now a table of contents; `startup` owns environment switches and world choice, `app`
 owns `winit`/`wgpu` and the frame loop, and `demo` owns the v1 patch, ring, LOD, edits, and saves.
-`demo` does not name `winit` or `wgpu`; `app` translates its state into renderer submissions.
-These modules are private, so the public surface is unchanged.
+`demo` does not name `winit`, `wgpu`, or `renderer`; `app` translates its state into renderer
+submissions. These modules are private, so the public surface is unchanged.
+
+### The `DemoRuntime` seam
+
+`App` holds one `demo: Option<DemoRuntime>` and no demo state of its own. `DemoRuntime` (in
+`demo/mod.rs`) owns the thirty-field `TerrainDemo` patch, the `RingStream`, the `SaveWorker`, the
+`RepairPrompt`, the in-flight `DemoRebuild`, and the queued `DemoEdit`s. Its interface is:
+
+| Method | Purpose |
+|---|---|
+| `open(seed, column, view_radius)` | Open or create the saved world, replay recovered edits, start the worker pool and ring. |
+| `tick(now, player_column, focused)` | Poll the rebuild, drain ring jobs, plan the bounded generate/build/evict batch, run the coarse and upload throttles, and return a `DemoFrame`. |
+| `edit(cell, id)` | Apply one block change, queue its journal/section save, and start the coalescing rebuild. |
+| `shutdown()` | Flush the save worker on `Ctrl+S` and window close. |
+| `repair(action, player_column)` | Apply the repair choice, reload sections, and restart the save worker. |
+| `stats()` | The once-per-second overlay counters and the ring-complete edge. |
+| `is_ready`, `is_solid`, `sections`, `air`, `repair_key`, `advance_lod` | Read-only or LOD accessors for movement, raycasts, the overlay, and the upload adapter. |
+
+`DemoFrame` carries the two side effects the runtime cannot perform itself: `spawn` (the app places
+the player) and `upload` (the app calls `upload_terrain_demo`). The demo never stores a renderer, so
+the dependency edge stays `app -> demo` and `app -> renderer`; `demo` sees only `terrain-core`, the
+player's `BlockSource`, and the content pack.
 
 ### `terrain-core` modules
 
@@ -98,7 +119,8 @@ These modules are private, so the public surface is unchanged.
 
 ## Ownership
 
-- `App` owns the window handle, renderer, world, player, camera, sky clock, selected block, input state, mesh queue, worker pool, and frame timing.
+- `App` owns the window handle, renderer, world, player, camera, sky clock, selected block, input state, mesh queue, worker pool, frame timing, and one `Option<DemoRuntime>`.
+- `DemoRuntime` owns the v1 patch, column ring and workers, save worker, repair prompt, pending rebuild, and edit queue. It returns a `DemoFrame` instead of holding the renderer.
 - `Renderer` owns the `wgpu` instance, surface, device, queue, surface configuration, chunk and highlight pipelines, camera uniform, per-chunk LOD buffers and origin uniforms, the block texture array, and depth attachment.
 - `Camera` owns only look state; it does not read the clock or input devices.
 - `Player` owns feet position, velocity, and ground state; it does not read input devices.
@@ -144,6 +166,12 @@ RedrawRequested
        -> present
   -> request the next redraw
 ```
+
+With `TERRAIN_DEMO=1`, `DemoRuntime::tick` runs before the player step and in place of the v0
+streaming phases: it applies a landed rebuild, drains at most 16 ring jobs, plans the next batch
+through `residency::RingBudget::v1`, then runs the coarse (250 ms) and upload (100 ms) throttles. It
+reports the spawn and upload through a `DemoFrame`; the app performs `set_spawn` and
+`upload_terrain_demo`. The v0 world still streams underneath, but the demo path is what draws.
 
 - Continuous redraw runs while the window is visible, including when it is unfocused, so profilers and external tools keep receiving frames. Input stays gated on focus.
 - The loop pauses only when the window is occluded.
