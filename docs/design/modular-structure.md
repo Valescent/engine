@@ -381,9 +381,9 @@ src/
 ├── block.rs, config.rs, headless.rs, metrics.rs
 ```
 
-The `v0/` move is deliberately last and optional. Until the demo is the default path, the v0 stack is
-still the code that runs without `TERRAIN_DEMO=1`, so calling it legacy is honest but moving it is
-churn. The structural win is `demo/` and `app/`; `v0/` is a naming clean-up, not a boundary.
+The `v0/` grouping is **decided** (Section 8): the seven modules move under `src/v0/` in an early,
+behaviour-preserving stage while they are still the default run path. The boundary is naming plus a
+single `v0/mod.rs`, not a new crate, so the move is cheap and does not change behaviour.
 
 ### 4.3 `terrain-core` tree
 
@@ -632,7 +632,7 @@ and `git diff --color-moved` stay useful.
 | 4 | `demo/stream.rs`, `demo/edit.rs`, `demo/persist.rs`; introduce `DemoRuntime`; shrink `App` | ~1,200 lines | `cargo test`, `ENGINE_HEADLESS=1`, `TERRAIN_DEMO=1` manual | revert one commit | The interface win: one field replaces six. Medium risk. |
 | 5 | Split `mesher2`, `light2`, `pipeline`, `volume`, `features/mod`, `description`, `surface`, `section`, `terrain_gen` | 9 files, ~19,000 lines reorganised | `cargo test -p terrain-core`, goldens byte-identical, `cargo doc` | revert per file | Reviewability; no behaviour. Low risk, high review cost. |
 | 6 | Visibility and error pass: `pub(crate)` audit, re-export decision, `RunError` wrapping | ~927 `pub` items | `clippy` with `unreachable_pub`, `cargo doc`, integration tests | revert per module | Narrows the surface; API-visible. Medium risk. |
-| 7 | Optional: `v0/` grouping, or `crates/terrain-demo` | ~5,000 lines | full gates plus a measured build-time check | revert | Only with a trigger (§7). High cost. |
+| 7 | Optional: `crates/terrain-demo` | ~5,000 lines | full gates plus a measured build-time check | revert | Only with a trigger (the demo must not link `wgpu`, a second frontend, or a measured build win). High cost. |
 
 ### 6.1 Stage detail
 
@@ -742,13 +742,12 @@ cost, not the edit.
 Gate: `clippy` with `unreachable_pub`, `cargo doc`, integration tests, and a count of public items
 before and after. Rollback: per module.
 
-**Stage 7: optional last moves.**
+**Stage 7: optional last move.**
 
-- `v0/`: only after the demo becomes the default run path. Move the seven v0 modules, add
-  `v0/mod.rs` with a "frozen, remove when..." note, and keep `SaveError` re-exported at the crate
-  root. This is naming and discoverability, not a boundary.
 - `crates/terrain-demo`: only if one of the triggers in §7 fires. The module split must be stable for
   at least one milestone first, and the new crate must not depend on `renderer` or `winit`.
+- `v0/` is not optional any more: it moves in Stage 2, behaviour-preserving, while it is still the
+  default run path (Section 8).
 
 ### 6.2 Ordering rationale
 
@@ -801,29 +800,26 @@ The right stopping point is: acyclic modules, one `DemoRuntime` seam, private fi
 the boundaries, and a `lib.rs` that is a table of contents. That is a real improvement for this
 project; more would be ceremony.
 
-## 8. Open questions for the owner
+## 8. Decisions (2026-11-20)
 
-1. **Is the v0 stack still the default shipping path?** If `TERRAIN_DEMO=1` becomes the default in the
-   next milestone, plan to delete `v0/`, not move it. If it stays for several milestones, the `v0/`
-   grouping in Stage 7 is worth doing.
-2. **Should `engine` keep re-exporting all 28 terrain modules?** Today it does, while
-   [public-api](../dev/public-api.md) says the public surface is five items and no modules. Choose
-   between correcting the page and narrowing the re-exports (Stage 6).
-3. **Is `terrain-core` an internal crate or a library?** `publish = false` and the flat `pub` surface
-   suggest internal, but the `terrain-gen` binary is a second consumer. If it is internal, narrow the
-   surface; if it is a library, document it and add the missing-docs gate.
-4. **Does `terrain-gen` move to `src/bin/terrain-gen/`?** The split is clean, but it changes
-   `Cargo.toml` and the docs that name `src/terrain_gen.rs`.
-5. **Where does `BlockId` belong?** `content` is the natural owner because the pack assigns ids; a
-   leaf `ids.rs` is the alternative if `content` should stay purely descriptive.
-6. **Is a `terrain-demo` crate acceptable later?** If yes, define the trigger now: a second frontend,
-   a headless demo test that must not link `wgpu`, or a measured build-time win. If no, say so and
-   close the question.
-7. **Are the size budgets CI warnings or advisory?** A warning that nobody reads is worse than no
-   rule; a hard failure on a 1,000-line file would block legitimate table-heavy modules.
-8. **Should `tracy` stay a default feature?** It makes a bare `cargo build` compile a C++ client and
-   forces CI to pass `--no-default-features`. Making it opt-in would simplify the default build, at
-   the cost of one flag for profiling runs.
+The owner answered the open questions:
+
+1. **v0 stays, grouped under `src/v0/` now.** It remains the default run path until the demo becomes
+   the default, so the move is behaviour-preserving and the modules keep working. This moves ahead of
+   the optional Stage 7.
+2. **`engine` narrows to an `engine::terrain` facade.** The 28 module re-exports stop being public
+   API; the facade re-exports the curated types `engine` actually uses, and `docs/dev/public-api.md`
+   is corrected to match.
+3. **`terrain-core` is an internal crate.** `publish = false`, no semver promise; `pub` is narrowed to
+   what `engine` and `terrain-gen` need, and the missing-docs gate is not added.
+4. **`terrain-gen` splits into `src/bin/terrain-gen/`** with one module per command, after the core
+   moves, in one commit per subcommand.
+5. **Size budgets are CI warnings, not failures.** A check reports offenders; it tightens into a hard
+   gate once the current tree is under the limits.
+
+Still open, and cheap to decide later: whether `BlockId` lives in `content` or a leaf `ids` module
+(the plan prefers `content`), the trigger for a future `terrain-demo` crate, and whether `tracy`
+stays a default feature.
 
 ## References
 
