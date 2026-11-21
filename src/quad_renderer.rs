@@ -166,6 +166,37 @@ fn remove_active(slots: &mut [Slot], active_slots: &mut Vec<usize>, position: us
     }
 }
 
+/// Applies an active-LOD switch to one slot and returns the new chunk-info record.
+///
+/// A missing range deactivates the slot and zeroes the opaque draw range instead
+/// of leaving the previous LOD selected.
+fn select_active_slot(
+    slot: &mut Slot,
+    lod: Lod,
+    pool: &mut QuadPool,
+    frame: u64,
+) -> (u32, ChunkInfo) {
+    let index = lod_index(lod);
+    let Some(range) = slot.opaque[index] else {
+        slot.active = None;
+        slot.info.opaque_first = 0;
+        slot.info.opaque_quads = 0;
+        return (slot.index, slot.info);
+    };
+    slot.active = Some(lod);
+    slot.info.origin[3] = lod.scale();
+    slot.info.opaque_first = range.first_quad;
+    slot.info.opaque_quads = range.quads;
+    for (other, slot_range) in slot.opaque.iter_mut().enumerate() {
+        if other != index
+            && let Some(stale) = slot_range.take()
+        {
+            pool.free(stale, frame);
+        }
+    }
+    (slot.index, slot.info)
+}
+
 /// Bytes held by one hierarchy's pool, chunk table, indirect arguments, and index pattern.
 pub(crate) fn geometry_bytes(capacity_quads: u32) -> u64 {
     pool_bytes(capacity_quads) + INFO_BYTES + ARGS_BYTES + INDEX_BYTES
@@ -433,6 +464,9 @@ impl QuadRenderer {
     }
 
     /// Makes `lod` the drawn opaque mesh when that LOD has been uploaded.
+    ///
+    /// Selecting a LOD with no range deactivates the slot so an edit that
+    /// cleared the active LOD cannot keep drawing stale pre-edit geometry.
     pub(crate) fn select_active(
         &mut self,
         queue: &wgpu::Queue,
@@ -443,24 +477,8 @@ impl QuadRenderer {
         let Some(&position) = self.slot_positions.get(&NodeKey::Chunk(chunk)) else {
             return;
         };
-        let slot = &mut self.slots[position];
-        let index = lod_index(lod);
-        let Some(range) = slot.opaque[index] else {
-            return;
-        };
-        slot.active = Some(lod);
-        slot.info.origin[3] = lod.scale();
-        slot.info.opaque_first = range.first_quad;
-        slot.info.opaque_quads = range.quads;
-        for (other, slot_range) in slot.opaque.iter_mut().enumerate() {
-            if other != index
-                && let Some(stale) = slot_range.take()
-            {
-                self.pool.free(stale, frame);
-            }
-        }
-        let info = slot.info;
-        let slot_index = slot.index;
+        let (slot_index, info) =
+            select_active_slot(&mut self.slots[position], lod, &mut self.pool, frame);
         self.write_info(queue, slot_index, &info);
         refresh_active(&mut self.slots, &mut self.active_slots, position);
     }
@@ -941,16 +959,16 @@ impl QuadRenderer {
             slot.active = [Lod::Lod0, Lod::Lod1, Lod::Lod2]
                 .into_iter()
                 .find(|candidate| slot.opaque[lod_index(*candidate)].is_some());
-            match slot
+            if let Some(range) = slot
                 .active
                 .and_then(|active| slot.opaque[lod_index(active)])
             {
-                Some(range) => {
-                    slot.info.origin[3] = slot.active.map_or(1.0, Lod::scale);
-                    slot.info.opaque_first = range.first_quad;
-                    slot.info.opaque_quads = range.quads;
-                }
-                None => slot.info.opaque_quads = 0,
+                slot.info.origin[3] = slot.active.map_or(1.0, Lod::scale);
+                slot.info.opaque_first = range.first_quad;
+                slot.info.opaque_quads = range.quads;
+            } else {
+                slot.info.opaque_first = 0;
+                slot.info.opaque_quads = 0;
             }
         }
         let info = slot.info;
@@ -1129,6 +1147,34 @@ mod tests {
             water_indexed: false,
             active_position: None,
         }
+    }
+
+    #[test]
+    fn selecting_an_empty_lod_clears_the_active_range() {
+        let range = QuadRange {
+            first_quad: 64,
+            quads: 3,
+            pages: 1,
+        };
+        let mut slot = empty_slot(0, ChunkCoord::new(0, 0, 0));
+        slot.opaque[0] = Some(range);
+        slot.active = Some(Lod::Lod0);
+        slot.info.origin[3] = Lod::Lod0.scale();
+        slot.info.opaque_first = range.first_quad;
+        slot.info.opaque_quads = range.quads;
+        let mut pool = QuadPool::new(64);
+
+        let (_, info) = select_active_slot(&mut slot, Lod::Lod1, &mut pool, 1);
+
+        assert_eq!(slot.active, None);
+        assert_eq!(info.opaque_first, 0);
+        assert_eq!(info.opaque_quads, 0);
+        assert_eq!(slot.drawn_quads(), 0);
+        assert_eq!(
+            slot.opaque[0],
+            Some(range),
+            "the LOD0 range stays resident for a later switch"
+        );
     }
 
     #[test]

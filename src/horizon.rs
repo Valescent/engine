@@ -89,9 +89,10 @@ impl Horizon {
     fn add_chunks(&mut self, world: &mut World) {
         world.refresh_terrain_min();
         for (chunk, data) in world.iter_chunks() {
-            // The candidate includes visible water, but the occluder is
-            // terrain-only so an ocean column cannot hide land behind it.
-            let visible = data.terrain_top().max(data.water_top());
+            // The candidate includes every solid block (canopies too) and
+            // visible water, but the occluder is terrain-only so neither an
+            // ocean column nor a tree can hide land behind it.
+            let visible = data.top().max(data.water_top());
             if visible < 0 {
                 continue;
             }
@@ -104,11 +105,10 @@ impl Horizon {
                 continue;
             }
             let occluder_top = origin.y + occluder as f32 + 1.0;
-            let Some((distance, azimuth)) = sample(self.camera, origin) else {
+            let Some((distance, azimuth, half_angle)) = sample(self.camera, origin) else {
                 continue;
             };
             let elevation = (occluder_top - self.camera.y).atan2(distance.max(1.0));
-            let half_angle = (f32::from(CHUNK_SIZE as u16) * 0.5).atan2(distance.max(1.0));
             push_occluder(&mut self.bins, distance, azimuth, elevation, half_angle);
         }
     }
@@ -174,33 +174,41 @@ impl Horizon {
             return false;
         };
         let origin = chunk.origin();
-        let Some((distance, azimuth)) = sample(self.camera, origin) else {
+        let Some((distance, azimuth, half_angle)) = sample(self.camera, origin) else {
             return false;
         };
         if distance < MIN_DISTANCE {
             return false;
         }
         let elevation = (top - self.camera.y).atan2(distance.max(1.0));
-        let half_angle = (f32::from(CHUNK_SIZE as u16) * 0.75).atan2(distance);
         let limit = distance - DISTANCE_MARGIN;
-        let mut horizon = f32::INFINITY;
-
-        let center = bin_of(azimuth);
-        let span = (half_angle / TAU * BINS as f32).ceil() as isize;
-        if span >= BINS as isize / 2 {
+        let Some(horizon) = self.horizon_at(azimuth, half_angle, limit) else {
             return false;
-        }
-        for offset in -span..=span {
-            let bin = (center as isize + offset).rem_euclid(BINS as isize) as usize;
-            let entries = &self.bins[bin];
+        };
+
+        elevation + ANGLE_MARGIN < horizon
+    }
+
+    /// Lowest prefix-maximum overhead across every bin the interval touches.
+    ///
+    /// Returns `None` when any touched bin has no occluder nearer than `limit`.
+    fn horizon_at(&self, azimuth: f32, half_angle: f32, limit: f32) -> Option<f32> {
+        let bin_width = TAU / BINS as f32;
+        let mut horizon = f32::INFINITY;
+        let mut touched = false;
+        for (index, entries) in self.bins.iter().enumerate() {
+            let delta = wrap_angle(bin_azimuth(index) - azimuth);
+            if delta.abs() - bin_width * 0.5 >= half_angle {
+                continue;
+            }
+            touched = true;
             let count = entries.partition_point(|(d, _)| *d < limit);
             if count == 0 {
-                return false;
+                return None;
             }
             horizon = horizon.min(entries[count - 1].1);
         }
-
-        elevation + ANGLE_MARGIN < horizon
+        touched.then_some(horizon)
     }
 
     /// Returns whether nearer terrain hides this section's highest surface.
@@ -230,28 +238,21 @@ impl Horizon {
         }
         let elevation = (bounds.max_top - self.camera.y).atan2(nearest.max(1.0));
         let limit = nearest - DISTANCE_MARGIN;
-        let mut horizon = f32::INFINITY;
-
-        let center = bin_of(azimuth);
-        let span = (half_angle / TAU * BINS as f32).ceil() as isize;
-        if span >= BINS as isize / 2 {
+        let Some(horizon) = self.horizon_at(azimuth, half_angle, limit) else {
             return false;
-        }
-        for offset in -span..=span {
-            let bin = (center as isize + offset).rem_euclid(BINS as isize) as usize;
-            let entries = &self.bins[bin];
-            let count = entries.partition_point(|(d, _)| *d < limit);
-            if count == 0 {
-                return false;
-            }
-            horizon = horizon.min(entries[count - 1].1);
-        }
+        };
 
         elevation + ANGLE_MARGIN < horizon
     }
 }
 
-/// Adds one occluder to every azimuth bin its angular span covers.
+/// Adds one occluder to the bins its angular span covers.
+///
+/// A bin receives the occluder only when the occluder interval contains the
+/// bin's whole angular range. Occluders whose half-angle reaches pi cover the
+/// whole circle and therefore every bin. This keeps a narrow footprint from
+/// vouching for a partially overlapping bin and hiding a candidate that shares
+/// it.
 fn push_occluder(
     bins: &mut [Vec<(f32, f32)>],
     distance: f32,
@@ -259,16 +260,17 @@ fn push_occluder(
     elevation: f32,
     half_angle: f32,
 ) {
-    let center = bin_of(azimuth);
-    let span = (half_angle / TAU * BINS as f32).ceil() as isize;
-    if span >= BINS as isize / 2 {
+    if half_angle >= std::f32::consts::PI {
         for bin in bins {
             bin.push((distance, elevation));
         }
-    } else {
-        for offset in -span..=span {
-            let bin = (center as isize + offset).rem_euclid(BINS as isize) as usize;
-            bins[bin].push((distance, elevation));
+        return;
+    }
+    let bin_width = TAU / BINS as f32;
+    for (index, bin) in bins.iter_mut().enumerate() {
+        let delta = wrap_angle(bin_azimuth(index) - azimuth);
+        if delta.abs() + bin_width * 0.5 <= half_angle {
+            bin.push((distance, elevation));
         }
     }
 }
@@ -306,23 +308,46 @@ fn section_frame(camera: Vec3, key: SectionKey) -> Option<(f32, f32, f32, f32)> 
     Some((nearest, farthest, azimuth, half_angle))
 }
 
-/// Nearest horizontal distance and direction from the camera to a chunk.
-fn sample(camera: Vec3, origin: Vec3) -> Option<(f32, f32)> {
+/// Nearest horizontal distance, centre azimuth, and half-angle of a chunk.
+///
+/// The cone is centred on the footprint's box centre and widened until it
+/// contains all four corners, matching [`section_frame`]. Centring it on the
+/// nearest point instead would mark azimuths outside the chunk as occluded.
+fn sample(camera: Vec3, origin: Vec3) -> Option<(f32, f32, f32)> {
     let min = glam::Vec2::new(origin.x, origin.z);
     let max = min + glam::Vec2::splat(CHUNK_SIZE as f32);
     let camera_xz = glam::Vec2::new(camera.x, camera.z);
-    let nearest = camera_xz.clamp(min, max);
-    let delta = nearest - camera_xz;
-    let distance = delta.length();
+    let nearest_point = camera_xz.clamp(min, max);
+    let distance = (nearest_point - camera_xz).length();
     if distance < 1.0 {
         return None;
     }
-    Some((distance, delta.y.atan2(delta.x)))
+    let center = (min + max) * 0.5 - camera_xz;
+    let azimuth = center.y.atan2(center.x);
+    let corners = [min, Vec2::new(min.x, max.y), max, Vec2::new(max.x, min.y)];
+    let mut half_angle = 0.0_f32;
+    for corner in corners {
+        let delta = corner - camera_xz;
+        let offset = wrap_angle(delta.y.atan2(delta.x) - azimuth);
+        half_angle = half_angle.max(offset.abs());
+    }
+    Some((distance, azimuth, half_angle))
 }
 
-fn bin_of(azimuth: f32) -> usize {
-    let normalized = (azimuth + std::f32::consts::PI) / TAU;
-    (normalized * BINS as f32).floor().rem_euclid(BINS as f32) as usize
+/// Normalizes an angle to `[-pi, pi]`.
+fn wrap_angle(mut angle: f32) -> f32 {
+    while angle > std::f32::consts::PI {
+        angle -= TAU;
+    }
+    while angle < -std::f32::consts::PI {
+        angle += TAU;
+    }
+    angle
+}
+
+/// Centre azimuth of one bin's angular range.
+fn bin_azimuth(bin: usize) -> f32 {
+    (bin as f32 + 0.5) / BINS as f32 * TAU - std::f32::consts::PI
 }
 
 #[cfg(test)]
@@ -436,6 +461,76 @@ mod tests {
         assert!(!horizon.occludes(ChunkCoord::new(10, 0, 0)));
     }
 
+    #[test]
+    fn a_tree_canopy_keeps_a_chunk_visible_above_the_horizon() {
+        let camera = Vec3::new(0.0, 10.0, 0.0);
+        let target = ChunkCoord::new(10, 0, 0);
+        let mut world = World::default();
+        for x in 64..96 {
+            for z in 0..32 {
+                world.set_block(IVec3::new(x, 10, z), Block::Stone);
+            }
+        }
+        world.set_block(IVec3::new(320, 2, 0), Block::Stone);
+        assert!(Horizon::build(camera, &mut world).occludes(target));
+
+        // The canopy is high enough to clear the nearby hill even though the
+        // chunk's terrain top stays below it.
+        let mut with_tree = world;
+        with_tree.set_block(IVec3::new(321, 20, 1), Block::Leaves);
+        assert!(!Horizon::build(camera, &mut with_tree).occludes(target));
+    }
+
+    #[test]
+    fn an_offset_chunk_keeps_its_clear_direction_visible() {
+        let mut world = World::default();
+        wall(&mut world);
+        // This chunk's nearest point points at the wall, but most of its cone
+        // lies to the clear side. Centring the cone on the nearest point would
+        // wrongly mark the clear azimuths as occluded.
+        world.set_block(IVec3::new(320, 2, -16), Block::Stone);
+        let horizon = Horizon::build(Vec3::new(0.0, 10.0, 0.0), &mut world);
+
+        assert!(!horizon.occludes(ChunkCoord::new(10, 0, -1)));
+    }
+
+    #[test]
+    fn a_narrow_occluder_does_not_claim_a_shared_bin() {
+        let mut bins: Vec<Vec<(f32, f32)>> = (0..BINS).map(|_| Vec::new()).collect();
+        let bin_width = TAU / BINS as f32;
+        // Centred in one bin and narrower than it, so it covers none in full.
+        push_occluder(&mut bins, 100.0, 0.0, 1.0, bin_width * 0.25);
+
+        assert!(bins.iter().all(Vec::is_empty));
+    }
+
+    #[test]
+    fn a_wide_occluder_fully_covers_the_bins_it_spans() {
+        let mut bins: Vec<Vec<(f32, f32)>> = (0..BINS).map(|_| Vec::new()).collect();
+        let bin_width = TAU / BINS as f32;
+        let half_angle = bin_width * 1.5;
+        push_occluder(&mut bins, 100.0, 0.0, 1.0, half_angle);
+
+        let covered = bins.iter().filter(|bin| !bin.is_empty()).count();
+        assert!(covered >= 2, "expected the two bins around azimuth zero");
+        for (index, bin) in bins.iter().enumerate() {
+            if !bin.is_empty() {
+                let delta = wrap_angle(bin_azimuth(index));
+                assert!(delta.abs() + bin_width * 0.5 <= half_angle);
+            }
+        }
+    }
+
+    #[test]
+    fn bin_coverage_wraps_at_the_bearing_seam() {
+        let mut bins: Vec<Vec<(f32, f32)>> = (0..BINS).map(|_| Vec::new()).collect();
+        let bin_width = TAU / BINS as f32;
+        push_occluder(&mut bins, 100.0, std::f32::consts::PI, 1.0, bin_width * 2.0);
+
+        assert_eq!(bins[0].len(), 1);
+        assert_eq!(bins[BINS - 1].len(), 1);
+    }
+
     fn section_bounds(min_top: f32, max_top: f32) -> SectionBounds {
         SectionBounds { min_top, max_top }
     }
@@ -443,7 +538,7 @@ mod tests {
     #[test]
     fn a_near_section_hides_a_low_far_section() {
         let mut world = World::default();
-        let occluder = SectionKey::new(2, IVec3::new(5, 0, 0));
+        let occluder = SectionKey::new(4, IVec3::new(1, 0, 0));
         let candidate = SectionKey::new(2, IVec3::new(10, 0, 0));
         let mut sections = HashMap::new();
         sections.insert(occluder, section_bounds(100.0, 120.0));
@@ -508,9 +603,9 @@ mod tests {
         assert!(!clear.occludes(visible));
         assert_eq!(clear.occludes(visible), clear.chunk_occluded(visible));
 
-        let occluder = SectionKey::new(2, IVec3::new(5, 0, 0));
+        let occluder = SectionKey::new(4, IVec3::new(1, 0, 0));
         let hidden_key = SectionKey::new(2, IVec3::new(10, 0, 0));
-        let clear_key = SectionKey::new(2, IVec3::new(10, 0, 8));
+        let clear_key = SectionKey::new(2, IVec3::new(10, 0, 24));
         let mut sections = HashMap::new();
         sections.insert(occluder, section_bounds(100.0, 120.0));
         sections.insert(hidden_key, section_bounds(10.0, 20.0));

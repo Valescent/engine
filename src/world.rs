@@ -149,7 +149,10 @@ impl Chunk {
     }
 
     /// Highest solid block's local y, or `-1` when the chunk has none.
-    #[cfg(test)]
+    ///
+    /// Unlike [`Self::terrain_top`] this includes tree blocks, so the horizon
+    /// candidate keeps a chunk visible while its canopy rises above the
+    /// horizon. The occluder height still comes from terrain only.
     pub(crate) fn top(&self) -> i32 {
         self.top
     }
@@ -160,6 +163,7 @@ impl Chunk {
     }
 
     /// Highest non-tree solid block's local y, or `-1` when the chunk has none.
+    #[cfg(test)]
     pub(crate) fn terrain_top(&self) -> i32 {
         self.terrain_top
     }
