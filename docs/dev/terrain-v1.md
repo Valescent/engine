@@ -238,7 +238,7 @@ cargo tree -p terrain-core -e normal --no-default-features
 ```
 
 `terrain-gen` is the `terrain-core` binary; its golden and counter baselines are in
-`crates/terrain-core/tests/golden/`. Current local count: **662 lib tests** across `engine` and
+`crates/terrain-core/tests/golden/`. Current local count: **663 lib tests** across `engine` and
 `terrain-core` (2 ignored), **3** `light_preview`, **30** `terrain_gen` integration tests.
 
 ## Known gaps
