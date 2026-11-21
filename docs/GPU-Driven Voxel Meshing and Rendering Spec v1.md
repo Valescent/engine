@@ -65,6 +65,16 @@ Everything between steps 1 and 5 runs on the GPU. The CPU records the same fixed
 | Ambient occlusion | 2 per corner (8 total) |
 | Scale flag (block vs sub-voxel) | 1 |
 
+The 8-byte record carries AO but no per-corner sky or block light, unlike the accepted 12-byte
+renderer record, which spends 40 bits on four corners of sky/block/AO. To keep the current light
+gradients, pair every quad with a light stream carrying the missing 4-bit sky and 4-bit block
+values: four corners × 8 bits is 32 bits, a 4-byte record or 8 bytes when padded to a `vec2<u32>`;
+AO stays in the quad record. If a single combined stream is preferred, mirror the 12-byte contract's
+10-bit sky/block/AO corners (40 bits, 5 bytes) and leave the quad's AO field unused. The vertex
+shader reads the quad and its light record with the same index. If no stream is added, this section
+must explicitly revise the contract to flat per-quad light, a visible quality change to accept
+rather than a silent omission.
+
 Exact bit layout is finalized in an implementation task. Pack and unpack code is written once in Rust, unit-tested on the CPU, and mirrored in WGSL.
 
 ### 4.3 Quad pool (SSBO)

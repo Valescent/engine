@@ -30,9 +30,12 @@ Light is sparse as well. The sky plane is always stored; the block-light plane e
 is within the 3x3x3 neighbourhood. Generated terrain places no lamps, so the typical field is 19.2 KiB
 instead of 39 KiB. A lamp restores the full plane for the 27 chunks around it.
 
-A light job is transiently far larger than a chunk: it copies a 3x3 footprint (27 chunks, 864 KiB)
-and allocates a 96^3 working grid with three `u8` arrays (2.65 MB). With 44 jobs in flight the
-engine can hold about 150 MB of scratch that never shows up in the per-chunk table.
+A light job is transiently far larger than a chunk: its snapshot holds `Arc` handles to the world's
+packed 16 KiB chunk storage instead of copying the footprint, and the job allocates `blocks` and
+`sky` working grids (2 × 96^3 `u8`, 1.77 MB), a `block_light` grid only when a lamp is in range
+(0.88 MB more, 2.65 MB total), and a 9,216-entry `Vec<i32>` column ceiling (36 KiB). With 44 jobs in
+flight the engine can hold roughly 80 MB of scratch typically, up to about 120 MB with lamps, none
+of which shows up in the per-chunk table.
 
 ## Options
 

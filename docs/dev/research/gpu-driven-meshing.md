@@ -7,10 +7,12 @@ quads. This report checks that proposal against the engine as it stands, separat
 pay for themselves today from the parts that do not, and records what has to change before either
 can land.
 
-It is research, not a commitment. The minimal-footprint variant below is scoped for measurement in
-[v0.0.9](../v0.0.9-scope.md); everything else is unscheduled, and the current per-chunk renderer is
-the fallback throughout. The companion document the spec cites, "Voxel World Engine: Architecture
-v2", is not in this repository; this report is written against the code and the recorded baseline.
+It is research, not a commitment. The minimal-footprint variant and the compute mesher are
+unscheduled research, not v0.0.9 scope: that milestone lands the CPU-built quad pool, and its scope
+explicitly excludes the compute mesher, GPU-resident voxel and light pools, and readback-driven
+allocation. The current per-chunk renderer is the fallback throughout. The companion document the
+spec cites, "Voxel World Engine: Architecture v2", is not in this repository; this report is written
+against the code and the recorded baseline.
 
 No new measurements were taken for this report. Baseline numbers come from [Engine research](README.md)
 and [Culling](../culling.md). Figures that are arithmetic on those numbers are marked as derived;
@@ -28,19 +30,20 @@ Release build, Windows, RTX 4060, Vulkan, distance 24, vsync off, spawn view of 
 | Visible vertices | 2,984,484 |
 | CPU frame time | 2.2-2.6 ms |
 | Working set | 626 MB |
-| Greedy meshing, per LOD0 chunk | 0.48 ms |
-| Greedy meshing, per LOD1 chunk | 0.10 ms |
+| Greedy meshing, per LOD0 chunk | 0.8-1.4 ms |
+| Greedy meshing, per LOD1 chunk | 0.23-0.47 ms |
 | Mesh per chunk, after v0.0.8 packing | ~11 KiB |
 
 Three consequences matter for the decision:
 
 - **The frame has slack.** 2.2-2.6 ms of CPU against a 16.7 ms budget. Meshing is not on the frame
   path at all: it runs on the worker pool and the main thread only uploads finished meshes.
-- **Draw submission is the measured cost.** 1,934 draws, each with a chunk bind group and vertex and
-  index buffer rebind, is described as the dominant CPU encoder cost in [Rendering](rendering.md).
-- **The mesher is not a throughput cliff by itself.** 0.48 ms per LOD0 chunk is about 2,083 chunks/s
-  per worker, or ~16,600 chunks/s with eight workers busy (derived). A burst hits the
-  two-uploads-per-frame cap before it hits meshing, which is what the Part B discussion is really
+- **Draw submission was the measured cost in that baseline.** 1,934 draws, each with a chunk bind
+  group and vertex and index buffer rebind, is described as the dominant CPU encoder cost in
+  [Rendering](rendering.md).
+- **The mesher is not a throughput cliff by itself.** 0.8-1.4 ms per LOD0 chunk is about 710-1,250
+  chunks/s per worker, or ~5,700-10,000 chunks/s with eight workers busy (derived). A burst hits the
+  eight-uploads-per-frame cap before it hits meshing, which is what the Part B discussion is really
   about.
 
 ## The spec is two projects
@@ -62,7 +65,7 @@ most of the measured cost sits in what A removes.
 | Part A: quad pool, vertex pulling, storage-buffer chunk info, multi-draw indirect | Removes the measured bottleneck without compute or an allocator | Recommended |
 | Part A plus compute culling | Adds GPU visibility and face-direction filtering, keeps the CPU mesher | Recommended next |
 | Full spec, including the compute mesher | Also removes per-remesh uploads and worker load; adds pool lifetimes, GPU light data, and more VRAM | Deferred until burst latency is measured and matters |
-| Minimal-footprint variant: streamed bricks and fixed quad pages | Same renderer shape without resident voxel or light pools, and without readback | Recommended for a far-view goal; scoped in [v0.0.9](../v0.0.9-scope.md) |
+| Minimal-footprint variant: streamed bricks and fixed quad pages | Same renderer shape without resident voxel or light pools, and without readback | Recommended for a far-view goal; unscheduled, since v0.0.9 excludes GPU pools and compute meshing |
 
 ## Part A: the render path
 
@@ -89,15 +92,18 @@ most of the measured cost sits in what A removes.
 
 ### Cons
 
-- **Device limits have to move.** `src/renderer.rs:192` requests `Limits::downlevel_webgl2_defaults()`,
-  which sets `max_storage_buffers_per_shader_stage`, `max_storage_buffer_binding_size`, and
-  `max_compute_workgroup_storage_size` to zero. Storage buffers and compute are unavailable until the
-  request changes. That is a deliberate portability decision being reversed: the WebGL2 target goes
-  away, which the spec already excludes. It also gates the compute culling pass in Part A, so culling
-  waits on the same decision.
-- **The 256 MB buffer cap comes with those defaults.** `using_resolution()` raises texture dimensions
-  only, so `max_buffer_size` stays at the downlevel value. Pools need slabs under that cap or an
-  explicit larger request plus a capability check.
+- **Device limits have to move for the compute path.** `src/renderer.rs:331` starts from
+  `Limits::downlevel_webgl2_defaults()`, which sets `max_storage_buffers_per_shader_stage`,
+  `max_storage_buffer_binding_size`, and `max_compute_workgroup_storage_size` to zero. When the
+  adapter supports it, the quad-pool path already raises the first two to 2 bindings and the pool
+  size; what stays unavailable is compute, because `max_compute_workgroup_storage_size` is still
+  zero. The culling pass and the GPU mesher both need an explicit larger request. That is a
+  deliberate portability decision being reversed: the WebGL2 target goes away, which the spec
+  already excludes.
+- **The 256 MiB buffer cap remains.** `using_resolution()` raises texture dimensions only, and the
+  quad-pool path raises `max_buffer_size` only if the pool exceeds the default, so current pools stay
+  under the 256 MiB cap. Larger pools need slabs under that cap or an explicit larger request plus a
+  capability check.
 - **Two render paths, permanently.** Adapters without `MULTI_DRAW_INDIRECT_COUNT` or
   `INDIRECT_FIRST_INSTANCE` need the current per-chunk path, kept correct and tested.
 - **Debuggability drops.** There is no per-chunk buffer to inspect in a capture; a bad draw means a
@@ -114,9 +120,10 @@ most of the measured cost sits in what A removes.
 ### Pros
 
 - **Removes the per-remesh upload, which is what a burst actually hits.** `MAX_UPLOADS_PER_FRAME` is
-  2 (`src/lib.rs:68`), so a 200-chunk burst needs about 100 frames to become visible even though the
-  meshing is only 96 ms of work spread across the pool (derived), roughly 1.7 s at 60 FPS. Compute
-  writes the quad range in place, so the cap stops applying.
+  8 (`src/lib.rs:88`), so a 200-chunk burst needs about 25 frames to become visible, roughly 0.42 s
+  at 60 FPS. The meshing is 160-280 ms of total worker CPU (derived from 0.8-1.4 ms per LOD0 chunk),
+  so the upload cap, not meshing, sets that latency. Compute writes the quad range in place, so the
+  cap stops applying.
 - **Removes the worker-pool ceiling.** The pool has a backlog cap ([Benchmarks](../benchmarks.md)) and
   also carries generation and light jobs. An avalanche, wildfire, or fast flight competes with those
   for CPU workers and their shared scratch; compute meshing does not.
@@ -164,8 +171,8 @@ most of the measured cost sits in what A removes.
 | Quad extents fit 5 bits | A greedy quad can span 32 cells | Store extent minus one, or widen to 6 bits |
 | Quad is 8 bytes with per-corner AO | Per-vertex sky, block, and AO (`src/voxel.rs`) | 12-byte quad, or flat per-quad light |
 | CPU does orchestration only | Light BFS is CPU work and gates the mesh job (`src/lib.rs:1307`) | Upload the light field per chunk, or port the BFS to compute |
-| Compute and storage buffers are core | Requested limits are WebGL2-level with zero storage buffers and zero compute workgroup storage (`src/renderer.rs:192`) | Raise limits and drop the WebGL2 target, or there is no compute at all |
-| Pools split only past `max_storage_buffer_binding_size` | `max_buffer_size` is also at the downlevel value | Slab the pools under 256 MB or request the adapter's limit explicitly |
+| Compute and storage buffers are core | The quad-pool path raises storage-buffer limits to 2 bindings and the pool size when supported; `max_compute_workgroup_storage_size` stays zero (`src/renderer.rs:331`) | Request the compute limits and drop the WebGL2 target, or there is no compute at all |
+| Pools split only past `max_storage_buffer_binding_size` | The render path raises the binding limit to the pool size and keeps `max_buffer_size` at 256 MiB or the pool size, whichever is larger | Slab larger pools or check the adapter limit before enabling the path |
 | `first_instance` indexes chunk info | There are no indirect draws; each chunk has a bind group and an origin uniform | `INDIRECT_FIRST_INSTANCE` becomes required; without it the fallback is the current path |
 | World is a 2²¹ m torus with wrapping `i32` chunk coordinates | Coordinates are plain `i32` with `checked_mul` (`src/world.rs:571`); nothing wraps | Wrapping, camera-relative offsets, and seam lookups are net-new and touch `VCHK`, streaming, and light |
 | Near-field sun shadows are already decided | The engine has no shadow maps | No conflict today; the mesher and culling must account for a shadow pass when they land |
@@ -212,9 +219,10 @@ So the render half is a clear memory win, and the mesher half is a memory cost u
 compression is good. The spec's section 10 leaves this split open; it should carry a number before
 the voxel pool is built.
 
-## Measured renderer baseline and wgpu facts
+## Pre-pool measured renderer baseline and wgpu facts
 
-Settled windowed run, seed 42 spawn, vsync off, from [Benchmarks](../benchmarks.md):
+Settled windowed run before the quad pool, seed 42 spawn, vsync off, from
+[Benchmarks](../benchmarks.md):
 
 | Distance | Chunks | Visible | Draws | Indices drawn | Geometry | Visible geometry | Frame CPU |
 |---:|---:|---:|---:|---:|---:|---:|---:|
@@ -276,7 +284,7 @@ LOD with Hi-Z culling, a far heightfield ring, and 6-8 byte records. See
 ## Minimal-footprint variant
 
 The spec's resident voxel and light pools are the wrong budget profile for a far-view goal: they add
-170-255 MB of VRAM before a single extra metre is visible. A variant keeps the same renderer shape
+185-269 MB of VRAM before a single extra metre is visible. A variant keeps the same renderer shape
 without resident pools.
 
 **Stream bricks, do not pool them.** A small ring of slots holds padded `34³` block and light data
@@ -294,7 +302,7 @@ with the 1-2 frame latency it causes.
 
 | | Resident pools (spec) | Minimal variant |
 |---|---:|---:|
-| VRAM for voxels and light | 170-255 MB | 1-5 MB ring |
+| VRAM for voxels and light | 185-269 MB | 1-5 MB ring |
 | VRAM for geometry | 12-30 MB | 12-25 MB with one active LOD per chunk |
 | Readback | required for trimming | none; fixed pages and GPU-written counts |
 | Upload per remesh | quads only | padded brick (~59 KiB) |
@@ -307,17 +315,19 @@ integrated GPU from duplicating the world in shared memory.
 For distance, the variant is paired with the seed-native hierarchy in
 [ADR-0014](../../decisions/0014-seed-native-lod-hierarchy.md): coarse sections keep a `32³` sample
 budget while covering 8x more volume per level, so section count and draw count grow with the
-logarithm of distance instead of its area. The combination is scoped as
-[v0.0.9 Far View](../v0.0.9-scope.md).
+logarithm of distance instead of its area. That combination is the eventual far-view direction, not
+this milestone: [v0.0.9 Far View](../v0.0.9-scope.md) lands the CPU-built quad pool and the hierarchy
+without GPU voxel/light pools or a compute mesher.
 
 ## Staging
 
 Each step has a gate and a stop point. Steps 1-3 are useful even if the compute mesher is never built.
 
 0. **Measure first.** Add a `mesh_build` bench beside `benches/pool_sim.rs` for LOD0/1/2 on fixed
-   snapshots, and record the peak dirty-chunk count in the stress scene. The 0.48 ms figure is a single
-   recorded run; the burst size is not recorded at all. Then raise `MAX_UPLOADS_PER_FRAME` and re-run
-   the burst, because that is the cheapest experiment and it sets the bar the compute mesher must beat.
+   snapshots, and record the peak dirty-chunk count in the stress scene. The 0.8-1.4 ms LOD0 range is
+   the current fixture measurement; the burst size is not recorded at all. Then raise
+   `MAX_UPLOADS_PER_FRAME` and re-run the burst, because that is the cheapest experiment and it sets
+   the bar the compute mesher must beat.
 1. **Quad pack and unpack** in Rust, mirrored in WGSL, unit-tested, with the CPU greedy mesher emitting
    quads that pack and unpack losslessly. Gate: quad counts, covered area, and material histograms
    match `mesh.rs` on fixed chunks.
@@ -355,9 +365,9 @@ throughput is acceptable in play.
 
 These need answers from the owner, not from more research:
 
-1. **Is the WebGL2-level limit request still a goal?** If yes, the storage-buffer render path and every
-   compute pass are out, including culling, and the megabuffer has to be built on vertex buffers and
-   `draw_indirect` only.
+1. **Is the WebGL2-level limit request still a goal?** If yes, every compute pass is out, including
+   culling and the GPU mesher, and the render path has to stay on vertex buffers and `draw_indirect`
+   only.
 2. **Does lighting stay per vertex?** If yes, the quad is 12 bytes and the pool grows 50%. If no, flat
    per-quad lighting is a visible quality change to accept in the same decision.
 3. **Where does light live after an edit?** Upload the CPU field as a storage buffer (simple, ~100 MB
@@ -386,7 +396,8 @@ means solving all of those while also debugging pool lifetimes.
 
 For a far-view goal the order is different again: take the
 [minimal-footprint variant](#minimal-footprint-variant) and the seed-native hierarchy, and skip the
-resident pools entirely. That combination is scoped in [v0.0.9](../v0.0.9-scope.md).
+resident pools entirely. That combination is unscheduled research; v0.0.9's far view is the CPU
+hierarchy plus the quad pool, without GPU pools or a compute mesher.
 
 ## References
 

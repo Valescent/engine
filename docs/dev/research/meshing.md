@@ -35,22 +35,25 @@ Three consequences:
 - **The scan dominates.** Six faces x 32 slices x 32 x 32 cells is 196,608 cell visits per opaque
   build. An all-air chunk still costs 0.42 ms, so more than a third of a surface build is spent
   proving that nothing is there.
-- **Water is always built and always full resolution.** Land-locked chunks pay 0.37 ms to emit
-  nothing, and water never follows the chunk's LOD.
+- **Water is full resolution wherever it exists.** The water pass does not follow the chunk's LOD,
+  and a wet chunk still scans the full grid. Dry chunks now return before scanning and runtime only
+  queues a water mesh for chunks that contain water, so land-locked chunks pay nothing.
 - **Output size barely affects time.** The flat slab emits two quads for the same cost as the
   surface chunk's 2,005, so the cost is per cell, not per quad.
 
 ## Where the time goes
 
-1. `greedy` allocates a fresh `Vec<Option<MaskKey>>` for every (face, slice): 192 allocations of
-   roughly 24-28 KiB per opaque build, about 4.6 MB zeroed and freed, and the same again for water.
-2. Every cell calls `block_at` and `exposed`, each decoding packed blocks and consulting the border
-   map when the cell is on an edge.
+1. `greedy` allocates one `Vec<Option<MaskKey>>` per mesh build (1,024 entries, roughly 24-28 KiB)
+   and `fill(None)`s it per slice, so the scratch is reused across all 192 face/slice passes instead
+   of being reallocated.
+2. Every cell calls `block_at`; `exposed` runs only when the block matches the pass, and it may
+   consult the border map for edge cells.
 3. Every exposed cell computes four corner keys: sky and block light maxima plus AO. This is the
    part that scales with surface area rather than volume.
-4. Water scans the full grid regardless of whether the chunk contains water.
-5. The light job allocates three 96³ working arrays (2.65 MB), builds a `HashMap` ceiling of up to
-   9,216 entries, and makes at least three full 884,736-cell passes.
+4. A chunk that contains water scans the full grid at LOD0; a dry chunk returns before scanning.
+5. The light job allocates `blocks` and `sky` working grids (2 × 96³ `u8`, 1.77 MB) and a
+   `block_light` grid only when a lamp is present (0.88 MB more, 2.65 MB total), builds a
+   9,216-entry `Vec<i32>` column ceiling (36 KiB), and makes at least three full 884,736-cell passes.
 
 ## Options
 
@@ -144,9 +147,11 @@ or CI. Measure before and after; the mesher is branch-heavy, so the win may be s
 - **Cull before meshing.** A persistent-mesh engine must have geometry ready when the camera turns;
   frustum culling is a render-time decision. Skipping mesh jobs for off-screen chunks would pop
   geometry in on every turn.
-- **Move meshing to the GPU for speed.** The frame is draw-bound (3,409 draws, 9.06 ms at distance
-  32) and meshing is already off-thread. A GPU mesher would spend VRAM on voxels and light to fix a
-  problem this engine does not have yet. See [GPU-driven meshing](gpu-driven-meshing.md).
+- **Move meshing to the GPU for speed.** The quad pool already removed the draw bottleneck: distance
+  32 settles at 2 draws and 1.84-1.87 ms. What remains is worker time (0.8-1.4 ms per LOD0 chunk)
+  and burst latency, both off the frame path. A GPU mesher would spend VRAM on voxels and light to
+  move an off-thread cost, so it is not justified until a measured burst misses its latency target.
+  See [GPU-driven meshing](gpu-driven-meshing.md).
 
 ## Recommendation
 

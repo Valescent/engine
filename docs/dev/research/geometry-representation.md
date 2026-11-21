@@ -32,7 +32,7 @@ it has to reduce what is drawn or how far it is drawn.
 | Sparse resources / residency | Not supported | SVDAG streaming is manual atlas management |
 | `MULTI_DRAW_INDIRECT_COUNT` | DX12 and Vulkan only; Metal entry points are stubs | Metal needs fixed counts plus zero-instance draws |
 | `INDIRECT_FIRST_INSTANCE` | Apple3+/Mac1+, Vulkan, DX12 | Per-draw record indexing is portable to desktop |
-| Default limits | 128 MiB storage binding, 256 MiB buffer | A 125.9 MB pool already needs suballocation |
+| Default limits | 128 MiB storage binding, 256 MiB buffer | A 125.9 MiB pool fits, but leaves little headroom |
 
 The portable GPU-driven shape stays: a compute cull writes indirect records, and one or two
 `multi_draw_indexed_indirect` calls draw them.
