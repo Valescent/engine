@@ -52,6 +52,7 @@
 - [Debugging](dev/debugging.md)
 - [Profiling](dev/profiling.md)
 - [Benchmark results](dev/benchmarks.md)
+- [Performance backlog](dev/performance-backlog.md)
 - [Culling](dev/culling.md)
 - [CI](dev/ci.md)
 - [Testing](dev/testing.md)

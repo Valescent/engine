@@ -1,0 +1,54 @@
+# Performance backlog
+
+Work items from the v0.0.9 8 km profile. This page is a living list: move an item to **done** only
+after it has a measurement and a test or benchmark. The source profile is a 40 s, 8 km spawn run
+captured with `--features tracy`:
+
+- 26,647 frames, 1.99 M zones, 56.3 MB trace.
+- The instrumented frame is about 1.5 ms; the normal build is 0.58-0.69 ms. Use the ranking, not
+  the absolute times.
+- Self-time leaders: `section build` 34.2 s (5,532 jobs, 6.18 ms each), `chunk light` 20.8 s,
+  `encode` 534 µs/frame, `frame` self 283 µs/frame, `chunk generate` 6.7 s, `chunk mesh` 3.0 s,
+  `mesh request` 88.5 µs/frame.
+
+Baseline at `0b65acc`:
+
+| Gate | Value |
+|---|---:|
+| 8 km visible nodes | 1,259 |
+| 8 km horizon-culled sections | 652 of 1,911 in-frustum |
+| 8 km visible vertices | 5.15 M |
+| 8 km steady frame / GPU | 0.58-0.69 / 0.323 ms |
+| 8 km hierarchy settle | 6.4-6.9 s |
+| `section build` | ~6.2 ms/job under Tracy |
+| `chunk light` | ~8.7 ms/job under Tracy |
+
+## Steady frame
+
+| ID | Item | Expected | Effort | Status |
+|---|---|---|---|---|
+| SF1 | Cache horizon occlusion at the 250 ms rebuild; make `occludes` / `occludes_section` hash lookups | High | S | todo |
+| SF2 | Iterate occupied quad-pool slots instead of all 20,480 | High | S-M | todo |
+| SF3 | Add scopes to `stream_columns`, `request_levels`, `ensure_hierarchy`, `record_frame`; attribute the 283 µs `frame` self time | Enables SF1-SF2 follow-up | S | todo |
+| SF4 | Reuse the per-frame texture view and resolve GPU timestamp queries every N frames | Low-medium | S | todo |
+| SF5 | Cross-section greedy merging for coplanar top faces | Medium (GPU) | M-H | deferred |
+| SF6 | Hi-Z or software occlusion beyond the heightmap horizon | Low for the far heightmap | M-H | deferred |
+
+## Hierarchy load
+
+| ID | Item | Expected | Effort | Status |
+|---|---|---|---|---|
+| HL1 | Bounds-limit the section mesher to the solid/water y range | High (2-4x mesh) | M | todo |
+| HL2 | Fill generated columns in bulk instead of per-sample `set_sample` | High (2-3x generate) | M | todo |
+| HL3 | Add `section generate` / `section bounds` / `section light` / `section mesh` scopes | Enables HL1-HL2 | S | todo |
+| HL4 | Tune `MAX_SECTION_JOBS` and section priority on the shared pool | Medium (settle) | S | todo |
+| HL5 | Optimize the chunk-light BFS (bitsets or a flatter queue) | Medium (load) | M | todo |
+| HL6 | Reduce the L0 detail radius | High, but lowers near detail | S | rejected |
+
+## Rules
+
+- Every item keeps the visible image identical unless the row says otherwise.
+- Measure the steady frame with a settled 8 km spawn run; measure load from
+  `generated world ready` to `hierarchy target target=4908 queue=0`.
+- Keep frame and headless benchmarks isolated from background builds and agents.
+- Do not relax light/AO merge keys, LOD thresholds, or the horizon margins for a speed number.
