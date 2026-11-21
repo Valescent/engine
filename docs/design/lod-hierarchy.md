@@ -352,5 +352,6 @@ The existing per-second debug line and Tracy plots should gain section metrics r
 ## Related documents
 
 - [Terrain pipeline](terrain-pipeline.md) — the wider terrain direction and the interview decisions.
+- [LOD hierarchy design review](../dev/lod-hierarchy-review.md) — implementation gaps and slice-1 recommendations.
 - [ADR-0010](../decisions/0010-two-level-lod-for-chunks.md) — the original two-level LOD and its transition rules.
 - [ADR-0014](../decisions/0014-seed-native-lod-hierarchy.md) — the decision this page expands.

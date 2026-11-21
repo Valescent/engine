@@ -2,7 +2,7 @@
 
 A voxel engine written in Rust.
 
-**Status: pre-alpha.** `0.0.1` through `0.0.7` are released; `0.0.8` is implemented and in acceptance. The world is procedurally generated from a saved seed, streams in and out around the player, and keeps player edits. It has voxel lighting, ambient occlusion, a day/night cycle, distance fog, transparent animated water, and three LOD levels out to a configurable render distance.
+**Status: pre-alpha.** `0.0.1` through `0.0.9` are implemented; `0.0.1` through `0.0.7` are released, and the `0.0.8`/`0.0.9` release notes are prepared on the release branch with the PR open. The world is procedurally generated from a saved seed, streams in and out around the player, and keeps player edits. It has voxel lighting, ambient occlusion, a day/night cycle, distance fog, transparent animated water, and a chunk LOD path, with an optional seed-native hierarchy that reaches 8 km.
 
 This is **source-available, not open source**. The code is under the [PolyForm Shield License 1.0.0](LICENSE): you may read, run, modify, and redistribute it, but not use it to provide a product that competes with it. PolyForm Shield is not OSI-approved.
 
@@ -42,6 +42,19 @@ on `Ctrl+S`, and on exit; a modified chunk is applied over its generated blocks 
 `config.toml` sets `world.render_distance_chunks` (default `12`, range `8..=32`). `ENGINE_SEED=<u64>`
 chooses the seed of a new world. Set `ENGINE_STRESS_SCENE=1` to load the deterministic 64-chunk
 stress scene instead; it never touches `world/`.
+
+Horizon culling is on by default; `ENGINE_HORIZON_CULL=0` disables it. A run can save one frame as
+a BMP with `ENGINE_CAPTURE=<path>`; the capture waits `ENGINE_CAPTURE_DELAY` seconds (default `20`).
+
+`ENGINE_HIERARCHY=1` enables the long view. Full-resolution chunks cover `ENGINE_DETAIL_CHUNKS`
+chunks around the player (default `16`, 512 m), and derived 64/128/256/512 m sections fill the
+rings out to 8 km. Levels 1-2 and the level-3/4 roots use projected refinement, parent retention,
+and coarse BFS light; the hierarchy pool is 8M quads for the 8 km view. On the reference machine
+(RTX 4060, 1280x720, Vulkan), distance 32 settles at about 0.6 ms per frame with 2 draws and
+39.31 MiB of geometry reservation. The level-1/2 2 km slice measured 0.466 ms (0.235 ms GPU,
+3.58 M vertices, 2 draws, 30.94 MB of quads); the full 8 km hierarchy measures 0.908 ms (0.780 ms
+GPU, 9.40 M vertices, 1,908 visible nodes, 2 draws, 74.62 MB of quads, 94.24 MB of geometry
+reservation).
 
 See [`docs/dev/controls.md`](docs/dev/controls.md) for the full binding table.
 

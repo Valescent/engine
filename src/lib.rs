@@ -10,20 +10,29 @@ mod config;
 mod frustum;
 mod generation;
 mod headless;
+mod hierarchy;
+mod horizon;
 mod light;
 mod mesh;
 mod mesher;
 mod metrics;
 mod overlay;
 mod player;
+mod pool;
+mod quad;
+mod quad_renderer;
 mod raycast;
 mod renderer;
+mod section;
 mod sky;
 mod streaming;
 mod voxel;
 mod world;
 
-use std::collections::HashSet;
+#[cfg(test)]
+mod bench;
+
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -44,12 +53,14 @@ use camera::Camera;
 use config::{Config, ConfigError};
 use frustum::Frustum;
 use generation::Generator;
+use hierarchy::{DEFAULT_DETAIL_CHUNKS, DEFAULT_PIXELS_PER_RADIAN, Hierarchy};
 use mesh::Lod;
 use mesher::{MeshKind, MeshPool, MeshQueue, Priority, collect_finished, create_pool};
 use player::{Player, PlayerInput};
 use raycast::{RaycastHit, raycast};
 pub use renderer::RendererError;
 use renderer::{FrameStats, Renderer};
+use section::{SectionKey, generate_section, overlapping_sections_for_chunk};
 use sky::Sky;
 use streaming::Streaming;
 use voxel::build_highlight_mesh;
@@ -62,10 +73,19 @@ const FRAME_LOG_INTERVAL: Duration = Duration::from_secs(1);
 const WORLD_CHUNKS: &str = "world/chunks";
 const CONFIG_FILE: &str = "config.toml";
 const MAX_COLUMNS_PER_FRAME: usize = 2;
+const MAX_SECTION_BUILDS_PER_FRAME: usize = 1;
 const INTERACTION_DISTANCE: f32 = 6.0;
 const SPAWN_X: i32 = 32;
 const SPAWN_Z: i32 = 32;
-const MAX_UPLOADS_PER_FRAME: usize = 2;
+/// Mesh uploads collected per frame. `2` made distance-32 first-load settle in 33 s against 22 s at
+/// `64`, so above this value the cap stops limiting; `8` stays above the worker rate while keeping
+/// each frame's upload burst small.
+const MAX_UPLOADS_PER_FRAME: usize = 8;
+/// Consecutive upload failures tolerated for one chunk before it is left alone.
+const MAX_UPLOAD_RETRIES: u8 = 8;
+
+/// Main-thread budget for draining the chunk work set each frame.
+const LEVEL_WORK_BUDGET: Duration = Duration::from_millis(2);
 const STRESS_SCENE_ENV: &str = "ENGINE_STRESS_SCENE";
 const STRESS_CHUNKS: i32 = 8;
 const STRESS_FLAT_CHUNKS: i32 = 4;
@@ -96,8 +116,17 @@ pub fn run() -> Result<(), RunError> {
     #[cfg(feature = "tracy")]
     let _tracy_client = tracy_client::Client::start();
 
-    let config = config::load(Path::new(CONFIG_FILE))?;
+    let mut config = config::load(Path::new(CONFIG_FILE))?;
     let stress = stress_requested();
+    let hierarchy = std::env::var("ENGINE_HIERARCHY").is_ok_and(|value| value == "1");
+    let detail_chunks = std::env::var("ENGINE_DETAIL_CHUNKS")
+        .ok()
+        .and_then(|value| value.trim().parse::<i32>().ok())
+        .unwrap_or(DEFAULT_DETAIL_CHUNKS)
+        .clamp(4, 32);
+    if hierarchy {
+        config.render_distance_chunks = detail_chunks;
+    }
     let setup = world_for(
         stress,
         Path::new(WORLD_DIRECTORY),
@@ -108,8 +137,12 @@ pub fn run() -> Result<(), RunError> {
         app.set_spawn(spawn);
     }
     app.config = config;
+    app.detail_chunks = detail_chunks;
     app.streaming = setup.streaming;
     app.seed = setup.seed;
+    if let Some(directory) = app.save_directory.clone() {
+        app.saved_chunks = World::saved_chunk_index(&directory)?;
+    }
     app.apply_render_distance();
     if let Some(options) = headless::options() {
         headless::run(app, options);
@@ -177,7 +210,7 @@ fn generated_setup(
 
     let mut world = World::default();
     for (chunk, blocks) in generator.generate_column(column) {
-        insert_generated_chunk(&mut world, directory, chunk, blocks)?;
+        insert_generated_chunk(&mut world, directory, None, chunk, blocks)?;
     }
     world.relight();
 
@@ -195,21 +228,28 @@ fn generated_setup(
 }
 
 /// Inserts generated blocks unless a saved chunk overrides them.
+///
+/// `saved` is the startup listing of chunk files. When it is present and does
+/// not contain `chunk`, the generated blocks are used without probing the
+/// filesystem.
 fn insert_generated_chunk(
     world: &mut World,
     directory: &Path,
+    saved: Option<&HashSet<ChunkCoord>>,
     chunk: ChunkCoord,
     generated: Chunk,
 ) -> Result<(), SaveError> {
+    if saved.is_some_and(|saved| !saved.contains(&chunk)) {
+        world.insert_chunk(chunk, generated);
+        return Ok(());
+    }
     match World::load_saved_chunk(directory, chunk)? {
         Some(saved) if saved.is_empty() => {
             debug!(?chunk, "applied an empty saved chunk");
-            world.mark_modified(chunk);
         }
         Some(saved) => {
             debug!(?chunk, blocks = saved.len(), "applied a saved chunk");
             world.insert_chunk(chunk, saved);
-            world.mark_modified(chunk);
         }
         None => world.insert_chunk(chunk, generated),
     }
@@ -221,10 +261,14 @@ fn release_column(
     world: &mut World,
     queue: &mut MeshQueue,
     directory: &Path,
+    saved: &mut HashSet<ChunkCoord>,
     column: IVec2,
 ) -> Result<(), SaveError> {
     for y in 0..CHUNK_COLUMN {
-        world.save_chunk(directory, ChunkCoord::new(column.x, y, column.y))?;
+        let chunk = ChunkCoord::new(column.x, y, column.y);
+        if world.save_chunk(directory, chunk)? {
+            saved.insert(chunk);
+        }
     }
     queue.cancel_generation(column);
     for y in 0..CHUNK_COLUMN {
@@ -334,7 +378,10 @@ fn spawn_position(world: &World) -> Vec3 {
     let mut highest = None;
     for (chunk, data) in world.iter_chunks() {
         let origin = chunk.world_origin();
-        for (local, _) in data.iter() {
+        for (local, block) in data.iter() {
+            if !block.is_solid() {
+                continue;
+            }
             if origin.x + local.x == SPAWN_X && origin.z + local.z == SPAWN_Z {
                 let y = origin.y + local.y;
                 highest = Some(highest.map_or(y, |highest: i32| highest.max(y)));
@@ -368,8 +415,19 @@ struct App {
     streaming: Option<Streaming>,
     seed: Option<u64>,
     save_directory: Option<PathBuf>,
-    level_work: HashSet<ChunkCoord>,
+    /// Chunk coordinates with a file in `save_directory`, listed at startup.
+    saved_chunks: HashSet<ChunkCoord>,
+    level_work: BTreeSet<ChunkCoord>,
     level_player_chunk: ChunkCoord,
+    /// Consecutive mesh upload failures per chunk, cleared on success.
+    upload_failures: HashMap<ChunkCoord, u8>,
+    /// Chunks whose light waits for an adjacent column that is still streaming in.
+    deferred_light: BTreeSet<ChunkCoord>,
+    /// Cached generation candidates, rebuilt when the player column or loaded set changes.
+    wanted_columns: Vec<IVec2>,
+    unload_columns: Vec<IVec2>,
+    wanted_cursor: usize,
+    wanted_player: Option<IVec2>,
     stats: FrameAccumulator,
     stress: bool,
     world: World,
@@ -387,6 +445,20 @@ struct App {
     focused: bool,
     occluded: bool,
     show_overlay: bool,
+    horizon_cull: bool,
+    auto_walk: bool,
+    auto_strafe: bool,
+    hierarchy: bool,
+    detail_chunks: i32,
+    hierarchy_generator: Option<Generator>,
+    /// Parent-retained target, readiness, and build queue.
+    sections: Hierarchy,
+    section_cursor: usize,
+    sections_uploaded: HashSet<SectionKey>,
+    hierarchy_at: Instant,
+    hierarchy_cell: Option<IVec2>,
+    horizon: horizon::Horizon,
+    horizon_at: Instant,
     overlay_fps: f64,
     overlay_frame_ms: f64,
     last_frame: Instant,
@@ -402,6 +474,9 @@ struct FrameAccumulator {
     upload_ms: f64,
     last_rebuild_ms: f64,
     last_upload_ms: f64,
+    last_stream_ms: f64,
+    last_levels_ms: f64,
+    last_render_ms: f64,
     pending_jobs: usize,
     generated_columns: u32,
     generation_ms: f64,
@@ -411,6 +486,12 @@ impl FrameAccumulator {
     fn reset(&mut self) {
         *self = Self::default();
     }
+}
+
+/// Column that owns `chunk`.
+fn chunk_column(chunk: ChunkCoord) -> IVec2 {
+    let coordinates = chunk.coordinates();
+    IVec2::new(coordinates.x, coordinates.z)
 }
 
 impl App {
@@ -428,6 +509,12 @@ impl App {
         let player = Player::new(spawn);
         let mut camera = Camera::new(1.0);
         camera.set_position(player.eye_position());
+        if let Some(yaw) = std::env::var("ENGINE_YAW")
+            .ok()
+            .and_then(|value| value.trim().parse::<f32>().ok())
+        {
+            camera.set_yaw(yaw.to_radians());
+        }
         if stress {
             camera.set_yaw(std::f32::consts::FRAC_PI_4);
         }
@@ -447,8 +534,15 @@ impl App {
             streaming: None,
             seed: None,
             save_directory: save_directory(stress).map(Path::to_path_buf),
+            saved_chunks: HashSet::new(),
             level_work: world.iter_chunks().map(|(chunk, _)| chunk).collect(),
             level_player_chunk: ChunkCoord::from_world(spawn.floor().as_ivec3()).0,
+            upload_failures: HashMap::new(),
+            deferred_light: BTreeSet::new(),
+            wanted_columns: Vec::new(),
+            unload_columns: Vec::new(),
+            wanted_cursor: 0,
+            wanted_player: None,
             stats: FrameAccumulator::default(),
             stress,
             world,
@@ -466,6 +560,19 @@ impl App {
             focused: true,
             occluded: false,
             show_overlay: cfg!(debug_assertions),
+            horizon_cull: !std::env::var("ENGINE_HORIZON_CULL").is_ok_and(|value| value == "0"),
+            auto_walk: std::env::var("ENGINE_AUTO_WALK").is_ok_and(|value| value == "1"),
+            auto_strafe: std::env::var("ENGINE_AUTO_STRAFE").is_ok_and(|value| value == "1"),
+            hierarchy: std::env::var("ENGINE_HIERARCHY").is_ok_and(|value| value == "1"),
+            detail_chunks: DEFAULT_DETAIL_CHUNKS,
+            hierarchy_generator: None,
+            sections: Hierarchy::default(),
+            section_cursor: 0,
+            sections_uploaded: HashSet::new(),
+            hierarchy_at: Instant::now(),
+            hierarchy_cell: None,
+            horizon: horizon::Horizon::disabled(),
+            horizon_at: Instant::now(),
             overlay_fps: 0.0,
             overlay_frame_ms: 0.0,
             last_frame: Instant::now(),
@@ -492,16 +599,26 @@ impl App {
 
         if let Some(pool) = self.mesher.clone() {
             for chunk in &light_dirty {
+                self.deferred_light.remove(chunk);
                 self.queue
                     .request_light(&*pool, &self.world, *chunk, Priority::Urgent);
             }
         }
+        self.invalidate_sections(dirty);
         for chunk in dirty {
             if self.world.chunk(*chunk).is_none() {
                 self.queue.remove(*chunk);
+                self.upload_failures.remove(chunk);
                 if let Some(renderer) = &mut self.renderer {
                     renderer.remove_chunk(*chunk);
                 }
+            } else if !self.world.chunk(*chunk).is_some_and(Chunk::has_water)
+                && let Some(renderer) = &mut self.renderer
+            {
+                // No water job will run for a dry chunk, so clear any water mesh
+                // left over from before the last water block was removed.
+                let revision = self.queue.revision(*chunk);
+                renderer.upload_water_chunk(*chunk, revision, &mesh::MeshData::default());
             }
         }
 
@@ -517,11 +634,101 @@ impl App {
         );
     }
 
+    /// Marks the coarse sections overlapping an edit for a rebuild.
+    ///
+    /// The renderer keeps no section state after [`Renderer::remove_section`],
+    /// so the next upload replaces the stale geometry instead of doubling it.
+    /// Sections outside the current target stay marked but are not built until
+    /// selection reaches them, so a far edit is harmless.
+    fn invalidate_sections(&mut self, dirty: &DirtyChunks) {
+        let mut keys = Vec::new();
+        for chunk in dirty {
+            for key in overlapping_sections_for_chunk(*chunk) {
+                if !keys.contains(&key) {
+                    keys.push(key);
+                }
+            }
+        }
+        if keys.is_empty() {
+            return;
+        }
+        if let Some(renderer) = &mut self.renderer {
+            for key in &keys {
+                renderer.remove_section(*key);
+            }
+        }
+        for key in &keys {
+            self.sections_uploaded.remove(key);
+        }
+        self.sections.mark_dirty(keys);
+    }
+
+    /// Invalidates the light and meshes of the eight columns around `column`.
+    ///
+    /// A column appearing or leaving changes its neighbours' sky exposure, so
+    /// their light fields are stale even though their own blocks did not change.
+    fn invalidate_neighbour_columns(&mut self, column: IVec2) {
+        let neighbours = self.world.neighbour_column_chunks(column);
+        self.queue.invalidate(&neighbours);
+        self.level_work.extend(neighbours.iter().copied());
+    }
+
+    /// Whether the streamer may still generate this column for the player.
+    fn column_is_wanted(&self, column: IVec2) -> bool {
+        let Some(streaming) = &self.streaming else {
+            return false;
+        };
+        let player_column = Streaming::column_at(self.player.position);
+        let delta = (column - player_column).abs();
+        delta.x.max(delta.y) <= streaming.render_distance()
+    }
+
+    /// Whether every adjacent column is loaded or will never load.
+    ///
+    /// Light treats a missing chunk as open sky. While an adjacent column is
+    /// still streaming in, that is temporary, so computing light now produces a
+    /// bright band that must be recomputed later. Columns outside the wanted
+    /// area will never arrive, so their open sky is final.
+    fn light_neighbourhood_stable(&self, column: IVec2) -> bool {
+        let Some(streaming) = &self.streaming else {
+            return true;
+        };
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                if dx == 0 && dz == 0 {
+                    continue;
+                }
+                let neighbour = column + IVec2::new(dx, dz);
+                if !streaming.is_loaded(neighbour) && self.column_is_wanted(neighbour) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Moves deferred light work back into the level pass once it can be final.
+    fn admit_deferred_light(&mut self) {
+        if self.deferred_light.is_empty() {
+            return;
+        }
+        let ready: Vec<ChunkCoord> = self
+            .deferred_light
+            .iter()
+            .copied()
+            .filter(|chunk| self.light_neighbourhood_stable(chunk_column(*chunk)))
+            .collect();
+        for chunk in &ready {
+            self.deferred_light.remove(chunk);
+        }
+        self.level_work.extend(ready);
+    }
+
     fn request_initial_meshes(&mut self) {
         let Some(pool) = self.mesher.clone() else {
             return;
         };
-        for (chunk, _) in self.world.iter_chunks() {
+        for (chunk, data) in self.world.iter_chunks() {
             self.queue.request(
                 &*pool,
                 &self.world,
@@ -530,22 +737,26 @@ impl App {
                 MeshKind::Opaque,
                 Priority::Urgent,
             );
-            self.queue.request(
-                &*pool,
-                &self.world,
-                chunk,
-                Lod::Lod0,
-                MeshKind::Water,
-                Priority::Background,
-            );
+            if data.has_water() {
+                self.queue.request(
+                    &*pool,
+                    &self.world,
+                    chunk,
+                    Lod::Lod0,
+                    MeshKind::Water,
+                    Priority::Background,
+                );
+            }
         }
     }
 
     /// Recalculates every chunk's LOD and requests any missing mesh.
     ///
-    /// Only chunks with outstanding level work are visited. Generation commits,
-    /// edits, and a player chunk change feed the set; a chunk stays in it until
-    /// its light, opaque mesh, and water mesh are built.
+    /// Only chunks with outstanding level work are visited, in chunk order, and
+    /// at most [`LEVEL_WORK_BUDGET`] of main-thread time is spent per frame. A
+    /// chunk is dropped from the set while it waits for a job result; accepting
+    /// the result re-inserts it, so the set stays a queue of actionable work
+    /// rather than a set of blocked chunks.
     fn request_levels(&mut self, pool: &dyn MeshPool) {
         profiling::scope!("mesh request");
         let feet = self.player.position.floor().as_ivec3();
@@ -554,26 +765,20 @@ impl App {
             self.level_player_chunk = player_chunk;
             self.level_work
                 .extend(self.world.iter_chunks().map(|(chunk, _)| chunk));
+            self.admit_deferred_light();
         }
 
-        let work: Vec<ChunkCoord> = self.level_work.drain().collect();
-        for chunk in work {
-            if self.world.chunk(chunk).is_none() {
-                continue;
-            }
-            let mut done = true;
-            if !self.queue.light_is_current(chunk) {
-                done = false;
-                if !self.queue.light_pending(chunk) {
-                    self.queue
-                        .request_light(pool, &self.world, chunk, Priority::Background);
-                }
-            }
-            if self.queue.light_is_current(chunk) {
-                let lod = self.queue.desired_lod(chunk, player_chunk);
-                if !self.queue.is_built(chunk, lod, MeshKind::Opaque) {
-                    done = false;
-                    if !self.queue.is_pending(chunk, lod, MeshKind::Opaque) {
+        let started = Instant::now();
+        while let Some(chunk) = self.level_work.pop_first() {
+            let chunk_started = Instant::now();
+            if let Some(data) = self.world.chunk(chunk) {
+                let has_water = data.has_water();
+                let mut retry = false;
+                if self.queue.light_is_current(chunk) {
+                    let lod = self.queue.desired_lod(chunk, player_chunk);
+                    if !self.queue.is_built(chunk, lod, MeshKind::Opaque)
+                        && !self.queue.is_pending(chunk, lod, MeshKind::Opaque)
+                    {
                         self.queue.request(
                             pool,
                             &self.world,
@@ -582,12 +787,13 @@ impl App {
                             MeshKind::Opaque,
                             Priority::Background,
                         );
+                        retry = !self.queue.is_pending(chunk, lod, MeshKind::Opaque);
                     }
-                }
 
-                if !self.queue.is_built(chunk, Lod::Lod0, MeshKind::Water) {
-                    done = false;
-                    if !self.queue.is_pending(chunk, Lod::Lod0, MeshKind::Water) {
+                    if has_water
+                        && !self.queue.is_built(chunk, Lod::Lod0, MeshKind::Water)
+                        && !self.queue.is_pending(chunk, Lod::Lod0, MeshKind::Water)
+                    {
                         self.queue.request(
                             pool,
                             &self.world,
@@ -596,14 +802,49 @@ impl App {
                             MeshKind::Water,
                             Priority::Background,
                         );
+                        retry = retry || !self.queue.is_pending(chunk, Lod::Lod0, MeshKind::Water);
+                    }
+                } else if !self.queue.light_pending(chunk) {
+                    if self.light_neighbourhood_stable(chunk_column(chunk)) {
+                        self.queue
+                            .request_light(pool, &self.world, chunk, Priority::Background);
+                        retry = !self.queue.light_pending(chunk);
+                    } else {
+                        self.deferred_light.insert(chunk);
                     }
                 }
+                if retry {
+                    self.level_work.insert(chunk);
+                }
             }
-            if !done {
-                self.level_work.insert(chunk);
+            let took = chunk_started.elapsed();
+            if took.as_millis() >= 2 {
+                debug!(
+                    chunk = ?chunk,
+                    ms = took.as_secs_f64() * 1000.0,
+                    "slow level request"
+                );
+            }
+            if started.elapsed() >= LEVEL_WORK_BUDGET {
+                break;
             }
         }
         self.stats.pending_jobs = self.queue.pending_len();
+    }
+
+    fn insert_generated(
+        &mut self,
+        directory: &Path,
+        chunk: ChunkCoord,
+        blocks: Chunk,
+    ) -> Result<(), SaveError> {
+        insert_generated_chunk(
+            &mut self.world,
+            directory,
+            Some(&self.saved_chunks),
+            chunk,
+            blocks,
+        )
     }
 
     fn upload_finished_meshes(&mut self, pool: &dyn MeshPool) {
@@ -615,17 +856,19 @@ impl App {
         self.stats.last_rebuild_ms = rebuild_ms;
 
         for light in lights {
+            self.level_work.insert(light.chunk);
             self.world.set_light_field(light.chunk, light.light);
         }
 
         let chunk_directory = save_directory(self.stress);
+        let had_generations = !generations.is_empty();
         for generation in generations {
             self.stats.generated_columns += 1;
             self.stats.generation_ms += generation.elapsed.as_secs_f64() * 1000.0;
             let mut loaded = true;
             for (chunk, blocks) in generation.chunks {
                 let saved = if let Some(directory) = chunk_directory {
-                    insert_generated_chunk(&mut self.world, directory, chunk, blocks)
+                    self.insert_generated(directory, chunk, blocks)
                 } else {
                     self.world.insert_chunk(chunk, blocks);
                     Ok(())
@@ -636,9 +879,22 @@ impl App {
                 }
                 self.level_work.insert(chunk);
             }
-            if loaded && let Some(streaming) = &mut self.streaming {
-                streaming.mark_loaded(generation.column);
+            if loaded {
+                if let Some(streaming) = &mut self.streaming {
+                    streaming.mark_loaded(generation.column);
+                }
+                self.invalidate_neighbour_columns(generation.column);
+                self.mark_column_ready(generation.column);
+            } else {
+                // Retry this column from a rebuilt candidate list next frame.
+                self.wanted_player = None;
             }
+        }
+        if had_generations {
+            self.admit_deferred_light();
+        }
+        for result in &results {
+            self.mark_column_ready(chunk_column(result.chunk));
         }
 
         let Some(renderer) = &mut self.renderer else {
@@ -647,29 +903,53 @@ impl App {
         let mut upload_ms = 0.0;
         for result in &results {
             let started = Instant::now();
-            match result.kind {
+            let desired = self.queue.desired(result.chunk);
+            let uploaded = match result.kind {
                 MeshKind::Opaque => {
-                    renderer.upload_chunk(result.chunk, result.lod, result.revision, &result.mesh);
+                    let uploaded = renderer.upload_chunk(
+                        result.chunk,
+                        result.lod,
+                        result.revision,
+                        &result.mesh,
+                    );
+                    if uploaded {
+                        // Prefer the mesh the level pass wants; otherwise keep the
+                        // LOD that just landed so the upload is not wasted.
+                        let target = desired
+                            .filter(|&lod| renderer.has_lod(result.chunk, lod))
+                            .unwrap_or(result.lod);
+                        renderer.select_active(result.chunk, target);
+                        forget_inactive_lods(&mut self.queue, renderer, result.chunk);
+                    }
+                    uploaded
                 }
                 MeshKind::Water => {
-                    renderer.upload_water_chunk(result.chunk, result.revision, &result.mesh);
+                    renderer.upload_water_chunk(result.chunk, result.revision, &result.mesh)
+                }
+            };
+            if uploaded {
+                self.upload_failures.remove(&result.chunk);
+                self.level_work.insert(result.chunk);
+            } else {
+                self.queue
+                    .forget_built(result.chunk, result.lod, result.kind);
+                let count = self.upload_failures.entry(result.chunk).or_insert(0);
+                *count = count.saturating_add(1);
+                let count = *count;
+                if count <= MAX_UPLOAD_RETRIES {
+                    self.level_work.insert(result.chunk);
+                } else if count == MAX_UPLOAD_RETRIES + 1 {
+                    warn!(
+                        chunk = ?result.chunk,
+                        count,
+                        "mesh upload failed repeatedly; no longer retrying"
+                    );
                 }
             }
             upload_ms += started.elapsed().as_secs_f64() * 1000.0;
         }
         self.stats.upload_ms += upload_ms;
         self.stats.last_upload_ms = upload_ms;
-    }
-
-    fn select_active_levels(&mut self) {
-        let Some(renderer) = &mut self.renderer else {
-            return;
-        };
-        for (chunk, _) in self.world.iter_chunks() {
-            if let Some(lod) = self.queue.desired(chunk) {
-                renderer.select_active(chunk, lod);
-            }
-        }
     }
 
     fn target_hit(&self) -> Option<RaycastHit> {
@@ -705,13 +985,17 @@ impl App {
         self.invalidate_chunks(&dirty);
     }
 
-    fn save_world(&self) {
+    fn save_world(&mut self) {
         let Some(directory) = &self.save_directory else {
             debug!("stress scene is not saved");
             return;
         };
         match self.world.save_chunks(directory) {
-            Ok(()) => debug!("world saved"),
+            Ok(()) => {
+                self.saved_chunks.extend(self.world.modified_chunks());
+                self.world.clear_modified();
+                debug!("world saved");
+            }
             Err(error) => error!(%error, "failed to save the world"),
         }
     }
@@ -757,6 +1041,26 @@ impl App {
         }
     }
 
+    fn move_axes(&self) -> (f32, f32) {
+        let forward = if self.auto_walk {
+            1.0
+        } else {
+            axis(
+                self.pressed.contains(&KeyCode::KeyW),
+                self.pressed.contains(&KeyCode::KeyS),
+            )
+        };
+        let right = if self.auto_strafe {
+            1.0
+        } else {
+            axis(
+                self.pressed.contains(&KeyCode::KeyD),
+                self.pressed.contains(&KeyCode::KeyA),
+            )
+        };
+        (forward, right)
+    }
+
     #[allow(clippy::cast_precision_loss)]
     fn redraw(&mut self) {
         if self.occluded {
@@ -773,14 +1077,7 @@ impl App {
             self.record_frame(elapsed);
 
             let delta_seconds = elapsed.min(MAX_FRAME_DELTA).as_secs_f32();
-            let forward_axis = axis(
-                self.pressed.contains(&KeyCode::KeyW),
-                self.pressed.contains(&KeyCode::KeyS),
-            );
-            let right_axis = axis(
-                self.pressed.contains(&KeyCode::KeyD),
-                self.pressed.contains(&KeyCode::KeyA),
-            );
+            let (forward_axis, right_axis) = self.move_axes();
             let input = PlayerInput {
                 forward: forward_axis,
                 right: right_axis,
@@ -809,20 +1106,23 @@ impl App {
             let slow2 = Instant::now();
             self.upload_finished_meshes(&*pool);
             let slow3 = Instant::now();
-            profiling::scope!("select active");
-            self.select_active_levels();
-            let slow4 = Instant::now();
-            if slow4.saturating_duration_since(slow0).as_millis() > 5 {
+            self.stats.last_stream_ms = slow1.duration_since(slow0).as_secs_f64() * 1000.0;
+            self.stats.last_levels_ms = slow2.duration_since(slow1).as_secs_f64() * 1000.0;
+            if slow3.saturating_duration_since(slow0).as_millis() > 5 {
                 let ms =
                     |a: Instant, b: Instant| b.saturating_duration_since(a).as_secs_f64() * 1000.0;
                 debug!(
                     stream = ms(slow0, slow1),
                     levels = ms(slow1, slow2),
                     upload = ms(slow2, slow3),
-                    select = ms(slow3, slow4),
+                    level_backlog = self.level_work.len(),
                     "slow phases"
                 );
             }
+        }
+
+        if self.hierarchy {
+            self.ensure_hierarchy();
         }
 
         let overlay = self.show_overlay.then(|| {
@@ -840,19 +1140,24 @@ impl App {
             renderer.set_camera(&self.camera);
             renderer.set_sky(&self.sky.sample(), self.unlit);
             renderer.set_overlay(overlay.as_deref());
-            self.stats.totals = renderer.render(&frustum);
+            if self.horizon_cull && self.horizon_at.elapsed() >= Duration::from_millis(250) {
+                self.horizon = horizon::Horizon::build(self.camera.position(), &mut self.world);
+                self.horizon_at = Instant::now();
+            }
+            self.stats.totals = renderer.render(&frustum, &self.horizon);
         }
-        if slow_render.elapsed().as_millis() > 5 {
-            debug!(
-                render_ms = slow_render.elapsed().as_secs_f64() * 1000.0,
-                "slow render"
-            );
+        let render_ms = slow_render.elapsed().as_secs_f64() * 1000.0;
+        self.stats.last_render_ms = render_ms;
+        if render_ms > 5.0 {
+            debug!(render_ms, "slow render");
         }
 
         metrics::frame_ms(elapsed.as_secs_f64() * 1000.0);
         metrics::visible_chunks(f64::from(self.stats.totals.visible_chunks));
         metrics::draw_calls(f64::from(self.stats.totals.draw_calls));
         metrics::visible_vertices(self.stats.totals.visible_vertices as f64);
+        metrics::geometry_bytes(self.stats.totals.geometry_bytes as f64);
+        metrics::visible_geometry_bytes(self.stats.totals.visible_bytes as f64);
         metrics::rebuild_ms(self.stats.last_rebuild_ms);
         metrics::upload_ms(self.stats.last_upload_ms);
         metrics::mesh_jobs(self.stats.pending_jobs as f64);
@@ -865,6 +1170,7 @@ impl App {
         }
     }
 
+    #[allow(clippy::cast_precision_loss)]
     fn record_frame(&mut self, delta: Duration) {
         self.frame_accum += delta;
         self.frame_count += 1;
@@ -878,8 +1184,18 @@ impl App {
                 total_chunks = self.stats.totals.total_chunks,
                 visible_vertices = self.stats.totals.visible_vertices,
                 draw_calls = self.stats.totals.draw_calls,
+                geometry_mb = self.stats.totals.geometry_bytes as f64 / (1024.0 * 1024.0),
+                visible_geometry_mb = self.stats.totals.visible_bytes as f64 / (1024.0 * 1024.0),
+                allocated_geometry_mb =
+                    self.stats.totals.allocated_bytes as f64 / (1024.0 * 1024.0),
+                peak_geometry_mb =
+                    self.stats.totals.peak_allocated_bytes as f64 / (1024.0 * 1024.0),
                 rebuild_ms = self.stats.rebuild_ms,
                 upload_ms = self.stats.upload_ms,
+                stream_ms = self.stats.last_stream_ms,
+                levels_ms = self.stats.last_levels_ms,
+                render_ms = self.stats.last_render_ms,
+                gpu_ms = self.stats.totals.gpu_ms,
                 generated_columns = self.stats.generated_columns,
                 generation_ms = self.stats.generation_ms,
                 player = ?self.player.position,
@@ -972,11 +1288,155 @@ impl App {
     #[allow(clippy::cast_precision_loss)]
     fn apply_render_distance(&mut self) {
         let distance = self.config.render_distance_chunks as f32 * 32.0;
-        self.camera.set_far_plane(distance + 64.0);
-        self.camera.set_fog_end(distance);
+        if self.hierarchy {
+            self.camera.set_far_plane(9_216.0);
+            self.camera.set_fog_end(9_200.0);
+        } else {
+            self.camera.set_far_plane(distance + 64.0);
+            self.camera.set_fog_end(distance);
+        }
     }
 
-    /// Whether all four chunks of a column are lit and meshed.
+    /// Selects, generates, and uploads hierarchy sections, one per frame.
+    ///
+    /// The recursive parent-retained target is rebuilt when the player crosses
+    /// a 64 m cell or a readiness change can swap a node for its in-world
+    /// children. Uploads outside the target (plus a margin) are evicted, except
+    /// for ancestor fallbacks and parents whose children are still building.
+    #[allow(clippy::cast_possible_truncation)]
+    fn ensure_hierarchy(&mut self) {
+        if !self.hierarchy {
+            return;
+        }
+        let Some(seed) = self.seed else {
+            return;
+        };
+
+        let cell = IVec2::new(
+            (self.player.position.x.floor() as i32).div_euclid(64),
+            (self.player.position.z.floor() as i32).div_euclid(64),
+        );
+        let due = self.hierarchy_cell != Some(cell)
+            || self.hierarchy_at.elapsed() >= Duration::from_millis(250);
+        if due {
+            self.hierarchy_cell = Some(cell);
+            self.hierarchy_at = Instant::now();
+            if self.sections.update(
+                self.player.position,
+                self.detail_chunks,
+                DEFAULT_PIXELS_PER_RADIAN,
+            ) {
+                self.section_cursor = 0;
+                self.evict_sections();
+                if let Some(renderer) = &mut self.renderer {
+                    renderer.set_section_visibility(self.sections.target());
+                }
+                debug!(
+                    target = self.sections.target().len(),
+                    queue = self.sections.queue().len(),
+                    detail = self.detail_chunks,
+                    "hierarchy target"
+                );
+            }
+        }
+
+        if self.renderer.is_none() {
+            return;
+        }
+        let mut built = 0;
+        while built < MAX_SECTION_BUILDS_PER_FRAME {
+            let Some(key) = self.sections.next_build(&mut self.section_cursor) else {
+                break;
+            };
+            self.sections.mark_building(key);
+
+            // Build the overlay, the light, and the meshes before borrowing
+            // the renderer, so the world and renderer are never borrowed
+            // mutably at the same time.
+            let edits =
+                self.world
+                    .section_edits(key, self.save_directory.as_deref(), &self.saved_chunks);
+            let section = {
+                let generator = self
+                    .hierarchy_generator
+                    .get_or_insert_with(|| Generator::new(seed));
+                generate_section(generator, key, &edits)
+            };
+            let ready = if section.is_empty() {
+                true
+            } else {
+                let light = section.light();
+                let opaque = section.mesh(Some(&light));
+                let water = section.water_mesh(Some(&light));
+                if opaque.quads.is_empty() && water.quads.is_empty() {
+                    true
+                } else {
+                    let renderer = self
+                        .renderer
+                        .as_mut()
+                        .expect("the renderer was checked before the build loop");
+                    let mut uploaded = true;
+                    if !opaque.quads.is_empty() {
+                        uploaded = renderer.upload_section(key, &opaque);
+                    }
+                    if uploaded && !water.quads.is_empty() {
+                        uploaded = renderer.upload_section_water(key, &water);
+                    }
+                    if uploaded {
+                        self.sections_uploaded.insert(key);
+                    }
+                    uploaded
+                }
+            };
+            if ready {
+                self.sections.mark_ready(key);
+                built += 1;
+                if self.sections_uploaded.len().is_multiple_of(100) {
+                    debug!(
+                        sections = self.sections_uploaded.len(),
+                        cursor = self.section_cursor,
+                        "hierarchy progress"
+                    );
+                }
+            } else {
+                // The renderer ran out of quad pages or slots; retry this
+                // section next frame instead of skipping it. A dirty section
+                // never touched the queue cursor, so re-marking is the only
+                // safe retry. Far rings can hit this first when they exhaust
+                // the unchanged pool.
+                debug!(
+                    ?key,
+                    uploaded = self.sections_uploaded.len(),
+                    "section upload deferred: pool or slot limit"
+                );
+                self.sections_uploaded.remove(&key);
+                self.sections.mark_dirty([key]);
+                break;
+            }
+        }
+    }
+
+    /// Removes uploaded sections that the current target no longer needs.
+    fn evict_sections(&mut self) {
+        let stale = self.sections.evictions(
+            &self.sections_uploaded,
+            self.player.position,
+            self.detail_chunks,
+        );
+        if stale.is_empty() {
+            return;
+        }
+        if let Some(renderer) = &mut self.renderer {
+            for key in &stale {
+                renderer.remove_section(*key);
+            }
+        }
+        for key in &stale {
+            self.sections_uploaded.remove(key);
+            self.sections.forget(*key);
+        }
+    }
+
     /// Whether all four chunks of a column are lit and meshed.
     ///
     /// A chunk with no stored blocks is empty air and needs no light or mesh.
@@ -991,56 +1451,96 @@ impl App {
         })
     }
 
-    /// Marks ready columns, unloads distant ones, and requests the nearest missing.
+    /// Marks a column ready once its last chunk is lit and meshed.
+    fn mark_column_ready(&mut self, column: IVec2) {
+        if self.column_ready(column)
+            && let Some(streaming) = &mut self.streaming
+        {
+            streaming.mark_ready(column);
+        }
+    }
+
+    /// Unloads distant columns and requests the nearest missing ones.
+    ///
+    /// Both the wanted and unloadable lists are rebuilt only when the player
+    /// crosses a column, so a settled frame does not rescan the world.
     fn stream_columns(&mut self, pool: &dyn MeshPool) {
         let Some(seed) = self.seed else {
             return;
         };
         let player_column = Streaming::column_at(self.player.position);
 
-        let unloadable = self
-            .streaming
-            .as_ref()
-            .map(|streaming| streaming.unloadable(player_column))
-            .unwrap_or_default();
-        for column in unloadable {
-            self.unload_column(column);
+        if self.wanted_player != Some(player_column) {
+            let forward = self.camera.forward();
+            let forward = Vec2::new(forward.x, forward.z).normalize_or_zero();
+            let (wanted, unload) = self
+                .streaming
+                .as_ref()
+                .map(|streaming| {
+                    (
+                        streaming.wanted(self.player.position, forward),
+                        streaming.unloadable(player_column),
+                    )
+                })
+                .unwrap_or_default();
+            self.wanted_columns = wanted;
+            self.unload_columns = unload;
+            self.wanted_cursor = 0;
+            self.wanted_player = Some(player_column);
         }
 
-        let loaded: Vec<IVec2> = self
-            .streaming
-            .as_ref()
-            .map(|streaming| streaming.loaded().collect())
-            .unwrap_or_default();
-        for column in loaded {
-            if self.column_ready(column)
-                && let Some(streaming) = &mut self.streaming
-            {
-                streaming.mark_ready(column);
+        let mut failed_unload = false;
+        for column in std::mem::take(&mut self.unload_columns) {
+            if !self.unload_column(column) {
+                self.unload_columns.push(column);
+                failed_unload = true;
             }
         }
+        if failed_unload {
+            // Rebuild both lists next frame and retry the save.
+            self.wanted_player = None;
+        }
 
-        let forward = self.camera.forward();
-        let forward = Vec2::new(forward.x, forward.z).normalize_or_zero();
-        let wanted = self
-            .streaming
-            .as_ref()
-            .map(|streaming| streaming.wanted(self.player.position, forward))
-            .unwrap_or_default();
-        for column in wanted.into_iter().take(MAX_COLUMNS_PER_FRAME) {
+        let mut requested = 0;
+        while requested < MAX_COLUMNS_PER_FRAME && self.wanted_cursor < self.wanted_columns.len() {
+            let column = self.wanted_columns[self.wanted_cursor];
+            self.wanted_cursor += 1;
+            let loaded = self
+                .streaming
+                .as_ref()
+                .is_some_and(|streaming| streaming.is_loaded(column));
+            if loaded || self.queue.generation_pending(column) {
+                continue;
+            }
             self.queue
                 .request_generation(pool, seed, column, Priority::Background);
+            if self.queue.generation_pending(column) {
+                requested += 1;
+            } else {
+                // The pool is behind; keep this candidate for the next frame.
+                self.wanted_cursor -= 1;
+                break;
+            }
         }
     }
 
     /// Saves and drops one column that left the unload margin.
-    fn unload_column(&mut self, column: IVec2) {
-        let Some(directory) = &self.save_directory else {
-            return;
+    ///
+    /// Returns whether the column was released.
+    fn unload_column(&mut self, column: IVec2) -> bool {
+        let Some(directory) = self.save_directory.clone() else {
+            return false;
         };
-        if let Err(error) = release_column(&mut self.world, &mut self.queue, directory, column) {
+        self.invalidate_neighbour_columns(column);
+        if let Err(error) = release_column(
+            &mut self.world,
+            &mut self.queue,
+            &directory,
+            &mut self.saved_chunks,
+            column,
+        ) {
             error!(%error, ?column, "failed to save an unloaded chunk");
-            return;
+            return false;
         }
         if let Some(renderer) = &mut self.renderer {
             for y in 0..CHUNK_COLUMN {
@@ -1048,13 +1548,16 @@ impl App {
             }
         }
         for y in 0..CHUNK_COLUMN {
-            self.level_work
-                .remove(&ChunkCoord::new(column.x, y, column.y));
+            let chunk = ChunkCoord::new(column.x, y, column.y);
+            self.level_work.remove(&chunk);
+            self.deferred_light.remove(&chunk);
+            self.upload_failures.remove(&chunk);
         }
         if let Some(streaming) = &mut self.streaming {
             streaming.mark_unloaded(column);
         }
         debug!(?column, "unloaded column");
+        true
     }
 
     fn set_spawn(&mut self, position: Vec3) {
@@ -1220,6 +1723,29 @@ fn hotbar_block(code: KeyCode) -> Option<Block> {
     Block::from_hotbar(slot)
 }
 
+/// Every LOD that is not `active`; all three when nothing is active.
+fn inactive_lods(active: Option<Lod>) -> Vec<Lod> {
+    [Lod::Lod0, Lod::Lod1, Lod::Lod2]
+        .into_iter()
+        .filter(|lod| Some(*lod) != active)
+        .collect()
+}
+
+/// Drops `built` entries for the LODs a selection just pruned.
+///
+/// `built` then means "resident and active": when the desired LOD changes back,
+/// [`App::request_levels`] sees the missing entry and requests it again. An
+/// empty upload has no resident LOD, so its `built` entry is kept; forgetting it
+/// would make the level pass request the same empty mesh forever.
+fn forget_inactive_lods(queue: &mut MeshQueue, renderer: &Renderer, chunk: ChunkCoord) {
+    let Some(active) = renderer.active_lod(chunk) else {
+        return;
+    };
+    for lod in inactive_lods(Some(active)) {
+        queue.forget_built(chunk, lod, MeshKind::Opaque);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -1286,6 +1812,94 @@ mod tests {
                 .aabb()
                 .intersects_block(IVec3::new(SPAWN_X, 1, SPAWN_Z))
         );
+    }
+
+    #[test]
+    fn spawn_height_ignores_water() {
+        let mut world = World::default();
+        world.set_block(IVec3::new(SPAWN_X, 0, SPAWN_Z), Block::Stone);
+        world.set_block(IVec3::new(SPAWN_X, 1, SPAWN_Z), Block::Water);
+        world.set_block(IVec3::new(SPAWN_X, 2, SPAWN_Z), Block::Water);
+
+        let spawn = spawn_position(&world);
+
+        assert_eq!(spawn.y, 1.5, "spawns on the solid ground, not the surface");
+    }
+
+    #[test]
+    fn invalidating_a_column_marks_its_stored_neighbours() {
+        let mut app = App::with_world(World::default(), false);
+        let neighbour = ChunkCoord::new(0, 0, 0);
+        app.world.set_block(IVec3::new(0, 0, 0), Block::Stone);
+        app.level_work.clear();
+        let revision = app.queue.revision(neighbour);
+
+        app.invalidate_neighbour_columns(IVec2::new(1, 0));
+
+        assert_eq!(app.queue.revision(neighbour), revision + 1);
+        assert!(app.level_work.contains(&neighbour));
+    }
+
+    #[test]
+    fn light_waits_for_a_streaming_neighbour_and_is_admitted_later() {
+        let mut app = App::with_world(World::default(), false);
+        let chunk = ChunkCoord::new(0, 0, 0);
+        app.world.set_block(IVec3::new(0, 0, 0), Block::Stone);
+        app.player = Player::new(Vec3::new(16.5, 0.0, 16.5));
+        app.camera.set_position(app.player.eye_position());
+
+        let mut streaming = Streaming::new(2);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                if (dx, dz) != (0, 0) && (dx, dz) != (1, 0) {
+                    streaming.mark_loaded(IVec2::new(dx, dz));
+                }
+            }
+        }
+        app.streaming = Some(streaming);
+        app.level_work.clear();
+        app.deferred_light.insert(chunk);
+
+        app.admit_deferred_light();
+
+        assert!(app.deferred_light.contains(&chunk));
+        assert!(!app.level_work.contains(&chunk));
+
+        app.streaming
+            .as_mut()
+            .expect("streaming")
+            .mark_loaded(IVec2::new(1, 0));
+        app.admit_deferred_light();
+
+        assert!(!app.deferred_light.contains(&chunk));
+        assert!(app.level_work.contains(&chunk));
+    }
+
+    #[test]
+    fn light_treats_columns_outside_the_render_distance_as_final() {
+        let mut app = App::with_world(World::default(), false);
+        app.player = Player::new(Vec3::new(16.5, 0.0, 16.5));
+        app.camera.set_position(app.player.eye_position());
+
+        let mut streaming = Streaming::new(1);
+        for column in [
+            IVec2::new(-2, -1),
+            IVec2::new(-2, 1),
+            IVec2::new(-1, -1),
+            IVec2::new(-1, 0),
+            IVec2::new(-1, 1),
+            IVec2::new(0, -1),
+            IVec2::new(0, 0),
+            IVec2::new(0, 1),
+        ] {
+            streaming.mark_loaded(column);
+        }
+        app.streaming = Some(streaming);
+
+        // (1, 0) is inside the render distance and still streaming in.
+        assert!(!app.light_neighbourhood_stable(IVec2::new(0, 0)));
+        // (-2, 0) is outside the render distance, so it will never arrive.
+        assert!(app.light_neighbourhood_stable(IVec2::new(-1, 0)));
     }
 
     #[derive(Debug, Default)]
@@ -1367,6 +1981,36 @@ mod tests {
 
         assert_eq!(app.world.block(target), Block::Air);
         assert!(!app.queue.light_is_current(chunk));
+    }
+
+    #[test]
+    fn invalidating_a_block_marks_the_overlapping_sections_dirty() {
+        let mut app = App::with_world(World::default(), false);
+        let world_position = IVec3::new(1, 127, 1);
+        let chunk = ChunkCoord::from_world(world_position).0;
+        let keys = overlapping_sections_for_chunk(chunk);
+        let levels: HashSet<u8> = keys.iter().map(|key| key.level).collect();
+        assert_eq!(levels, HashSet::from([1, 2, 3, 4]));
+        for key in &keys {
+            app.sections.mark_ready(*key);
+            app.sections_uploaded.insert(*key);
+        }
+
+        let dirty = app.world.set_block(world_position, Block::Stone);
+        app.invalidate_chunks(&dirty);
+
+        assert!(dirty.contains(&chunk));
+        for key in &keys {
+            assert_eq!(
+                app.sections.state(*key),
+                hierarchy::Readiness::Requested,
+                "{key:?} stayed ready"
+            );
+            assert!(
+                !app.sections_uploaded.contains(key),
+                "{key:?} is still drawable"
+            );
+        }
     }
 
     #[test]
@@ -1452,13 +2096,56 @@ mod tests {
         let mut world = World::default();
         world.set_block(coordinate, Block::Stone);
         let mut queue = MeshQueue::default();
+        let mut saved_chunks = HashSet::new();
 
-        release_column(&mut world, &mut queue, &directory, IVec2::ZERO).unwrap();
+        release_column(
+            &mut world,
+            &mut queue,
+            &directory,
+            &mut saved_chunks,
+            IVec2::ZERO,
+        )
+        .unwrap();
 
         assert!(world.chunk(chunk).is_none());
         let saved = World::load_saved_chunk(&directory, chunk).unwrap().unwrap();
         assert_eq!(saved.block(coordinate), Block::Stone);
+        assert!(saved_chunks.contains(&chunk));
         assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn saving_the_world_records_the_written_chunks() {
+        let directory = temp_directory("save-index");
+        let chunk = ChunkCoord::new(0, 0, 0);
+        let coordinate = IVec3::new(1, 0, 1);
+        let mut app = App::with_world(World::default(), false);
+        app.save_directory = Some(directory.clone());
+        app.world.set_block(coordinate, Block::Stone);
+
+        app.save_world();
+
+        assert!(app.saved_chunks.contains(&chunk));
+        let saved = World::load_saved_chunk(&directory, chunk).unwrap().unwrap();
+        assert_eq!(saved.block(coordinate), Block::Stone);
+        assert!(!app.world.is_modified(chunk));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn saving_the_world_clears_the_modified_markers() {
+        let directory = temp_directory("save-clears");
+        let mut app = App::with_world(World::default(), false);
+        app.save_directory = Some(directory.clone());
+        let chunk = ChunkCoord::new(0, 0, 0);
+        app.world.set_block(IVec3::new(5, 0, 5), Block::Stone);
+        assert!(app.world.is_modified(chunk));
+
+        app.save_world();
+
+        assert!(!app.world.is_modified(chunk));
+        assert!(directory.join("chunk_0_0_0.vchk").exists());
         fs::remove_dir_all(directory).unwrap();
     }
 
@@ -1493,10 +2180,10 @@ mod tests {
         generated.set_block(coordinate, Block::Grass);
 
         let mut world = World::default();
-        insert_generated_chunk(&mut world, &directory, chunk, generated).unwrap();
+        insert_generated_chunk(&mut world, &directory, None, chunk, generated).unwrap();
 
         assert_eq!(world.block(coordinate), Block::Stone);
-        assert!(world.is_modified(chunk));
+        assert!(!world.is_modified(chunk));
         fs::remove_dir_all(directory).unwrap();
     }
 
@@ -1514,11 +2201,47 @@ mod tests {
         generated.set_block(coordinate, Block::Grass);
 
         let mut world = World::default();
-        insert_generated_chunk(&mut world, &directory, chunk, generated).unwrap();
+        insert_generated_chunk(&mut world, &directory, None, chunk, generated).unwrap();
 
         assert_eq!(world.block(coordinate), Block::Air);
         assert!(world.chunk(chunk).is_none());
-        assert!(world.is_modified(chunk));
+        assert!(!world.is_modified(chunk));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn generated_chunks_use_the_saved_file_only_when_the_index_lists_it() {
+        let directory = temp_directory("generated-index");
+        let chunk = ChunkCoord::new(0, 0, 0);
+        let coordinate = IVec3::new(1, 0, 1);
+        let mut saved = World::default();
+        saved.set_block(coordinate, Block::Wood);
+        saved.save_chunks(&directory).unwrap();
+        let index = World::saved_chunk_index(&directory).unwrap();
+
+        let mut generated = Chunk::default();
+        generated.set_block(coordinate, Block::Stone);
+        let mut world = World::default();
+        insert_generated_chunk(
+            &mut world,
+            &directory,
+            Some(&index),
+            chunk,
+            generated.clone(),
+        )
+        .unwrap();
+        assert_eq!(world.block(coordinate), Block::Wood);
+
+        let mut world = World::default();
+        insert_generated_chunk(
+            &mut world,
+            &directory,
+            Some(&HashSet::new()),
+            chunk,
+            generated,
+        )
+        .unwrap();
+        assert_eq!(world.block(coordinate), Block::Stone);
         fs::remove_dir_all(directory).unwrap();
     }
 
@@ -1540,7 +2263,7 @@ mod tests {
         let setup = generated_setup(seed, 8, &directory).unwrap();
 
         assert_eq!(setup.world.block(coordinate), Block::Wood);
-        assert!(setup.world.is_modified(chunk));
+        assert!(!setup.world.is_modified(chunk));
         assert_eq!(setup.seed, Some(seed));
         assert!(setup.streaming.is_some());
         fs::remove_dir_all(directory).unwrap();
@@ -1555,6 +2278,19 @@ mod tests {
 
         assert_eq!(app.camera.far_plane(), 448.0);
         assert_eq!(app.camera.fog_end(), 384.0);
+    }
+
+    #[test]
+    fn the_hierarchy_render_distance_covers_eight_kilometres() {
+        let mut app = App::new(demo_world());
+        app.hierarchy = true;
+        app.config.render_distance_chunks = 12;
+
+        app.apply_render_distance();
+
+        assert_eq!(app.camera.far_plane(), 9_216.0);
+        assert_eq!(app.camera.fog_end(), 9_200.0);
+        assert!(app.camera.fog_end() > 8_192.0);
     }
 
     #[test]
@@ -1583,6 +2319,56 @@ mod tests {
             elapsed: Duration::ZERO,
         }));
         assert!(app.column_ready(IVec2::ZERO));
+    }
+
+    #[test]
+    fn inactive_lods_exclude_only_the_active_level() {
+        assert_eq!(inactive_lods(Some(Lod::Lod0)), vec![Lod::Lod1, Lod::Lod2]);
+        assert_eq!(inactive_lods(Some(Lod::Lod1)), vec![Lod::Lod0, Lod::Lod2]);
+        assert_eq!(inactive_lods(Some(Lod::Lod2)), vec![Lod::Lod0, Lod::Lod1]);
+        assert_eq!(inactive_lods(None), vec![Lod::Lod0, Lod::Lod1, Lod::Lod2]);
+    }
+
+    #[test]
+    fn a_pruned_lod_is_requested_again_when_it_is_desired() {
+        let mut app = App::with_world(World::default(), false);
+        let target = ChunkCoord::new(0, 0, 0);
+        app.world.set_block(IVec3::new(0, 0, 0), Block::Stone);
+        app.queue.mark_light_built(target);
+        let pool = Arc::new(InlinePool::default());
+        for lod in [Lod::Lod0, Lod::Lod1] {
+            app.queue.request(
+                &*pool,
+                &app.world,
+                target,
+                lod,
+                MeshKind::Opaque,
+                Priority::Background,
+            );
+            let revision = app.queue.revision(target);
+            assert!(app.queue.accept(&MeshResult {
+                chunk: target,
+                lod,
+                kind: MeshKind::Opaque,
+                revision,
+                mesh: mesh::MeshData::default(),
+                elapsed: Duration::ZERO,
+            }));
+        }
+        assert!(app.queue.is_built(target, Lod::Lod0, MeshKind::Opaque));
+        assert!(app.queue.is_built(target, Lod::Lod1, MeshKind::Opaque));
+
+        // Lod1 becomes active, so the selection prunes Lod0 and its built entry.
+        for lod in inactive_lods(Some(Lod::Lod1)) {
+            app.queue.forget_built(target, lod, MeshKind::Opaque);
+        }
+        assert!(!app.queue.is_built(target, Lod::Lod0, MeshKind::Opaque));
+        assert!(app.queue.is_built(target, Lod::Lod1, MeshKind::Opaque));
+
+        // Walking back near makes Lod0 desired again; the level pass must ask.
+        app.level_work.insert(target);
+        app.request_levels(&*pool);
+        assert!(app.queue.is_pending(target, Lod::Lod0, MeshKind::Opaque));
     }
 
     #[test]

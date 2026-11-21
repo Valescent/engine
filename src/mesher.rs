@@ -302,11 +302,12 @@ impl MeshQueue {
     pub(crate) fn invalidate(&mut self, dirty: &DirtyChunks) {
         for chunk in dirty {
             *self.revisions.entry(*chunk).or_insert(0) += 1;
-            self.pending.retain(|(pending, _, _), _| pending != chunk);
-            self.built.retain(|(built, _, _), _| built != chunk);
             self.light_pending.remove(chunk);
             self.light_built.remove(chunk);
         }
+        self.pending
+            .retain(|(chunk, _, _), _| !dirty.contains(chunk));
+        self.built.retain(|(chunk, _, _), _| !dirty.contains(chunk));
     }
 
     /// Forgets the pending work for a chunk that left the world.
@@ -421,6 +422,11 @@ impl MeshQueue {
         self.gen_pending.len()
     }
 
+    /// Returns whether generation is queued or running for the column.
+    pub(crate) fn generation_pending(&self, column: IVec2) -> bool {
+        self.gen_pending.contains(&column)
+    }
+
     /// Returns whether a light job is queued or running for the chunk.
     pub(crate) fn light_pending(&self, chunk: ChunkCoord) -> bool {
         self.light_pending.contains_key(&chunk)
@@ -456,6 +462,11 @@ impl MeshQueue {
         self.pending.remove(&key);
         self.built.insert(key, result.revision);
         true
+    }
+
+    /// Forgets a built mesh so the level pass requests it again.
+    pub(crate) fn forget_built(&mut self, chunk: ChunkCoord, lod: Lod, kind: MeshKind) {
+        self.built.remove(&(chunk, lod, kind));
     }
 
     /// Returns whether a mesh for this chunk, LOD, and kind is current.

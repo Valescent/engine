@@ -12,6 +12,7 @@ Milestones move from **planned** to **in progress** to **shipped**. Each one nam
 | 0.0.6   | Atmosphere            | Shipped  |
 | 0.0.7   | Advanced Horizons     | Shipped  |
 | 0.0.8   | Scale                 | In progress |
+| 0.0.9   | Far View              | In progress |
 
 ## v0.0.1: The Foundation
 
@@ -249,7 +250,7 @@ See [v0.0.7 scope](dev/v0.0.7-scope.md) for the concrete deliverables, technical
 
 ## v0.0.8: Scale
 
-**Status:** In progress - implementation and acceptance complete; release pending.
+**Status:** In progress - implementation and acceptance complete; release PR open.
 
 **Goal:** Hold the frame budget and resident memory as the render distance grows.
 
@@ -278,4 +279,64 @@ See [v0.0.8 scope](dev/v0.0.8-scope.md) for the deliverables and the
 ### Non-Goals
 - Gameplay, inventory, and survival systems
 - SVDAG and raymarching; both remain deferred
+- Save-format changes
+
+## v0.0.9: Far View
+
+**Status:** In progress - implementation and acceptance complete; release PR open.
+
+**Goal:** Hold resident memory, VRAM, and frame cost roughly flat while the visible distance grows to kilometres.
+
+**Summary:** Detail falls off with distance instead of the whole world staying resident at full resolution.
+
+See [v0.0.9 scope](dev/v0.0.9-scope.md) for the deliverables and acceptance criteria, and
+[GPU-driven meshing research](dev/research/gpu-driven-meshing.md) for the analysis behind them.
+
+### Milestones
+
+#### 1. Storage and geometry
+- [x] Four-bit in-memory block storage; `VCHK` unchanged
+- [x] Sparse light storage: the block-light plane is stored only when a lamp is in range
+- [x] Chunk tops for horizon culling
+- [x] Quad pool with storage-buffer chunk info, vertex pulling, and two indirect draws
+- [x] 12-byte quad records, four-vertex indexed draws, GPU timestamp timing, dense slots, and the pool high-water metric
+- [x] Current per-chunk path retained as the fallback
+
+#### 2. Streaming and CPU hardening
+- [x] Deferred neighbour light, cached streaming candidates and readiness, and a saved-chunk index
+- [x] Mesher corner gather, light-job merge, and `Arc` chunk storage
+- [x] Headless settle of 11.7-14 s at distance 32
+
+#### 3. Distance
+- [x] Horizon culling from column tops, on by default with `ENGINE_HORIZON_CULL=0` to disable it
+- [x] Minimum-column occluders, tree exclusion, and in-engine BMP captures
+- [x] Hierarchy levels 1-2: 64/128 m sections, sample-space meshing, parent retention, hidden ready children, and coarse water
+- [x] Hierarchy levels 3-4: recursive projected refinement and parent retention, 256/512 m sections, BFS coarse light, and edit invalidation
+- [x] Projected refinement and parent retention for the far levels
+
+#### 4. Metrics
+- [x] Distance-32 target: settled frame around 0.6 ms, 39.31 MiB geometry reservation, 2 draws; geometry target met
+- [x] 2 km gate: 0.466 ms frame, 0.235 ms GPU, 3.58 M vertices, 2 draws, 30.94 MB allocated
+- [x] 8 km gate: 0.908 ms frame, 0.780 ms GPU, 9.40 M vertices, 1,908 visible nodes, 2 draws, 74.62 MB allocated, 94.24 MB reservation
+- [x] 325 tests pass (ignored benchmarks run separately); fmt, clippy, doc, typos, and mdbook pass
+
+#### 5. Acceptance and release
+- [ ] Manual definition-of-done run
+- [ ] `Cargo.toml` version bump, release split, changelog, and tag
+- [ ] Pull request
+
+### Definition of Done
+- 60 FPS at distance 32 with a working set at or below 350 MB and geometry VRAM at or below 40 MB
+- 60 FPS at a 2 km view at or below 400 MB, and at an 8 km view at or below 500 MB
+- Draw calls at or below 10 at distance 32 and at or below 20 at a 2 km view
+- Main-thread frame time at or below 4 ms at distance 32, with no frame above 33 ms once ready
+- Headless counts unchanged for the same world, proving storage packing is not a content change
+
+**Measured:** the distance-32, 2 km, and 8 km gates are recorded above. The manual run, release
+decision, and version bump remain.
+
+### Non-Goals
+- The compute mesher, GPU-resident voxel and light pools, and readback-driven allocation
+- Hi-Z, GPU traversal, and the voxel visibility graph
+- Shadows, sub-voxels, and console backends
 - Save-format changes

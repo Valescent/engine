@@ -33,6 +33,14 @@ mod imp {
         plot(plot_name!("visible_vertices"), value);
     }
 
+    pub(crate) fn geometry_bytes(value: f64) {
+        plot(plot_name!("geometry_bytes"), value);
+    }
+
+    pub(crate) fn visible_geometry_bytes(value: f64) {
+        plot(plot_name!("visible_geometry_bytes"), value);
+    }
+
     pub(crate) fn rebuild_ms(value: f64) {
         plot(plot_name!("rebuild_ms"), value);
     }
@@ -68,6 +76,8 @@ mod imp {
         visible_chunks,
         draw_calls,
         visible_vertices,
+        geometry_bytes,
+        visible_geometry_bytes,
         rebuild_ms,
         upload_ms,
         mesh_jobs,

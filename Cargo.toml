@@ -1,6 +1,6 @@
 [package]
 name = "engine"
-version = "0.0.7"
+version = "0.0.9"
 edition = "2024"
 rust-version = "1.99.1"
 description = "A voxel engine written in Rust."
@@ -21,7 +21,7 @@ tracy-client-sys = { version = "=0.28.0", optional = true, default-features = fa
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 wgpu = "30"
-wgpu-profiler = { version = "=0.28.0", optional = true, features = ["tracy"] }
+wgpu-profiler = { version = "=0.28.0" }
 winit = { version = "0.30", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
 fastnoise-lite = "1.1.1"
 
@@ -30,7 +30,7 @@ tracy = [
     "profiling/profile-with-tracy",
     "dep:tracy-client",
     "dep:tracy-client-sys",
-    "dep:wgpu-profiler",
+    "wgpu-profiler/tracy",
 ]
 rayon-pool = ["dep:rayon"]
 

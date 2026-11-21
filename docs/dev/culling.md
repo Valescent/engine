@@ -9,7 +9,7 @@ nearby options, and the order they are worth building.
 | Backface culling | Current (v0.0.8) |
 | Distance LOD (LOD0/1/2) | Current (v0.0.8) |
 | Hierarchical frustum culling | Proposed |
-| Horizon (heightmap) culling | Proposed |
+| Horizon (heightmap) culling | Implemented behind a flag (v0.0.9) |
 | Software (raster-based) occlusion | Proposed |
 | Voxel visibility graph (cave flood fill) | Proposed |
 | GPU occlusion queries or a depth pyramid | Proposed |
@@ -103,7 +103,9 @@ origin (or an origin index in a storage buffer), and `multi_draw_indirect` with 
 per batch. That removes the per-chunk bind group and vertex-buffer rebinds that dominate the CPU
 side of 1,900 draws. wgpu 30 exposes `multi_draw_indexed_indirect` and the
 `MULTI_DRAW_INDIRECT_COUNT` feature; support varies by backend and Metal may emulate the call, so
-verify on the target backend and keep a single-draw fallback.
+verify on the target backend and keep a single-draw fallback. The full pipeline that follows from
+this, including vertex pulling and a shared quad pool, is evaluated in
+[GPU-driven meshing](research/gpu-driven-meshing.md).
 
 ## Other techniques
 
