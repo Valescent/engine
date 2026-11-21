@@ -239,7 +239,7 @@ with a real counterexample, **1** ad hoc, **0** absent or opposite.
 |---:|---|---|---:|---|
 | 1 | Headless crate boundary | `terrain-core` normal deps exclude `winit`, `wgpu`, `tracy-client`, `wgpu-profiler` | 4 | `cargo tree -p terrain-core -e normal` resolves only `fastnoise-lite` and `thiserror`; the CI `Crate graph` step fails on a window, GPU, or profiler leak ([testing](../dev/testing.md)). |
 | 2 | Dependency direction inside `terrain-core` | A stage never imports `pipeline`, `save`, or `world_save`; only `pipeline` imports all stages | 3 | The `use crate::` edges are clean: `pipeline` names every stage, and no stage names `pipeline`, `save`, or `world_save` outside a test module. There is still no edge checker, so the rule rests on review. |
-| 3 | Cycle freedom | The module graph has no back edge | 2 | `v0::light <-> v0::mesh` remains (`ChunkSnapshot` still in `v0/mesh.rs`). The root/headless cycle is gone; `content -> section` and `app -> startup` were broken by moving `BlockId` to `content` and the world helpers to `src/world_io.rs` (§3.1). |
+| 3 | Cycle freedom | The module graph has no back edge | 4 | The measured `use crate::` graph is acyclic: `v0::light -> v0::world`, `v0::mesh -> v0::light, v0::world`, and `v0::world` names no v0 sibling. `ChunkSnapshot` and `LightField` now live in `v0/world.rs`; the earlier `v0::light <-> v0::mesh` and `v0::world <-> v0::light` pairs are one-way (§3.1). |
 | 4 | Public surface | `pub` only at a crate boundary; `pub(crate)` inside | 3 | `terrain-core`: 325 reachable public items, down from 889, against 712 `pub(crate)` declarations; `tests/visibility.rs`, three `compile_fail` doctests, and the strict rustdoc CI gate guard it. `engine`: 6 public items and 8 public modules, including the transitional `v0` re-exports. |
 | 5 | Module depth and ownership | One module owns each state; callers use an interface smaller than the body | 3 | `src/lib.rs` is 75 lines with no function body; `pipeline` hides every stage behind 22 public items; `DemoRuntime` owns patch, ring, save, repair, and the edit queue. `App` is down from 39 fields to 34, one of them `demo`, and keeps all 34 `pub(crate)` for the rest of the crate. |
 | 6 | File budget | No new file over 1,000 lines; exceptions listed | 4 | `scripts/size-budgets.sh` exits 0: 177 tracked files (8 `src/v0/` excluded), 0 counted files over 1,000, 30 over 600; the largest counted file is `metrics2.rs` at 991. CI runs the script as a hard gate. |
@@ -250,14 +250,14 @@ with a real counterexample, **1** ad hoc, **0** absent or opposite.
 | 11 | Change locality | A feature touches one subsystem, not the crate root | 3 | `src/lib.rs` changed in 1 of the 52 commits since the root split (`b5a0601`) and in 43 of 176 overall; all 18 `renderer.rs` co-changes predate the split. |
 | 12 | Build isolation | A renderer change does not rebuild `terrain-core` | 4 | Two crates, one direction; `terrain-core` compiles without GPU or window dependencies. |
 
-**Total: 38/48, up from 28/48.** The strong parts are the crate boundary, the build isolation, the
-file budget, the narrowed `terrain-core` surface, and change locality. The weak parts are the
-remaining cycles, the advisory function budget, the direct `winit`/`wgpu` types in `RunError`, and
-the transitional `v0` modules that are still public from `engine`.
+**Total: 40/48, up from 28/48.** The strong parts are the crate boundary, the build isolation, the
+file budget, cycle freedom, the narrowed `terrain-core` surface, and change locality. The weak parts
+are the advisory function budget, the direct `winit`/`wgpu` types in `RunError`, and the
+transitional `v0` modules that are still public from `engine`.
 
 ### 3.1 Dependency edges and cycles
 
-Measured at the `feature/break-app-cycle` tip from production `use crate::` paths (test modules and
+Measured at the `feature/last-cycle` tip from production `use crate::` paths (test modules and
 `*/tests/` files excluded):
 
 ```text
@@ -276,14 +276,15 @@ engine:
   world_io -> block, generation, mesher, streaming, world
   demo -> content, description, editlog, error, light2, lod, mesher2, padded,
           pipeline, player, residency, save, section, world_save
-  v0::light -> v0::mesh::ChunkSnapshot     # cycle: v0::light <-> v0::mesh
-  v0::mesh -> v0::light::LightField
+  v0::light -> v0::world
+  v0::mesh -> v0::light::LightField, v0::world::ChunkSnapshot
+  # v0::world is a leaf: it names no v0 sibling.
   headless -> app, mesher, streaming
   renderer -> mesher2::Quad (via the engine re-export)
 ```
 
-One of the three original cycles remains; the root/headless pair is gone, and the
-`app <-> startup` replacement plus the `section <-> content` pair have both been broken:
+All three original cycles are gone; the root/headless pair, the `app <-> startup` replacement, and
+the `section <-> content` pair have been broken:
 
 - **Crate root `<->` headless: broken.** `headless` imports `crate::app::App`; `startup` imports
   `headless` and `app`; `src/lib.rs` only declares `mod headless;`. The edge is
@@ -297,13 +298,15 @@ One of the three original cycles remains; the root/headless pair is gone, and th
   seed helpers. `startup` still imports `app::{App, RunError}` and constructs `App`; `app` imports
   `world_io`; `world_io` imports neither, so the edge is `startup -> app -> world_io` and
   `startup -> world_io`.
-- **`light <-> mesh`: remains, now under `src/v0/`.** `v0/light.rs` imports
-  `crate::mesh::ChunkSnapshot`, `v0/mesh.rs` imports `crate::light::LightField`, and
-  `ChunkSnapshot` is still defined in `v0/mesh.rs`.
+- **`light <-> mesh`: broken.** `ChunkSnapshot` now lives in `v0/world.rs` beside `Chunk`;
+  `v0/light.rs` imports it from `world`, and `mesh` re-exports it so the `mesher` and `startup`
+  paths stay stable. Only `mesh` names `light` (`mesh -> light`), never the reverse.
+- **`light <-> world`: broken.** `LightField` and its packed planes now live in `v0::world` with
+  the light cache, and `World::relight` is implemented in `v0/light.rs`. The edge is one-way
+  `light -> world`, so `world` is a leaf for v0.
 
-The one remaining cycle is a data-structure placement problem: `ChunkSnapshot` belongs with the
-chunk data in `v0::world`, not in `v0::mesh`. It is a small fix with a large effect on the graph and
-did not land with Stage 2.
+The graph has no back edge: `light` depends on `world`, `mesh` depends on `light` and `world`, and
+`world` depends on neither. The move was a data-structure placement fix, not a behaviour change.
 
 ### 3.2 The 20 largest Rust files
 
@@ -486,8 +489,8 @@ gain.
 | `demo::edit` | edit queue and rebuild scheduling | coalescing, throttle, upload budget | `edit`, `poll_rebuild` |
 | `demo::persist` | save worker, replay, repair | journal order, baseline check, read-only rule | `save`, `repair`, `read_only` |
 | `renderer` | `wgpu` resources | pipelines, layouts, texture array, depth | `render`, `upload_*` |
-| `v0::world` | chunk map and VCHK | file format, light cache, seed file | `World`, `ChunkCoord`, `SaveError` |
-| `v0::light` | light BFS and padded field | queue algorithm, nibble packing | `LightField` |
+| `v0::world` | chunk map, VCHK, snapshots, packed light cache | file format, seed file, nibble packing | `World`, `ChunkCoord`, `ChunkSnapshot`, `LightField`, `SaveError` |
+| `v0::light` | light BFS and light jobs | queue algorithm, propagation | `compute`, `LightSnapshot`, `LightJob`, `LightResult` |
 | `v0::mesh` | greedy mesher | vertex packing, LOD downsample | `build_mesh`, `MeshData` |
 | `terrain-core` foundation | `error`, `hash`, `description`, `header`, `content`, `section` | error taxonomy, SHA-256, schema, header bytes, stable ids, section storage | the curated types behind the 28 module paths |
 | `terrain-core` generation | `curve`, `noise`, `lattice`, `graph`, `climate`, `height`, `strata`, `surface`, `volume`, `hydro`, `features` | each stage's maths and intermediate data | stage functions consumed by `pipeline` |
@@ -580,11 +583,12 @@ Rust privacy rule the split relies on.
 The target graph is a DAG. A stage module is a leaf with respect to orchestration: it may call
 `description`, `hash`, `error`, `section`, `content`, `curve`, `noise`, `lattice`, and its sibling
 stage if the spec says so, but it may not call `Terrain::new` or open a world. That is what makes
-`pipeline` the only composition point. The landed tree meets this rule inside `terrain-core`; the
-`v0::light <-> v0::mesh` pair is the engine exception recorded in §3.1.
+`pipeline` the only composition point. The landed tree meets this rule inside `terrain-core`, and
+the v0 modules are acyclic as well: `light` and `mesh` point at `world`, while `world` points at
+neither. There is no engine exception left (3.1).
 
 A CI check can build this edge list from `crate::` paths and fail on a back edge. It is still not
-implemented; the exceptions in §3.1 would have to be fixed before it could be switched on.
+implemented; the measured graph now has no back edge, so it can be switched on when written.
 
 ### 5.2 Visibility policy
 
@@ -719,22 +723,21 @@ and `git diff --color-moved` stay useful.
 The `Size` column is the original estimate, kept for review history; the measured outcomes are in the
 table below.
 
-**Stage outcomes (2026-11-21):** every structural stage has landed except the Stage 2
-`ChunkSnapshot` move. The table records the commit that produced each outcome; §6.1 keeps the
-original per-stage instructions.
+**Stage outcomes (2026-11-21):** every structural stage has landed. The table records the commit
+that produced each outcome; 6.1 keeps the original per-stage instructions.
 
 | Stage | State | Commit-level outcome |
 |---|---|---|
 | 1 | Landed | `e17eafc` split the 6,506-line root into `startup.rs`, `app.rs`, and `demo/`; `d897fab` split `app.rs` into `app/{mod,input,frame}.rs`. `src/lib.rs` is 75 lines, with no function body. The root/headless cycle is gone. |
-| 2 | Partial | `bf7f01e` moved the seven legacy modules under `src/v0/` with `git mv` and no content edits; the crate root still re-exports them. The `BlockId` move landed (`BlockId` is `content`'s type and `section` re-exports it), but `ChunkSnapshot` is still in `v0::mesh`, so `v0::light <-> v0::mesh` remains (§3.1). |
+| 2 | Landed | `bf7f01e` moved the seven legacy modules under `src/v0/` with `git mv` and no content edits; the crate root still re-exports them. `BlockId` is `content`'s type and `section` re-exports it. `ChunkSnapshot` now lives beside `Chunk` in `v0::world`, and `LightField` moved there with the light cache, so `v0::light <-> v0::mesh` and `v0::world <-> v0::light` are both one-way (3.1). |
 | 3 | Landed | `e17eafc` produced `demo/{patch,lod,stream,edit,persist}` and `2463234` produced `demo/{build,content}`. The demo's 35 tests live beside the code, and no demo test constructs `App`. |
 | 4 | Landed | `184d7f1` introduced `DemoRuntime`; `App` holds `demo: Option<DemoRuntime>` and owns only the renderer upload (`app/frame.rs`). `demo` names no renderer, `winit`, or `wgpu`. |
 | 5 | Landed | The splits landed per file: `4a2dfcc` (light2), `6aefb56` (mesher2), `af487cc` (volume), `950fed1` (pipeline), `66b18ee` (features), `8b383a5` (description), `7f5f3ac` (section), `240099e` (climate), `d2c065a` (surface), `a0c0cec` (save, world_save), `e08c3f4` (editlog, residency), `a6720f0` (content, header), `3ab2683` (tests). `d80b1fd` split `terrain-gen` by subcommand and `23872e2` split the renderer. Every counted file is under 1,000 lines. |
 | 6 (visibility) | Landed | Batches `dc03914`/`eef849a` (889→564), `07320ec` (564→383), and `6f3d17e` (383→325); `c0d47e9` finished the docs and the strict gate. `tests/visibility.rs` and three `compile_fail` doctests guard the surface; `b5a0601` published `engine::terrain`. `RunError` and the public `v0` re-exports are the documented remainder. |
 | 7 | Optional | Not started. The §7 triggers still do not fire: the demo never names `wgpu`, there is one frontend, and no measured build win exists. |
 
-Stage 2 is the only structural gap: the `v0/` grouping and the `BlockId` move landed, but the
-`ChunkSnapshot` move that breaks the last data cycle did not. Its instructions remain in §6.1.
+Stage 2 closed the last structural gap: `ChunkSnapshot` and the light data now sit in `v0::world`,
+which leaves the v0 graph acyclic. Its original instructions remain in 6.1 for history.
 
 ### 6.1 Stage detail
 
