@@ -4,16 +4,16 @@
 use crate::section::BlockId;
 
 /// Columns on one edge of the gathered footprint: `3 * 32`.
-pub const FOOTPRINT: i32 = 96;
+pub(crate) const FOOTPRINT: i32 = 96;
 
 /// Columns in the gathered footprint.
-pub const COLUMNS: usize = 9_216;
+pub(crate) const COLUMNS: usize = 9_216;
 
 const _: () = assert!(FOOTPRINT == 96 && COLUMNS == 9_216);
 
 /// What a feature is allowed to replace (`H2.3`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub enum Mask {
+pub(crate) enum Mask {
     /// Only blocks in the caller-supplied host set (ores, boulders).
     ReplaceHost,
     /// Only air (leaves, plants).
@@ -36,7 +36,7 @@ pub(super) const fn is_air_mask(mask: Mask) -> bool {
 
 /// The block ids application needs by name.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Palette {
+pub(crate) struct Palette {
     /// Id of air.
     pub air: BlockId,
     /// Id of water. Never written.
@@ -53,7 +53,7 @@ pub struct Palette {
 
 /// The block id for one ore spec, keyed by the spec's stable name.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct OreBlock {
+pub(crate) struct OreBlock {
     /// Stable name of the ore spec it belongs to.
     pub name: &'static str,
     /// Id written where the vein replaces host rock.
@@ -61,17 +61,17 @@ pub struct OreBlock {
 }
 
 /// Column flags the tree filter reads (`H3.4`).
-pub const COLUMN_RIVER: u8 = 1;
+pub(crate) const COLUMN_RIVER: u8 = 1;
 
 /// The column is inside a bank band around a river or lake (`H3.4`).
-pub const COLUMN_BANK: u8 = 2;
+pub(crate) const COLUMN_BANK: u8 = 2;
 
 /// Per-column 2D data for the gathered footprint.
 ///
 /// Index `0` is the lowest `(x, z)` of the footprint. Every array is
 /// [`COLUMNS`] long and laid out `x` fastest, `z` slowest.
 #[derive(Clone, Copy, Debug)]
-pub struct ColumnField<'a> {
+pub(crate) struct ColumnField<'a> {
     /// World `(x, z)` of the first column.
     pub origin: [i32; 2],
     /// Top solid block per column (`HeightTile` before detail and caves).
@@ -98,7 +98,7 @@ impl ColumnField<'_> {
 
     /// Top solid block of one column.
     #[must_use]
-    pub fn top(&self, x: i32, z: i32) -> Option<i32> {
+    pub(crate) fn top(&self, x: i32, z: i32) -> Option<i32> {
         self.index(x, z)
             .and_then(|index| self.tops.get(index))
             .copied()
@@ -106,7 +106,7 @@ impl ColumnField<'_> {
 
     /// Slope drop of one column.
     #[must_use]
-    pub fn slope(&self, x: i32, z: i32) -> Option<i32> {
+    pub(crate) fn slope(&self, x: i32, z: i32) -> Option<i32> {
         self.index(x, z)
             .and_then(|index| self.slope.get(index))
             .copied()
@@ -114,7 +114,7 @@ impl ColumnField<'_> {
 
     /// Biome id of one column.
     #[must_use]
-    pub fn biome(&self, x: i32, z: i32) -> Option<u8> {
+    pub(crate) fn biome(&self, x: i32, z: i32) -> Option<u8> {
         self.index(x, z)
             .and_then(|index| self.biome.get(index))
             .copied()
@@ -122,7 +122,7 @@ impl ColumnField<'_> {
 
     /// Flags of one column.
     #[must_use]
-    pub fn flags(&self, x: i32, z: i32) -> Option<u8> {
+    pub(crate) fn flags(&self, x: i32, z: i32) -> Option<u8> {
         self.index(x, z)
             .and_then(|index| self.flags.get(index))
             .copied()

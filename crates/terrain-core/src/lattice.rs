@@ -53,7 +53,7 @@ pub fn floor_div(value: i32, divisor: i32) -> i32 {
 ///
 /// Panics when `divisor <= 0`.
 #[must_use]
-pub fn rem_euclid(value: i32, divisor: i32) -> i32 {
+pub(crate) fn rem_euclid(value: i32, divisor: i32) -> i32 {
     assert!(divisor > 0, "rem_euclid requires a positive divisor");
     let magnitude = i64::from(value).unsigned_abs();
     let divisor = u64::from(divisor.cast_unsigned());
@@ -71,7 +71,7 @@ pub fn rem_euclid(value: i32, divisor: i32) -> i32 {
 /// The result is `(floor_div(block, MACRO_CELL), rem_euclid(block, MACRO_CELL) / 4)`.
 #[allow(clippy::cast_precision_loss)]
 #[must_use]
-pub fn macro_cell(block: i32) -> (i32, f32) {
+pub(crate) fn macro_cell(block: i32) -> (i32, f32) {
     let cell = floor_div(block, MACRO_CELL);
     let weight = rem_euclid(block, MACRO_CELL) as f32 / MACRO_CELL as f32;
     (cell, weight)
@@ -82,7 +82,7 @@ pub fn macro_cell(block: i32) -> (i32, f32) {
 /// A sample sits at the centre of its block: `block + 0.5`.
 #[allow(clippy::cast_precision_loss)]
 #[must_use]
-pub fn sample_pos(block: i32) -> f32 {
+pub(crate) fn sample_pos(block: i32) -> f32 {
     block as f32 + 0.5
 }
 
@@ -93,7 +93,7 @@ pub fn sample_pos(block: i32) -> f32 {
 /// `0..=1`. The operation order is fixed: interpolate along `x`, then along `z`. No
 /// `mul_add` is used, so the result is bit-stable for a given build.
 #[must_use]
-pub fn bilinear(c00: f32, c10: f32, c01: f32, c11: f32, wx: f32, wz: f32) -> f32 {
+pub(crate) fn bilinear(c00: f32, c10: f32, c01: f32, c11: f32, wx: f32, wz: f32) -> f32 {
     let near = c00 + (c10 - c00) * wx;
     let far = c01 + (c11 - c01) * wx;
     near + (far - near) * wz

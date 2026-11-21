@@ -14,7 +14,7 @@
 //!   and its hysteresis, plus a stable [`column_index`] for tie-breaking.
 //! - [`Budget`] - the `K4.1` per-frame caps, steady and post-teleport (`K4.4`).
 //!
-//! The `K4.3` shed ladder is [`crate::metrics2::ShedState`]; this module does
+//! The `K4.3` shed ladder is `crate::metrics2::ShedState`; this module does
 //! not duplicate it. A caller asks the ladder whether a class may start and
 //! asks [`Budget`] whether one more upload fits, which are different questions.
 //!

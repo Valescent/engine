@@ -11,10 +11,10 @@ use super::params::invalid;
 ///
 /// Both climate axes are `[0, 1]`, so the neutral scale keeps climate space a unit
 /// square and a biome centre is directly comparable to a coordinate.
-pub const T_SCALE: f32 = 1.0;
+pub(crate) const T_SCALE: f32 = 1.0;
 
 /// Scale applied to a humidity delta before squaring (`E3.1`).
-pub const H_SCALE: f32 = 1.0;
+pub(crate) const H_SCALE: f32 = 1.0;
 
 /// The three-way smoothstep on `[0, 1]`: `t * t * (3 - 2t)` (`B2.3`, `E3.5`).
 #[must_use]

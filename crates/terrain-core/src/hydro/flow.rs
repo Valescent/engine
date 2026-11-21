@@ -2,8 +2,8 @@
 //!
 //! `D2.1` fixes the router: on the 4-block macro grid, eight neighbours, the
 //! receiver is the one with the largest `drop = (h_cell - h_nbr) / dist`, with
-//! `dist = 1` orthogonally and the pinned [`SQRT_2`] diagonally. Ties break by
-//! the fixed order [`ORDER`], so the result never depends on iteration order.
+//! `dist = 1` orthogonally and the pinned `SQRT_2` diagonally. Ties break by
+//! the fixed order `ORDER`, so the result never depends on iteration order.
 //!
 //! Routing runs on the *filled* surface, never on terrain: the flood has
 //! already removed interior sinks, so every non-sea cell has a receiver and
@@ -20,20 +20,20 @@ use std::collections::VecDeque;
 use super::BED_FLOOR;
 
 /// The fixed D8 tie-break order (`D2.1`): `N, NE, E, SE, S, SW, W, NW`.
-pub const ORDER: [D8; 8] = [D8::N, D8::NE, D8::E, D8::SE, D8::S, D8::SW, D8::W, D8::NW];
+pub(crate) const ORDER: [D8; 8] = [D8::N, D8::NE, D8::E, D8::SE, D8::S, D8::SW, D8::W, D8::NW];
 
 /// Diagonal step length, pinned: `sqrt(2)`, `0x3FB5_04F3`.
 ///
 /// A named constant rather than a literal at each call site, so the drop
 /// comparison cannot drift. `sqrt` is correctly rounded and allowed (`A2.3`);
 /// the value is the `f32` constant, not a measured approximation.
-pub const SQRT_2: f32 = core::f32::consts::SQRT_2;
+pub(crate) const SQRT_2: f32 = core::f32::consts::SQRT_2;
 
 /// One of the eight D8 directions.
 ///
 /// `z` grows south, so `N` is `z - 1`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub enum D8 {
+pub(crate) enum D8 {
     /// North, `z - 1`.
     N,
     /// North-east.
@@ -55,7 +55,7 @@ pub enum D8 {
 impl D8 {
     /// The cell offset, in `(x, z)`.
     #[must_use]
-    pub const fn offset(self) -> (i32, i32) {
+    pub(crate) const fn offset(self) -> (i32, i32) {
         match self {
             Self::N => (0, -1),
             Self::NE => (1, -1),
@@ -70,7 +70,7 @@ impl D8 {
 
     /// The step length in cells: `1.0` or [`SQRT_2`].
     #[must_use]
-    pub const fn dist(self) -> f32 {
+    pub(crate) const fn dist(self) -> f32 {
         match self {
             Self::N | Self::E | Self::S | Self::W => 1.0,
             Self::NE | Self::SE | Self::SW | Self::NW => SQRT_2,
@@ -100,7 +100,7 @@ pub(crate) fn neighbour(index: usize, side: usize, direction: D8) -> Option<usiz
 /// other cell picks the largest drop, ties by [`ORDER`]. `filled` must be a
 /// `side * side` grid; cells beyond it are left without a receiver.
 #[must_use]
-pub fn receivers(filled: &[f32], side: usize, sea: f32) -> Vec<Option<u32>> {
+pub(crate) fn receivers(filled: &[f32], side: usize, sea: f32) -> Vec<Option<u32>> {
     let cells = side * side;
     let mut result = vec![None; cells];
     if side == 0 {
@@ -141,7 +141,7 @@ pub fn receivers(filled: &[f32], side: usize, sea: f32) -> Vec<Option<u32>> {
 /// to its receiver. Additions saturate instead of panicking on overflow, so a
 /// pathological inflow cannot abort a tile.
 #[must_use]
-pub fn accumulate(
+pub(crate) fn accumulate(
     filled: &[f32],
     receiver: &[Option<u32>],
     inflow: &[u32],
@@ -187,10 +187,10 @@ pub fn accumulate(
 ///
 /// `D3.2` asks the channel to taper from zero over the first ~50 cells of
 /// accumulation above the threshold.
-pub const RAMP_CELLS: f32 = 50.0;
+pub(crate) const RAMP_CELLS: f32 = 50.0;
 
 /// Widest a channel gets, in blocks (`D3.2`).
-pub const MAX_WIDTH: f32 = 10.0;
+pub(crate) const MAX_WIDTH: f32 = 10.0;
 
 /// Scale in `width = clamp(W_SCALE * sqrt(acc - min + 1), 1, 10)` (`D3.2`).
 ///
@@ -204,7 +204,7 @@ pub const MAX_WIDTH: f32 = 10.0;
 ///
 /// `W_SCALE` is a pinned `f32` bit constant in the description in the long run;
 /// here it is the same number, so a test can show the arithmetic.
-pub const W_SCALE: f32 = 0.28;
+pub(crate) const W_SCALE: f32 = 0.28;
 
 /// Maps accumulation to a channel width in blocks (`D3.1`, `D3.2`).
 ///
@@ -216,7 +216,7 @@ pub const W_SCALE: f32 = 0.28;
 /// monotone in accumulation and never exceeds [`MAX_WIDTH`].
 #[must_use]
 #[allow(clippy::cast_precision_loss)]
-pub fn river_width(accumulation: u32, min_cells: u32, w_scale: f32) -> f32 {
+pub(crate) fn river_width(accumulation: u32, min_cells: u32, w_scale: f32) -> f32 {
     if accumulation < min_cells {
         return 0.0;
     }
@@ -231,14 +231,14 @@ pub fn river_width(accumulation: u32, min_cells: u32, w_scale: f32) -> f32 {
 /// Deterministic and branch-free after the clamp, so it is safe on the
 /// generation path (`A2.3`).
 #[must_use]
-pub fn smoothstep(edge0: f32, edge1: f32, value: f32) -> f32 {
+pub(crate) fn smoothstep(edge0: f32, edge1: f32, value: f32) -> f32 {
     let t = ((value - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }
 
 /// U-profile bed depth in blocks: `clamp(width / 2, 2, 6)` (`D3.3`).
 #[must_use]
-pub fn bed_depth(width: f32) -> f32 {
+pub(crate) fn bed_depth(width: f32) -> f32 {
     (width / 2.0).clamp(2.0, 6.0)
 }
 
@@ -250,7 +250,7 @@ pub fn bed_depth(width: f32) -> f32 {
 /// distance comes from the interpolated field, never from a per-block path
 /// search (`D3.3`). A zero or negative width has no influence at all.
 #[must_use]
-pub fn river_influence(width: f32, distance_cells: f32) -> f32 {
+pub(crate) fn river_influence(width: f32, distance_cells: f32) -> f32 {
     if width <= 0.0 {
         return 0.0;
     }
@@ -269,13 +269,13 @@ pub fn river_influence(width: f32, distance_cells: f32) -> f32 {
 ///
 /// The bed is never below [`BED_FLOOR`] (`SEA - 30`) or `y = 1`.
 #[must_use]
-pub fn clamp_bed(y: i32) -> i32 {
+pub(crate) fn clamp_bed(y: i32) -> i32 {
     y.max(BED_FLOOR).max(1)
 }
 
 /// Water level of a river cell: `floor(center_height - 1)` (`D7.4`).
 #[must_use]
-pub fn river_level(center_height: f32) -> i32 {
+pub(crate) fn river_level(center_height: f32) -> i32 {
     super::floor_i32(center_height - 1.0)
 }
 
@@ -287,8 +287,9 @@ pub fn river_level(center_height: f32) -> i32 {
 /// the sweep is linear and every cell is relaxed after its receiver. A cycle
 /// would leave nodes unvisited and is caught by a debug assertion, not by a
 /// hang.
+#[allow(dead_code)]
 #[must_use]
-pub fn monotone_levels(level: &[i32], receiver: &[Option<u32>]) -> Vec<i32> {
+pub(crate) fn monotone_levels(level: &[i32], receiver: &[Option<u32>]) -> Vec<i32> {
     let cells = level.len();
     let mut out = level.to_vec();
     if cells == 0 {

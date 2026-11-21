@@ -3,23 +3,23 @@
 //! # Templates
 //!
 //! A tree is a template over a closed primitive set (`H3.2`):
-//! [`Part::Trunk`], [`Part::Branch`], [`Part::Canopy`] with a
-//! [`CanopyShape`], and [`Part::RootFlare`]. Species are data in `SPECIES`;
+//! `Part::Trunk`, `Part::Branch`, `Part::Canopy` with a
+//! `CanopyShape`, and `Part::RootFlare`. Species are data in `SPECIES`;
 //! the per-tree variant comes from `hash64(seed, "tree:<species>", id)`, so a
 //! tree is identical wherever it is applied.
 //!
 //! Leaves are emitted only inside the canopy volume *and* within
-//! [`LEAF_MAX_DIST`] of a stem, checked against the template's own parts. There
+//! `LEAF_MAX_DIST` of a stem, checked against the template's own parts. There
 //! is no world scan and no floating leaf.
 //!
 //! # Grid and spacing
 //!
-//! Discovery uses a jittered grid with [`TREE_CELL`] spacing keyed on the cell
+//! Discovery uses a jittered grid with `TREE_CELL` spacing keyed on the cell
 //! and the vertical region (the "group"). Density only changes acceptance; it
 //! never moves the grid (`H3.3`).
 //!
 //! Spacing is resolved at application from the gathered candidates: a candidate
-//! loses to any higher-priority candidate within [`MIN_DIST`] in the `3 x 3`
+//! loses to any higher-priority candidate within `MIN_DIST` in the `3 x 3`
 //! cells, with ties to the lower cell index and then the lower id. Spacing runs
 //! before the 2D height filters.
 //!
@@ -33,7 +33,7 @@
 //! # Water
 //!
 //! Trees never touch water (`H3.5`). A candidate is rejected when its centre is
-//! underwater or a river/lake bed, when any column within [`TREE_WATER_MARGIN`]
+//! underwater or a river/lake bed, when any column within `TREE_WATER_MARGIN`
 //! carries water, or when any column that close carries a bank. The trunk base is
 //! sunk to the lowest of the centre and its four edge neighbours and rejected
 //! below `SEA + 1`. At write time a water cell is skipped, never replaced: logs
@@ -45,7 +45,7 @@
 //! Trees are generated once and never simulated (`H3.6`). This module exposes no
 //! sapling, growth tick, leaf decay, or per-tree runtime state: the only entry
 //! points are the generation-time `discover`, `place`, and the apply pass
-//! driven from [`crate::features::apply`]. After generation a tree is ordinary
+//! driven from `crate::features::apply`. After generation a tree is ordinary
 //! log and leaf blocks; later placement is an ordinary edit through the edit
 //! path, not growth.
 
@@ -58,26 +58,26 @@ use crate::features::{
 };
 
 /// Grid cell edge in blocks (`H3.3`).
-pub const TREE_CELL: i32 = 6;
+pub(crate) const TREE_CELL: i32 = 6;
 
 /// Minimum trunk spacing in blocks (`H3.3`).
-pub const MIN_DIST: i32 = 4;
+pub(crate) const MIN_DIST: i32 = 4;
 
 /// Largest slope drop a tree may stand on (`H3.4`).
-pub const TREE_MAX_DROP: i32 = 2;
+pub(crate) const TREE_MAX_DROP: i32 = 2;
 
 /// Columns a tree must stay away from water and banks (`H3.5`).
-pub const TREE_WATER_MARGIN: i32 = 2;
+pub(crate) const TREE_WATER_MARGIN: i32 = 2;
 
 /// Largest distance from a leaf to the nearest stem (`H3.2`).
-pub const LEAF_MAX_DIST: i32 = 4;
+pub(crate) const LEAF_MAX_DIST: i32 = 4;
 
 /// Largest declared tree half-extent (`H3.2`).
-pub const TREE_MAX_EXTENT: i32 = 12;
+pub(crate) const TREE_MAX_EXTENT: i32 = 12;
 
 /// Closed set of canopy volumes (`H3.2`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum CanopyShape {
+pub(crate) enum CanopyShape {
     /// An ellipsoid sitting on the trunk.
     Ellipsoid,
     /// A cone of shrinking discs, for conifers.
@@ -88,7 +88,7 @@ pub enum CanopyShape {
 
 /// Closed set of tree primitives (`H3.2`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum Part {
+pub(crate) enum Part {
     /// The vertical stem.
     Trunk,
     /// One short diagonal arm.
@@ -101,7 +101,7 @@ pub enum Part {
 
 /// Which pass a placement belongs to. Logs are written before leaves.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Layer {
+pub(crate) enum Layer {
     /// Written through [`Mask::AirOrLeaf`].
     Log,
     /// Written through [`Mask::AirOnly`].
@@ -110,7 +110,7 @@ pub enum Layer {
 
 /// One block of a tree, relative to the trunk base.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Placement {
+pub(crate) struct Placement {
     /// Offset from the trunk base; `[0, 0, 0]` is the lowest trunk block.
     pub offset: [i32; 3],
     /// Log or leaf.
@@ -201,23 +201,23 @@ const SPECIES: [Species; 3] = [
 ///
 /// Indexed by the v1 biome ids: ocean, beach, plains, forest, desert, alpine.
 /// Density changes acceptance only; the grid is fixed.
-pub const DENSITY: [u32; 6] = [0, 0, 400, 800, 40, 250];
+pub(crate) const DENSITY: [u32; 6] = [0, 0, 400, 800, 40, 250];
 
 /// Acceptance density of one biome, or zero outside the table.
 #[must_use]
-pub fn density(biome: u8) -> u32 {
+pub(crate) fn density(biome: u8) -> u32 {
     DENSITY.get(usize::from(biome)).copied().unwrap_or_default()
 }
 
 /// The species index of a candidate.
 #[must_use]
-pub fn species_of(candidate: &Candidate) -> usize {
+pub(crate) fn species_of(candidate: &Candidate) -> usize {
     species_of_id(candidate.id)
 }
 
 /// Stable name of a species index, for content packs and debug views.
 #[must_use]
-pub fn species_name(index: usize) -> Option<&'static str> {
+pub(crate) fn species_name(index: usize) -> Option<&'static str> {
     SPECIES.get(index).map(|entry| entry.name)
 }
 
@@ -230,7 +230,7 @@ fn species_of_id(id: u64) -> usize {
 
 /// Whether a species may grow in a biome (`H3.4`).
 #[must_use]
-pub fn allowed(species: usize, biome: u8) -> bool {
+pub(crate) fn allowed(species: usize, biome: u8) -> bool {
     if biome >= 8 {
         return false;
     }
@@ -241,7 +241,7 @@ pub fn allowed(species: usize, biome: u8) -> bool {
 
 /// Whether density accepts this candidate in this biome (`H3.3`).
 #[must_use]
-pub fn accepts(seed: u64, candidate: &Candidate, biome: u8) -> bool {
+pub(crate) fn accepts(seed: u64, candidate: &Candidate, biome: u8) -> bool {
     let roll = hash64(seed, domain("tree:accept"), &[candidate.id.cast_signed()]) % 1000;
     roll < u64::from(density(biome))
 }
@@ -251,7 +251,7 @@ pub fn accepts(seed: u64, candidate: &Candidate, biome: u8) -> bool {
 /// Derived from the id, which already folds the cell and the region, so
 /// application needs no seed and the comparison is total.
 #[must_use]
-pub fn priority(candidate: &Candidate) -> u64 {
+pub(crate) fn priority(candidate: &Candidate) -> u64 {
     let cell = cell_of(candidate.origin);
     hash64(
         candidate.id,
@@ -265,7 +265,7 @@ pub fn priority(candidate: &Candidate) -> u64 {
 /// Higher priority wins; equal priority goes to the lower cell index, then to
 /// the lower id so the relation is a total order.
 #[must_use]
-pub fn beats(left: &Candidate, right: &Candidate) -> bool {
+pub(crate) fn beats(left: &Candidate, right: &Candidate) -> bool {
     let left_priority = priority(left);
     let right_priority = priority(right);
     if left_priority != right_priority {
@@ -609,7 +609,7 @@ fn placement_bounds(entry: &Live<'_>, placements: &[Placement]) -> ([i32; 3], [i
 
 /// Emits the template of one candidate as offsets from its trunk base (`H3.2`).
 #[must_use]
-pub fn place(candidate: &Candidate) -> Vec<Placement> {
+pub(crate) fn place(candidate: &Candidate) -> Vec<Placement> {
     let species = species_of(candidate);
     let Some(template) = SPECIES.get(species) else {
         return Vec::new();

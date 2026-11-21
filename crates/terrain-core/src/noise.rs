@@ -5,12 +5,12 @@
 //!
 //! Range contract, in order:
 //!
-//! 1. [`simplex2_2d`] and [`simplex2_3d`] return a raw sample divided by a measured,
+//! 1. `simplex2_2d` and `simplex2_3d` return a raw sample divided by a measured,
 //!    pinned bound, so every octave is inside `[-1, 1]` by construction. A debug
 //!    assertion checks that the library sample itself is inside `[-1, 1]`.
-//! 2. [`fbm_2d`], [`ridged_2d`] and [`billow_2d`] sum octaves in a fixed order and
+//! 2. `fbm_2d`, `ridged_2d` and `billow_2d` sum octaves in a fixed order and
 //!    divide once by the sum of amplitudes, so their output is also `[-1, 1]`.
-//! 3. [`unit()`] maps `[-1, 1]` to `[0, 1]`. It is the only mapping, and its clamp is a
+//! 3. `unit()` maps `[-1, 1]` to `[0, 1]`. It is the only mapping, and its clamp is a
 //!    backstop that should never fire.
 //!
 //! Frequency is in cycles per block: callers pass block coordinates directly and the
@@ -29,30 +29,30 @@ use fastnoise_lite::{FastNoiseLite, NoiseType};
 use crate::description::MACRO_CELL;
 
 /// Neutral value of a `[0, 1]` field, and the constant `unit(0)` produces.
-pub const NEUTRAL: f32 = 0.5;
+pub(crate) const NEUTRAL: f32 = 0.5;
 
 /// Measured maximum of the normalized `OpenSimplex2` 2D sampler over the sweep in
 /// `tests::measure_noise_bounds`.
 ///
 /// Changing the sampler, its hash, or its gradient table means re-measuring this value,
 /// bumping the generator version, and updating the pinned tests.
-pub const MEASURED_MAX_2D: f32 = 0.999_993_44;
+pub(crate) const MEASURED_MAX_2D: f32 = 0.999_993_44;
 
 /// Measured maximum of the normalized `OpenSimplex2` 3D sampler over the same sweep.
-pub const MEASURED_MAX_3D: f32 = 0.999_801_9;
+pub(crate) const MEASURED_MAX_3D: f32 = 0.999_801_9;
 
 /// Divisor applied to every 2D sample: the measured maximum plus a 2% margin.
-pub const NOISE_BOUND_2D: f32 = MEASURED_MAX_2D * 1.02;
+pub(crate) const NOISE_BOUND_2D: f32 = MEASURED_MAX_2D * 1.02;
 
 /// Divisor applied to every 3D sample: the measured maximum plus a 2% margin.
-pub const NOISE_BOUND_3D: f32 = MEASURED_MAX_3D * 1.02;
+pub(crate) const NOISE_BOUND_3D: f32 = MEASURED_MAX_3D * 1.02;
 
 /// Maps a signed raw value to `[0, 1]`.
 ///
 /// `unit(0) == 0.5`. The clamp is a backstop for rounding at the measured bound, never
 /// a renormalisation step.
 #[must_use]
-pub fn unit(raw: f32) -> f32 {
+pub(crate) fn unit(raw: f32) -> f32 {
     (raw * 0.5 + 0.5).clamp(0.0, 1.0)
 }
 
@@ -87,7 +87,7 @@ fn with_sampler(seed: u32, sample: impl FnOnce(&FastNoiseLite) -> f32) -> f32 {
 
 /// One raw `OpenSimplex2` 2D sample at `(x, z)`, scaled into `[-1, 1]`.
 #[must_use]
-pub fn simplex2_2d(seed: u32, x: f32, z: f32) -> f32 {
+pub(crate) fn simplex2_2d(seed: u32, x: f32, z: f32) -> f32 {
     let raw = with_sampler(seed, |noise| noise.get_noise_2d(x, z));
     debug_assert!(raw.abs() <= 1.0, "OpenSimplex2 2D left [-1, 1]: {raw}");
     raw * (1.0 / NOISE_BOUND_2D)
@@ -95,7 +95,7 @@ pub fn simplex2_2d(seed: u32, x: f32, z: f32) -> f32 {
 
 /// One raw `OpenSimplex2` 3D sample at `(x, y, z)`, scaled into `[-1, 1]`.
 #[must_use]
-pub fn simplex2_3d(seed: u32, x: f32, y: f32, z: f32) -> f32 {
+pub(crate) fn simplex2_3d(seed: u32, x: f32, y: f32, z: f32) -> f32 {
     let raw = with_sampler(seed, |noise| noise.get_noise_3d(x, y, z));
     debug_assert!(raw.abs() <= 1.0, "OpenSimplex2 3D left [-1, 1]: {raw}");
     raw * (1.0 / NOISE_BOUND_3D)
@@ -142,7 +142,7 @@ fn fractal_2d(
 
 /// Fractal Brownian motion, `[-1, 1]`.
 #[must_use]
-pub fn fbm_2d(
+pub(crate) fn fbm_2d(
     seed: u32,
     x: f32,
     z: f32,
@@ -158,7 +158,7 @@ pub fn fbm_2d(
 
 /// Ridged fractal, `[-1, 1]`. Each octave is `1 - 2 * |n|`, so ridges sit at `+1`.
 #[must_use]
-pub fn ridged_2d(
+pub(crate) fn ridged_2d(
     seed: u32,
     x: f32,
     z: f32,
@@ -174,7 +174,7 @@ pub fn ridged_2d(
 
 /// Billow fractal, `[-1, 1]`. Each octave is `2 * |n| - 1`.
 #[must_use]
-pub fn billow_2d(
+pub(crate) fn billow_2d(
     seed: u32,
     x: f32,
     z: f32,
@@ -193,7 +193,7 @@ pub fn billow_2d(
 /// Both taps run on raw signed values at the same frequency; the caller samples the
 /// warped field at `(x + dx, z + dz)`. `amplitude` bounds each offset to `±amplitude`.
 #[must_use]
-pub fn warp_2d(
+pub(crate) fn warp_2d(
     seed_a: u32,
     seed_b: u32,
     x: f32,
@@ -209,7 +209,7 @@ pub fn warp_2d(
 /// Halo cells a warp forces on a tile: `ceil(amplitude / MACRO_CELL) + 1`.
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 #[must_use]
-pub fn warp_halo_cells(amplitude: f32) -> i32 {
+pub(crate) fn warp_halo_cells(amplitude: f32) -> i32 {
     let cells = (amplitude / MACRO_CELL as f32).ceil().max(0.0);
     cells as i32 + 1
 }

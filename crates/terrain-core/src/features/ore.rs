@@ -1,17 +1,17 @@
 //! Ore and boulder candidates: shapes and host-rock writes (`G3.1`-`G3.3`).
 //!
-//! A candidate's [`Candidate::variant`] drives its shape, so application needs
+//! A candidate's `Candidate::variant` drives its shape, so application needs
 //! no seed and no per-candidate bookkeeping. Two shapes exist (`G3.1`):
 //!
 //! - an ellipsoid, sized by the variant word, or
 //! - a short random walk of single blocks, clamped to `WALK_RADIUS`.
 //!
-//! Both stay within [`ORE_MAX_EXTENT`], which is what lets a `3 x 3 x 3` region
+//! Both stay within `ORE_MAX_EXTENT`, which is what lets a `3 x 3 x 3` region
 //! gather cover every spill.
 //!
 //! # Host rock
 //!
-//! Writes go through [`Mask::ReplaceHost`] against a caller-supplied id set
+//! Writes go through `Mask::ReplaceHost` against a caller-supplied id set
 //! (`G3.2`). Nothing here names stone or deep rock: the caller passes the set by
 //! stable name, and water, bedrock, surface, beach, snow, and air are excluded
 //! because they are not in it.
@@ -22,7 +22,7 @@ use crate::section::BlockId;
 use super::{Candidate, FeatureKind, FeatureSpec, Mask, Sink, variant_spec};
 
 /// Largest distance from a candidate centre to any written block (`G3.1`).
-pub const ORE_MAX_EXTENT: i32 = 8;
+pub(crate) const ORE_MAX_EXTENT: i32 = 8;
 
 /// Largest ellipsoid radius on one axis.
 const ORE_MAX_RADIUS: i32 = 3;
@@ -49,7 +49,7 @@ const _: () = assert!(ORE_MAX_RADIUS <= ORE_MAX_EXTENT && WALK_RADIUS <= ORE_MAX
 /// The result is sorted and deduplicated, so overlapping shapes write each block
 /// once and the caller can derive a bounding box from it.
 #[must_use]
-pub fn blocks(candidate: &Candidate) -> Vec<[i32; 3]> {
+pub(crate) fn blocks(candidate: &Candidate) -> Vec<[i32; 3]> {
     let is_boulder = candidate.kind == FeatureKind::Boulder;
     if is_boulder || candidate.variant & 1 == 0 {
         ellipsoid(candidate.variant, is_boulder)

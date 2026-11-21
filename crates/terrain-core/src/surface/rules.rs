@@ -17,22 +17,22 @@ use super::seafloor::{
 };
 
 /// Drop, in blocks, at which a slope exposes stone (`E4.3`).
-pub const STONE_DROP: i32 = 2;
+pub(crate) const STONE_DROP: i32 = 2;
 
 /// Share of columns in the dither band that still expose stone (`E4.3`).
-pub const DITHER_SHARE: f32 = 0.35;
+pub(crate) const DITHER_SHARE: f32 = 0.35;
 
 /// Temperature below which a snow cap is placed (`E4.4`).
 ///
 /// Mirrors the description default `T_SNOW`; a test pins the two together so the
 /// constant cannot drift from the schema.
-pub const T_SNOW: f32 = 0.25;
+pub(crate) const T_SNOW: f32 = 0.25;
 
 /// Number of precedence slots (`E4.5`).
-pub const SLOTS: u8 = 9;
+pub(crate) const SLOTS: u8 = 9;
 
 /// Most biomes a content pack may declare (`E3.1`).
-pub const MAX_BIOMES: usize = 255;
+pub(crate) const MAX_BIOMES: usize = 255;
 
 /// Lowest base offset that reads as beach, in blocks relative to sea (`C1.6`).
 const BEACH_BASE_MIN: f32 = 0.0;
@@ -54,7 +54,7 @@ const SNOW_JITTER_DOMAIN: &str = "snow_jitter";
 
 /// How a height compares with a level (`E4.1`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum Order {
+pub(crate) enum Order {
     /// Strictly below the level.
     Below,
     /// At or above the level.
@@ -67,7 +67,7 @@ pub enum Order {
 /// `Or([])` is always false. Adding a variant is a code change and a version
 /// bump; reordering or adding rules is content data.
 #[derive(Clone, Debug, PartialEq)]
-pub enum Predicate {
+pub(crate) enum Predicate {
     /// At least this many blocks below the column's top.
     DepthBelowTop(i32),
     /// The column's integer slope drop is at least this many blocks.
@@ -103,7 +103,7 @@ pub enum Predicate {
 /// `depth_blocks` is the thickness this rule claims, measured from the depth at
 /// which it is evaluated; `1` means one block.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Rule {
+pub(crate) struct Rule {
     /// Condition to test.
     pub predicate: Predicate,
     /// Material to place.
@@ -117,7 +117,7 @@ pub struct Rule {
 /// Rule 0 is the topsoil, later rules are fillers that may stack, and the last
 /// rule must be the catch-all.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct BiomeRules {
+pub(crate) struct BiomeRules {
     /// Rules, first match wins per slot.
     pub rules: Vec<Rule>,
 }
@@ -129,7 +129,7 @@ pub struct BiomeRules {
 /// is the caller's answer for whatever radius it cares about.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ColumnFacts {
+pub(crate) struct ColumnFacts {
     /// Tile-local column `x`.
     pub x: i32,
     /// Tile-local column `z`.
@@ -156,7 +156,7 @@ pub struct ColumnFacts {
 
 /// One surface material, either a concrete block or symbolic stone (`G1.2`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum Layer {
+pub(crate) enum Layer {
     /// A block id the caller supplied.
     Block(BlockId),
     /// Stone, resolved per `y` through the strata resolver.
@@ -169,7 +169,7 @@ pub enum Layer {
 /// `top + 1`, so the last block is always bedrock at `y = 0`. A `Layer::Stone`
 /// layer is symbolic; use [`SurfaceStack::block_at`] to resolve it.
 #[derive(Clone, Debug)]
-pub struct SurfaceStack {
+pub(crate) struct SurfaceStack {
     /// The precedence slot that supplied the surface material, `1..=9`.
     pub slot: u8,
     /// Depth-labelled layers, top first.
@@ -181,7 +181,7 @@ pub struct SurfaceStack {
 impl SurfaceStack {
     /// Total thickness of the stack in blocks: always `top + 1`.
     #[must_use]
-    pub fn depth_blocks(&self) -> i32 {
+    pub(crate) fn depth_blocks(&self) -> i32 {
         self.layers.iter().map(|(depth, _)| *depth).sum()
     }
 
@@ -189,7 +189,7 @@ impl SurfaceStack {
     ///
     /// Depth `0` is the top block. `None` means the depth is below the column.
     #[must_use]
-    pub fn layer_at(&self, depth: i32) -> Option<Layer> {
+    pub(crate) fn layer_at(&self, depth: i32) -> Option<Layer> {
         if depth < 0 {
             return None;
         }
@@ -207,7 +207,14 @@ impl SurfaceStack {
     /// Resolves a depth to a concrete block, through the strata resolver for
     /// symbolic stone (`G1.2`).
     #[must_use]
-    pub fn block_at(&self, depth: i32, strata: &Strata, x: i32, y: i32, z: i32) -> Option<BlockId> {
+    pub(crate) fn block_at(
+        &self,
+        depth: i32,
+        strata: &Strata,
+        x: i32,
+        y: i32,
+        z: i32,
+    ) -> Option<BlockId> {
         match self.layer_at(depth)? {
             Layer::Block(id) => Some(id),
             Layer::Stone => Some(strata.stone_in(self.column, x, y, z)),
@@ -219,7 +226,7 @@ impl SurfaceStack {
 ///
 /// No block id is hardcoded here: every slot, including bedrock, is data.
 #[derive(Clone, Debug)]
-pub struct SurfaceTable {
+pub(crate) struct SurfaceTable {
     /// World seed. Keys the slope dither and the snow jitter.
     pub(super) seed: u64,
     /// Beach sand in a cold climate (slot 3).
@@ -255,7 +262,7 @@ impl SurfaceTable {
     /// names. It only keeps the per-column path free of a SHA-256.
     #[allow(clippy::too_many_arguments)]
     #[must_use]
-    pub fn new(
+    pub(crate) fn new(
         seed: u64,
         cold_beach: Layer,
         warm_beach: Layer,
@@ -298,7 +305,7 @@ impl SurfaceTable {
     /// clay distinct ids.
     #[allow(clippy::too_many_arguments)]
     #[must_use]
-    pub fn with_seabed(
+    pub(crate) fn with_seabed(
         seed: u64,
         cold_beach: Layer,
         warm_beach: Layer,
@@ -328,7 +335,7 @@ impl SurfaceTable {
 
     /// The seed the dither and the jitter are keyed on.
     #[must_use]
-    pub fn seed(&self) -> u64 {
+    pub(crate) fn seed(&self) -> u64 {
         self.seed
     }
 
@@ -338,7 +345,7 @@ impl SurfaceTable {
     /// Returns `1..=9`. Slot 9 is returned for a column whose top is `y = 0`,
     /// because bedrock is the absolute floor (`C4.1`).
     #[must_use]
-    pub fn fired_slot(&self, facts: &ColumnFacts, biome_rules: &BiomeRules) -> u8 {
+    pub(crate) fn fired_slot(&self, facts: &ColumnFacts, biome_rules: &BiomeRules) -> u8 {
         if let Some(slot) = self.locked_slot(facts) {
             return slot;
         }
@@ -360,7 +367,11 @@ impl SurfaceTable {
     /// locked slot owns the surface, which is what keeps grass off a sea floor or
     /// a beach (`E4.5`).
     #[must_use]
-    pub fn resolve(&self, column: &ColumnFacts, biome_rules: &BiomeRules) -> Vec<(i32, BlockId)> {
+    pub(crate) fn resolve(
+        &self,
+        column: &ColumnFacts,
+        biome_rules: &BiomeRules,
+    ) -> Vec<(i32, BlockId)> {
         let (slot, layers) = self.evaluate(column, biome_rules);
         layers
             .into_iter()
@@ -377,7 +388,7 @@ impl SurfaceTable {
     /// layers cover the whole column from `top` down to `y = 0`, with the last
     /// layer always the caller's bedrock block.
     #[must_use]
-    pub fn resolve_column(
+    pub(crate) fn resolve_column(
         &self,
         facts: &ColumnFacts,
         biome_rules: &BiomeRules,
@@ -441,7 +452,8 @@ impl SurfaceTable {
     ///
     /// Returns [`Stage::Surface`] with [`ErrorKind::DescriptionInvalid`] and the
     /// key `SURFACE_RULES`.
-    pub fn validate_table(&self, biome_rules: &BiomeRules) -> Result<(), TerrainError> {
+    #[allow(clippy::unused_self)] // method shape kept: visibility-only change
+    pub(crate) fn validate_table(&self, biome_rules: &BiomeRules) -> Result<(), TerrainError> {
         if biome_rules.rules.len() > MAX_BIOMES {
             return Err(reject("biome count"));
         }
@@ -553,7 +565,7 @@ fn biome_layers(facts: &ColumnFacts, biome_rules: &BiomeRules) -> Vec<Contributi
 /// Pure and deterministic: `hash2(seed, domain("snow_jitter"), x, z)`. The
 /// [`SurfaceTable`] path uses the cached tag and produces the same value.
 #[must_use]
-pub fn snow_jitter(seed: u64, x: i32, z: i32) -> i32 {
+pub(crate) fn snow_jitter(seed: u64, x: i32, z: i32) -> i32 {
     jitter_from(seed, domain(SNOW_JITTER_DOMAIN), x, z)
 }
 

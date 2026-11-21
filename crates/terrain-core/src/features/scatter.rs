@@ -10,7 +10,7 @@
 //!
 //! # Render shape
 //!
-//! Scatter blocks carry a [`RenderShape`] and never collide (`H4.2`). A
+//! Scatter blocks carry a `RenderShape` and never collide (`H4.2`). A
 //! cross-quad never occludes and never blocks skylight; it emits into the cutout
 //! pass and disappears at LOD1. The block registry owns the id-to-shape mapping;
 //! this module owns the descriptor set a caller attaches to those ids.
@@ -23,10 +23,10 @@ use crate::features::{
 };
 
 /// Edge of one patch cell in blocks (`H4.1`).
-pub const PATCH_CELL: i32 = 16;
+pub(crate) const PATCH_CELL: i32 = 16;
 
 /// Permille scale used by the density and patch fields.
-pub const SCALE: u32 = 1000;
+pub(crate) const SCALE: u32 = 1000;
 
 /// Domain of the low-frequency patch field.
 const PATCH_DOMAIN: &str = "scatter:patch";
@@ -40,11 +40,11 @@ const CORNER_BITS: u32 = 54;
 /// Scatter density per biome, in permille (`H4.1`).
 ///
 /// Indexed by the v1 biome ids: ocean, beach, plains, forest, desert, alpine.
-pub const DENSITY: [u32; 6] = [0, 0, 300, 700, 80, 250];
+pub(crate) const DENSITY: [u32; 6] = [0, 0, 300, 700, 80, 250];
 
 /// How a scatter block is drawn (`H4.2`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum RenderShape {
+pub(crate) enum RenderShape {
     /// A full cube.
     Cube,
     /// Two crossed quads: no occlusion, no skylight blocking.
@@ -56,20 +56,20 @@ pub enum RenderShape {
 impl RenderShape {
     /// Whether the shape hides the face behind it.
     #[must_use]
-    pub const fn occludes(self) -> bool {
+    pub(crate) const fn occludes(self) -> bool {
         !matches!(self, Self::CrossQuad)
     }
 
     /// Whether the shape stops skylight.
     #[must_use]
-    pub const fn blocks_skylight(self) -> bool {
+    pub(crate) const fn blocks_skylight(self) -> bool {
         !matches!(self, Self::CrossQuad)
     }
 }
 
 /// One registered scatter block (`H4.2`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ScatterBlock {
+pub(crate) struct ScatterBlock {
     /// How it draws.
     pub shape: RenderShape,
     /// Scatter never collides.
@@ -79,7 +79,7 @@ pub struct ScatterBlock {
 }
 
 /// The v1 scatter descriptors, in the same order as `ApplyContext::scatter`.
-pub const V1_SCATTER: [ScatterBlock; 2] = [
+pub(crate) const V1_SCATTER: [ScatterBlock; 2] = [
     ScatterBlock {
         shape: RenderShape::CrossQuad,
         collides: false,
@@ -94,7 +94,7 @@ pub const V1_SCATTER: [ScatterBlock; 2] = [
 
 /// Scatter density of one biome in permille, or zero outside the table.
 #[must_use]
-pub fn density(biome: u8) -> u32 {
+pub(crate) fn density(biome: u8) -> u32 {
     DENSITY.get(usize::from(biome)).copied().unwrap_or_default()
 }
 
@@ -104,7 +104,7 @@ pub fn density(biome: u8) -> u32 {
 /// neighbouring columns share a value and plants clump. Integer weights only:
 /// no float and no `sin`.
 #[must_use]
-pub fn patch(seed: u64, x: i32, z: i32) -> u32 {
+pub(crate) fn patch(seed: u64, x: i32, z: i32) -> u32 {
     let cell_x = x.div_euclid(PATCH_CELL);
     let cell_z = z.div_euclid(PATCH_CELL);
     let fraction_x = u32::try_from(x - cell_x * PATCH_CELL).expect("a cell remainder is positive");
@@ -132,7 +132,7 @@ pub fn patch(seed: u64, x: i32, z: i32) -> u32 {
 /// `density` is in permille and comes from the biome; the patch field scales it
 /// so the same column is more likely to be a plant inside a clump.
 #[must_use]
-pub fn present(seed: u64, x: i32, z: i32, density: u32) -> bool {
+pub(crate) fn present(seed: u64, x: i32, z: i32, density: u32) -> bool {
     let chance = density.min(SCALE) * patch(seed, x, z) / SCALE;
     let roll = hash64(seed, domain(ROLL_DOMAIN), &[i64::from(x), i64::from(z)]) % u64::from(SCALE);
     roll < u64::from(chance)

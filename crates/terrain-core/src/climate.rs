@@ -6,7 +6,7 @@
 //!
 //! # The lattice is the boundary
 //!
-//! Climate never sees a per-block height. [`MacroCells`] is the only height channel and
+//! Climate never sees a per-block height. `MacroCells` is the only height channel and
 //! it is cell-resolution, so a one-block bump or a river carve has nowhere to enter
 //! (`E1.2`, `E2.3`). Height, snow line, and the biome arrays therefore agree for every
 //! block of a column; no block can be one climate and its neighbour another.
@@ -15,7 +15,7 @@
 //!
 //! `temp = clamp(lat(|z - equator| / half_span) + noise - alt, 0, 1)`, where `lat` is a
 //! caller-supplied monotone [`crate::curve::Curve`] that is warm at 0 and cold at 1,
-//! `noise` is a three-octave fBm at 1/512 cycles per block scaled by [`TEMP_NOISE_AMP`],
+//! `noise` is a three-octave fBm at 1/512 cycles per block scaled by `TEMP_NOISE_AMP`,
 //! and `alt = max(h_macro - SEA, 0) * lapse` (`E1.1`, `E1.2`). Latitude and the noise are
 //! sampled at the cell's base block coordinate, so a cell mirrors with its counterpart
 //! across the equator.
@@ -33,11 +33,11 @@
 //!
 //! # Rain shadow
 //!
-//! A fixed march toward `-x` (`WIND_DIR = X`, `E2.1`) reads [`SHADOW_RANGE_CELLS`] cells
+//! A fixed march toward `-x` (`WIND_DIR = X`, `E2.1`) reads `SHADOW_RANGE_CELLS` cells
 //! upwind. `shadow = max_k(h[x-k] - h[x] - SLOPE_K * k * MACRO_CELL)`, floored at zero,
 //! then `curve_shadow(shadow / SHADOW_NORM)` (`E2.2`). The march also records whether an
 //! ocean cell (`h <= SEA`) sits upwind, which is the maritime coast term. The input grid
-//! therefore carries [`SHADOW_RANGE_CELLS`] extra cells upwind (`E2.3`).
+//! therefore carries `SHADOW_RANGE_CELLS` extra cells upwind (`E2.3`).
 //!
 //! # Biome selection
 //!
@@ -76,12 +76,12 @@
 //!
 //! # Blend calibration
 //!
-//! The normalised `q` quantiser is pinned (`E3.5`). [`ClimateParams::blend_width`] is a
+//! The normalised `q` quantiser is pinned (`E3.5`). `ClimateParams::blend_width` is a
 //! **calibration target**, not a magic number: the acceptance measurement is the
 //! transect distance from `w = 0.5` to `w = 0.95`, doubled, with a median of 20-28
 //! blocks, p10 >= 8, and p90 <= 64 per biome pair (`E3.6`). Because the measured
 //! distance is `2 * s95 * blend_width`, where `s95 ≈ 0.8042` is the smoothstep argument
-//! at `w = 0.95`, [`ClimateParams::v1_default`] derives the ramp from the description's
+//! at `w = 0.95`, `ClimateParams::v1_default` derives the ramp from the description's
 //! `BLEND_BLOCKS` target: `blend_width = BLEND_BLOCKS / (2 * s95)`. A straight border
 //! therefore measures exactly `BLEND_BLOCKS`.
 //!
@@ -91,9 +91,9 @@
 //!
 //! # Submodules
 //!
-//! - `params`: [`ClimateParams`], the blend ramp, and the latitude and altitude terms.
+//! - `params`: `ClimateParams`, the blend ramp, and the latitude and altitude terms.
 //! - `table`: [`Biome`] centres, nearest-two selection, and the normalised quantiser.
-//! - `field`: [`MacroCells`], the rain-shadow march, [`ClimateTile`], and [`Climate`].
+//! - `field`: `MacroCells`, the rain-shadow march, [`ClimateTile`], and `Climate`.
 
 mod field;
 mod params;
@@ -108,10 +108,15 @@ mod table;
 )]
 mod tests;
 
-pub use field::{
-    CELL_COUNT, Climate, ClimateTile, DITHER_DOMAIN, HUMIDITY_DOMAIN, MARITIME, MAX_CELL, MIN_CELL,
-    MacroCells, PADDED_CELLS, SHADOW_NORM, SHADOW_RANGE_CELLS, SHADOW_STRENGTH, SIDE, SLOPE_K,
-    Shadow, TEMP_DOMAIN, TEMP_NOISE_AMP, WIND_DIR, index, padded_index, shadow,
+#[allow(unused_imports)] // re-exported for the internal stages and unit tests
+pub(crate) use field::{
+    CELL_COUNT, Climate, HUMIDITY_DOMAIN, MARITIME, MAX_CELL, MIN_CELL, MacroCells, PADDED_CELLS,
+    SHADOW_NORM, SHADOW_RANGE_CELLS, SHADOW_STRENGTH, SIDE, SLOPE_K, Shadow, TEMP_DOMAIN,
+    TEMP_NOISE_AMP, WIND_DIR, index, padded_index, shadow,
 };
-pub use params::{ClimateParams, altitude, blend_ramp_blocks, latitude};
-pub use table::{Biome, BiomeTable, H_SCALE, T_SCALE, smoothstep01};
+pub use field::{ClimateTile, DITHER_DOMAIN};
+#[allow(unused_imports)] // re-exported for the internal stages and unit tests
+pub(crate) use params::{ClimateParams, altitude, blend_ramp_blocks, latitude};
+pub use table::{Biome, BiomeTable, smoothstep01};
+#[allow(unused_imports)] // re-exported for the internal stages and unit tests
+pub(crate) use table::{H_SCALE, T_SCALE};

@@ -1,7 +1,7 @@
 //! W4 - strata bands, faults, and `stone_at`.
 //!
 //! `G1.1`, `G1.2`, `G1.4`, `G2.1`-`G2.4`. One resolver decides which stone a solid
-//! cell is made of: [`Strata::stone_at`]. Cave walls, cliff faces, span undersides,
+//! cell is made of: `Strata::stone_at`. Cave walls, cliff faces, span undersides,
 //! slope stone, and ore host checks all call it. It takes coordinates only - there is
 //! no face, exposure, or neighbour argument, so a block cannot be one material on a
 //! wall and another on a floor.
@@ -17,9 +17,9 @@
 //! 4-block macro lattice and bilinearly interpolated to block centres, scaled by the
 //! warp amplitude. `fault` is a piecewise-constant offset from a cell grid, one of
 //! `0`, `+3`, or `-3` blocks, smoothstepped over four blocks. Both are 2D and cost one
-//! evaluation per column (`G2.3`): [`Strata::column`] performs them once and
-//! [`Strata::stone_in`] resolves any `y` in that column from the cached offset.
-//! [`Strata::stone_at`] is the convenience path for a single block.
+//! evaluation per column (`G2.3`): `Strata::column` performs them once and
+//! `Strata::stone_in` resolves any `y` in that column from the cached offset.
+//! `Strata::stone_at` is the convenience path for a single block.
 //!
 //! # The deep floor
 //!
@@ -33,12 +33,12 @@
 //! Faults move materials only, never height (`G2.4`). Strata never override the
 //! surface stack (`G1.3`): the surface rules of `E4.5` place soil, bed, beach, snow,
 //! and bedrock, and this module only answers for cells the surface stack left as
-//! stone. The band table is data held by [`Strata`], not a global.
+//! stone. The band table is data held by `Strata`, not a global.
 //!
 //! # Determinism
 //!
 //! The warp and the fault are evaluated at block centres with
-//! [`crate::lattice::sample_pos`]. Every operation is `+ - * /` in a fixed order: no
+//! `crate::lattice::sample_pos`. Every operation is `+ - * /` in a fixed order: no
 //! `sin`, `cos`, `pow`, `exp`, `ln`, no `mul_add`, no hash map, and no division that
 //! can produce NaN. The three streams are keyed by fixed domain tags that are hashed
 //! once at construction, so the same seed and table produce the same world on every
@@ -87,7 +87,7 @@ const DEEP_DOMAIN: &str = "deep_dither";
 /// function of `(seed, table, x, y, z)`. It is not a global, so two worlds can hold
 /// different tables in the same process.
 #[derive(Clone, Debug)]
-pub struct Strata {
+pub(crate) struct Strata {
     /// World seed. Keys the band warp, the fault grid, and the deep dither.
     seed: u64,
     /// Frequency of the warp fBm in cycles per block (`G1.1`).
@@ -115,15 +115,16 @@ pub struct Strata {
 /// A whole vertical stack reuses this value; only [`crate::description::DEEP_Y`] and
 /// the band arithmetic remain per block. [`Strata::column`] builds it.
 #[derive(Clone, Copy, Debug)]
-pub struct ColumnStrata {
+pub(crate) struct ColumnStrata {
     /// Warp plus fault in blocks, the `y` offset of this column's band coordinate.
     offset: f32,
 }
 
 impl ColumnStrata {
     /// The combined warp and fault offset of this column, in blocks.
+    #[allow(clippy::trivially_copy_pass_by_ref)] // receiver shape kept: visibility-only change
     #[must_use]
-    pub fn offset(&self) -> f32 {
+    pub(crate) fn offset(&self) -> f32 {
         self.offset
     }
 }
@@ -137,7 +138,7 @@ impl Strata {
     /// `thickness` or `fault_cell` is not positive, or when `warp_amp` is not a
     /// positive finite number. A table that cannot be indexed is rejected at
     /// construction rather than at the first query.
-    pub fn new(
+    pub(crate) fn new(
         seed: u64,
         thickness: i32,
         warp_amp: f32,
@@ -177,7 +178,7 @@ impl Strata {
     /// once here. Reuse the result for every `y` in the column with
     /// [`Strata::stone_in`].
     #[must_use]
-    pub fn column(&self, x: i32, z: i32) -> ColumnStrata {
+    pub(crate) fn column(&self, x: i32, z: i32) -> ColumnStrata {
         ColumnStrata {
             offset: self.strata_warp(x, z) + self.fault(x, z),
         }
@@ -185,7 +186,7 @@ impl Strata {
 
     /// The warp plus fault offset of one column, in blocks (`G1.1`, `G2.2`).
     #[must_use]
-    pub fn column_offset(&self, x: i32, z: i32) -> f32 {
+    pub(crate) fn column_offset(&self, x: i32, z: i32) -> f32 {
         self.column(x, z).offset
     }
 
@@ -195,7 +196,7 @@ impl Strata {
     /// coordinate always yields the same id, whether the cell is a cave wall, a cliff
     /// face, or subsoil.
     #[must_use]
-    pub fn stone_at(&self, x: i32, y: i32, z: i32) -> BlockId {
+    pub(crate) fn stone_at(&self, x: i32, y: i32, z: i32) -> BlockId {
         if let Some(id) = self.deep_at(x, y, z) {
             return id;
         }
@@ -208,7 +209,7 @@ impl Strata {
     /// paid (`G2.3`), so a full column can call it per block. It never disagrees with
     /// `stone_at`.
     #[must_use]
-    pub fn stone_in(&self, column: ColumnStrata, x: i32, y: i32, z: i32) -> BlockId {
+    pub(crate) fn stone_in(&self, column: ColumnStrata, x: i32, y: i32, z: i32) -> BlockId {
         if let Some(id) = self.deep_at(x, y, z) {
             return id;
         }

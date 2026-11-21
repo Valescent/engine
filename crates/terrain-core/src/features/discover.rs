@@ -13,20 +13,20 @@ use super::masks::{Mask, Palette, is_air_mask, is_solid_mask, mask_accepts};
 use super::{ore, tree};
 
 /// Edge of a feature region in blocks (`H1.1`).
-pub const REGION_SIZE: i32 = 32;
+pub(crate) const REGION_SIZE: i32 = 32;
 
 /// Regions gathered on each axis before application (`H1.1`).
-pub const GATHER_RADIUS: i32 = 1;
+pub(crate) const GATHER_RADIUS: i32 = 1;
 
 /// Regions in one gather: `3 x 3 x 3`.
-pub const GATHER_REGIONS: usize = 27;
+pub(crate) const GATHER_REGIONS: usize = 27;
 
 const _: () = assert!(REGION_SIZE == 32 && SECTION_SIZE == 32);
 const _: () = assert!(GATHER_REGIONS == 27 && GATHER_RADIUS == 1);
 
 /// Which generator a candidate belongs to.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub enum FeatureKind {
+pub(crate) enum FeatureKind {
     /// An ore vein (`G3.1`).
     Ore,
     /// A surface or subsurface boulder.
@@ -39,7 +39,7 @@ pub enum FeatureKind {
 
 /// One authored feature type.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FeatureSpec {
+pub(crate) struct FeatureSpec {
     /// Stable name. It is also the hash domain namespace of the feature.
     pub name: &'static str,
     /// Largest distance in blocks from a candidate centre to any written block.
@@ -61,7 +61,7 @@ impl FeatureSpec {
     /// A tree declares logs and leaves separately (`H3.2`), so the spec's own
     /// [`Self::mask`] is unioned with the masks its kind must use.
     #[must_use]
-    pub fn masks(&self) -> Vec<Mask> {
+    pub(crate) fn masks(&self) -> Vec<Mask> {
         let mut masks = vec![self.mask];
         match self.kind {
             FeatureKind::Ore | FeatureKind::Boulder => {
@@ -87,7 +87,7 @@ impl FeatureSpec {
 ///
 /// A mask set is contradictory when it both replaces solid rock and writes only
 /// into air: the two passes cannot agree on what a legal target is.
-pub fn validate_masks(masks: &[Mask]) -> Result<(), TerrainError> {
+pub(crate) fn validate_masks(masks: &[Mask]) -> Result<(), TerrainError> {
     let solid = masks.iter().copied().any(is_solid_mask);
     let air = masks.iter().copied().any(is_air_mask);
     if solid && air {
@@ -100,7 +100,7 @@ pub fn validate_masks(masks: &[Mask]) -> Result<(), TerrainError> {
 }
 
 /// Rejects a spec the compiler cannot place (`H1.1`, `H3.2`).
-pub fn validate_spec(spec: &FeatureSpec) -> Result<(), TerrainError> {
+pub(crate) fn validate_spec(spec: &FeatureSpec) -> Result<(), TerrainError> {
     if spec.name.is_empty() {
         return Err(feature_error("feature.name", "non-empty"));
     }
@@ -127,7 +127,7 @@ pub fn validate_spec(spec: &FeatureSpec) -> Result<(), TerrainError> {
 /// Names are stable: they are the hash domain of every candidate and the key
 /// the caller uses to supply the matching block id.
 #[must_use]
-pub fn v1_specs() -> Vec<FeatureSpec> {
+pub(crate) fn v1_specs() -> Vec<FeatureSpec> {
     vec![
         FeatureSpec {
             name: "ore_iron",
@@ -169,7 +169,7 @@ pub fn v1_specs() -> Vec<FeatureSpec> {
 
 /// One discovered feature (`H1.2`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct Candidate {
+pub(crate) struct Candidate {
     /// Stable identity: `hash64(name, region, index)`, never seed-dependent.
     pub id: u64,
     /// The region that owns this candidate.
@@ -184,7 +184,7 @@ pub struct Candidate {
 
 /// The region index that owns a world point.
 #[must_use]
-pub fn region_of(point: [i32; 3]) -> [i32; 3] {
+pub(crate) fn region_of(point: [i32; 3]) -> [i32; 3] {
     [
         point[0].div_euclid(REGION_SIZE),
         point[1].div_euclid(REGION_SIZE),
@@ -194,7 +194,7 @@ pub fn region_of(point: [i32; 3]) -> [i32; 3] {
 
 /// The lowest world coordinate of a region.
 #[must_use]
-pub fn region_origin(region: [i32; 3]) -> [i32; 3] {
+pub(crate) fn region_origin(region: [i32; 3]) -> [i32; 3] {
     [
         region[0] * REGION_SIZE,
         region[1] * REGION_SIZE,
@@ -204,7 +204,7 @@ pub fn region_origin(region: [i32; 3]) -> [i32; 3] {
 
 /// Whether a world point lies inside a region.
 #[must_use]
-pub fn region_contains(region: [i32; 3], point: [i32; 3]) -> bool {
+pub(crate) fn region_contains(region: [i32; 3], point: [i32; 3]) -> bool {
     region_of(point) == region
 }
 
@@ -213,14 +213,14 @@ pub fn region_contains(region: [i32; 3], point: [i32; 3]) -> bool {
 /// `x` is fastest, then `z`, then `y`, so the centre offset `[0, 0, 0]` is slot
 /// [`GATHER_REGIONS`] `/ 2`.
 #[must_use]
-pub fn region_slot(offset: [i32; 3]) -> usize {
+pub(crate) fn region_slot(offset: [i32; 3]) -> usize {
     let index = (offset[0] + 1) + 3 * ((offset[2] + 1) + 3 * (offset[1] + 1));
     usize::try_from(index).expect("a gather offset is inside 0..27")
 }
 
 /// The `3 x 3 x 3` region origins around one region.
 #[must_use]
-pub fn gather_origins(region: [i32; 3]) -> [[i32; 3]; GATHER_REGIONS] {
+pub(crate) fn gather_origins(region: [i32; 3]) -> [[i32; 3]; GATHER_REGIONS] {
     let mut origins = [[0_i32; 3]; GATHER_REGIONS];
     for dy in -GATHER_RADIUS..=GATHER_RADIUS {
         for dz in -GATHER_RADIUS..=GATHER_RADIUS {
@@ -259,7 +259,7 @@ pub(crate) fn variant_spec(variant: u64) -> usize {
 /// The result is sorted by [`Candidate::id`], so the same region always produces
 /// the same list in the same order.
 #[must_use]
-pub fn discover(region: [i32; 3], seed: u64, specs: &[FeatureSpec]) -> Vec<Candidate> {
+pub(crate) fn discover(region: [i32; 3], seed: u64, specs: &[FeatureSpec]) -> Vec<Candidate> {
     let mut out = Vec::new();
     let words = [
         i64::from(region[0]),
@@ -292,7 +292,11 @@ pub fn discover(region: [i32; 3], seed: u64, specs: &[FeatureSpec]) -> Vec<Candi
 /// exemption of [`crate::features::apply_section_counted`] uses it, so an
 /// empty section that no feature can touch still costs no per-block test.
 #[must_use]
-pub fn candidates_reach(origin: [i32; 3], candidates: &[Candidate], specs: &[FeatureSpec]) -> bool {
+pub(crate) fn candidates_reach(
+    origin: [i32; 3],
+    candidates: &[Candidate],
+    specs: &[FeatureSpec],
+) -> bool {
     candidates
         .iter()
         .any(|candidate| candidate_intersects(origin, candidate, specs))
@@ -317,7 +321,7 @@ fn candidate_intersects(origin: [i32; 3], candidate: &Candidate, specs: &[Featur
 /// column data, so a caller applying features to a raw block array such as the
 /// pipeline can use it to skip a uniform section without weakening the rule.
 #[must_use]
-pub fn uniform_writable(
+pub(crate) fn uniform_writable(
     id: BlockId,
     origin: [i32; 3],
     candidates: &[Candidate],
@@ -383,7 +387,7 @@ fn extent_of(candidate: &Candidate, specs: &[FeatureSpec]) -> i32 {
 /// Duplicate ids are removed and the result is sorted by id, which is the order
 /// application writes in.
 #[must_use]
-pub fn gather(region: [i32; 3], seed: u64, specs: &[FeatureSpec]) -> Vec<Candidate> {
+pub(crate) fn gather(region: [i32; 3], seed: u64, specs: &[FeatureSpec]) -> Vec<Candidate> {
     let mut out = Vec::new();
     for dy in -GATHER_RADIUS..=GATHER_RADIUS {
         for dz in -GATHER_RADIUS..=GATHER_RADIUS {

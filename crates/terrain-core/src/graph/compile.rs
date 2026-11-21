@@ -184,7 +184,7 @@ struct WarpPlan {
 
 /// A compiled, flat, topologically ordered field program.
 #[derive(Clone, Debug)]
-pub struct Compiled {
+pub(crate) struct Compiled {
     ops: Vec<Op>,
     order: Vec<u32>,
     output: usize,
@@ -197,7 +197,7 @@ impl Compiled {
     /// `x` and `z` are block coordinates. Every slot is written once per pass, in
     /// topological order. The result is a pure function of the compiled program and the
     /// coordinates.
-    pub fn eval_2d(&self, x: f32, z: f32) -> f32 {
+    pub(crate) fn eval_2d(&self, x: f32, z: f32) -> f32 {
         let mut slots = [0.0_f32; MAX_NODES];
         for (index, op) in self.ops.iter().enumerate() {
             if let Some(plan) = &self.warp
@@ -233,13 +233,13 @@ impl Compiled {
 
     /// Node ids in evaluation order: slot `i` was produced by `order()[i]`.
     #[must_use]
-    pub fn order(&self) -> &[u32] {
+    pub(crate) fn order(&self) -> &[u32] {
         &self.order
     }
 
     /// Number of slots the program uses.
     #[must_use]
-    pub fn slot_count(&self) -> usize {
+    pub(crate) fn slot_count(&self) -> usize {
         self.ops.len()
     }
 
@@ -247,7 +247,7 @@ impl Compiled {
     ///
     /// `B2.1`: the halo is `ceil(amplitude / MACRO_CELL) + 1`, taken over the graph.
     #[must_use]
-    pub fn warp_halo_cells(&self) -> i32 {
+    pub(crate) fn warp_halo_cells(&self) -> i32 {
         self.warp
             .as_ref()
             .map_or(0, |plan| warp_halo_cells(plan.amplitude))

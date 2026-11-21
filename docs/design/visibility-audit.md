@@ -1,13 +1,27 @@
 # terrain-core visibility audit
 
-**Status:** Audit and plan. This page changes no code.
+**Status:** Batch 1 applied on `feature/visibility-narrow`. It narrowed 325 of the
+500 candidates across the 18 planned modules; the reachable public surface is now
+**564 items**, down from 889.
 
-**Scope:** The public surface of the internal `terrain-core` crate at the merged tip
-`a6720f0` (`feature/visibility-audit`), and the first batch of items to narrow from
-`pub` to `pub(crate)`. It implements decision 3 of
-[Modular structure](modular-structure.md#8-decisions-2026-11-20): `terrain-core` is
-an internal crate, so its public surface should be what `engine` and `terrain-gen`
-need, and nothing else.
+| Batch | Items narrowed | Reachable public items | State |
+|---|---:|---:|---|
+| Audit baseline | 0 | 889 | merged (`a6720f0`) |
+| Batch 1 | 325 | 564 | applied |
+| Batches 2-3 | 175 | 389 | remaining |
+
+Two items that §5 lists in batch 1 stayed public because a kept public signature
+names them: `curve::Curve` (reachable through `pipeline::Curves`) and
+`revisions::RequestKey` (reachable through `residency::ring`). Moving either would
+require narrowing the public owner in the same change, which is batch 2 work. In
+exchange, `features::scatter::{RenderShape::occludes, RenderShape::blocks_skylight}`
+narrowed with their type, so the batch still totals 325 and the recount still lands
+on 564.
+
+**Scope below:** the audit and the batch plan as merged. It implements decision 3
+of [Modular structure](modular-structure.md#8-decisions-2026-11-20): `terrain-core`
+is an internal crate, so its public surface should be what `engine` and
+`terrain-gen` need, and nothing else.
 
 **Non-goals:** No narrowing in this change. No edit to `engine`'s facade in this
 change. No change to the `terrain-gen` command surface, save formats, or golden

@@ -4,7 +4,7 @@ use crate::section::BlockId;
 
 /// What a solid span is, relative to the cave void that touches it (`F4.1`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum SpanKind {
+pub(crate) enum SpanKind {
     /// No cave void touches the span: an ordinary column, or a fully buried layer.
     Surface,
     /// A cave void sits directly above the span's top, which is a cave floor.
@@ -16,7 +16,7 @@ pub enum SpanKind {
 
 /// One maximal run of solid blocks (`F4.1`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct Span {
+pub(crate) struct Span {
     /// Lowest block of the run, inclusive.
     pub y0: i32,
     /// Highest block of the run, inclusive.
@@ -27,7 +27,7 @@ pub struct Span {
 
 /// Which `E4.5` rule set a span's top takes (`F4.1`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum SpanRule {
+pub(crate) enum SpanRule {
     /// The full `E4.5` column stack: bed, sea floor, beach, snow, slope, biome.
     Stack,
     /// Cave floor open to the sky: stone or gravel, plus biome topsoil, never snow
@@ -48,7 +48,7 @@ pub enum SpanRule {
 /// beach exist only in [`SpanRule::Stack`], which is why a cave floor can never
 /// take either.
 #[must_use]
-pub fn span_rule(kind: SpanKind, highest: bool, open_to_sky: bool) -> SpanRule {
+pub(crate) fn span_rule(kind: SpanKind, highest: bool, open_to_sky: bool) -> SpanRule {
     if highest {
         return SpanRule::Stack;
     }
@@ -72,7 +72,7 @@ pub fn span_rule(kind: SpanKind, highest: bool, open_to_sky: bool) -> SpanRule {
 /// top is the column's top. Runs are maximal, so any run but the first has a void
 /// above it and any run but the last has a void below it.
 #[must_use]
-pub fn resolve_spans(column: &[BlockId], air: BlockId) -> Vec<Span> {
+pub(crate) fn resolve_spans(column: &[BlockId], air: BlockId) -> Vec<Span> {
     let mut spans = Vec::new();
     let len = i32::try_from(column.len()).unwrap_or(i32::MAX);
     let mut y = len - 1;
@@ -113,7 +113,7 @@ pub fn resolve_spans(column: &[BlockId], air: BlockId) -> Vec<Span> {
 /// the sky is open however many spans surround it, and a pocket roofed by a single
 /// block is not.
 #[must_use]
-pub fn open_to_sky(column: &[BlockId], air: BlockId, top: i32) -> bool {
+pub(crate) fn open_to_sky(column: &[BlockId], air: BlockId, top: i32) -> bool {
     let start = usize::try_from(top.saturating_add(1)).unwrap_or(usize::MAX);
     let start = start.min(column.len());
     column[start..].iter().all(|cell| *cell == air)

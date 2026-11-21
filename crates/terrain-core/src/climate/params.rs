@@ -18,7 +18,7 @@ const S95: f32 = 0.804_199_9;
 /// `E3.6`).
 #[must_use]
 #[allow(clippy::cast_precision_loss)]
-pub fn blend_ramp_blocks(blend_blocks: u32) -> f32 {
+pub(crate) fn blend_ramp_blocks(blend_blocks: u32) -> f32 {
     blend_blocks as f32 / (2.0 * S95)
 }
 
@@ -27,7 +27,7 @@ pub fn blend_ramp_blocks(blend_blocks: u32) -> f32 {
 /// Every field is a constructor value rather than a constant because the description
 /// owns them (`A1.3`). The two curves are compiled once and shared by every tile.
 #[derive(Clone, Debug)]
-pub struct ClimateParams {
+pub(crate) struct ClimateParams {
     /// World `z` of the equator, in blocks (`E1.1`).
     pub equator: i32,
     /// Distance from the equator to the cold pole, in blocks (`E1.1`).
@@ -54,7 +54,7 @@ impl ClimateParams {
     /// from the description's `BLEND_BLOCKS` so that a straight border measures exactly
     /// that many blocks. See [`blend_ramp_blocks`].
     #[must_use]
-    pub fn v1_default() -> Self {
+    pub(crate) fn v1_default() -> Self {
         Self {
             equator: 0,
             half_span: 1_024,
@@ -74,7 +74,8 @@ impl ClimateParams {
     /// Rejects a non-positive `half_span` and a non-finite or non-positive `lapse` or
     /// `blend_width`. The curves are validated by [`Curve::new`] when the parameters are
     /// built. Key `CLIMATE`.
-    pub fn validate(&self) -> Result<(), TerrainError> {
+    #[allow(dead_code)]
+    pub(crate) fn validate(&self) -> Result<(), TerrainError> {
         if self.half_span <= 0 {
             return Err(invalid("CLIMATE", "half span positive"));
         }
@@ -93,7 +94,7 @@ impl ClimateParams {
 /// Exposed for debug views and tests; the solver composes it with noise and altitude.
 #[must_use]
 #[allow(clippy::cast_precision_loss)]
-pub fn latitude(params: &ClimateParams, block_z: i32) -> f32 {
+pub(crate) fn latitude(params: &ClimateParams, block_z: i32) -> f32 {
     let offset = (i64::from(block_z) - i64::from(params.equator)).unsigned_abs();
     params
         .latitude
@@ -105,7 +106,7 @@ pub fn latitude(params: &ClimateParams, block_z: i32) -> f32 {
 /// No lapse below sea level, and the input is the pre-detail macro height only.
 #[must_use]
 #[allow(clippy::cast_precision_loss)]
-pub fn altitude(params: &ClimateParams, macro_height: f32) -> f32 {
+pub(crate) fn altitude(params: &ClimateParams, macro_height: f32) -> f32 {
     (macro_height - SEA_HEIGHT).max(0.0) * params.lapse
 }
 

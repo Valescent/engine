@@ -8,10 +8,10 @@ use super::{COLUMN_HEIGHT, ColumnInput, Volume, VolumeStats, WORLD_LAST_Y, ramp}
 /// Noise taps a single detail sample may spend (`F3.2`).
 ///
 /// One 3D tap today; the budget is the ceiling the band is allowed to grow into.
-pub const DETAIL_TAP_BUDGET: u8 = 4;
+pub(crate) const DETAIL_TAP_BUDGET: u8 = 4;
 
 /// Density a floating cell must clear to become solid (`F3.2`).
-pub const FLOAT_MIN: f32 = 0.15;
+pub(crate) const FLOAT_MIN: f32 = 0.15;
 
 /// Frequency of the detail field, in cycles per block (`F3.2`).
 const DETAIL_FREQ: f32 = 1.0 / 40.0;
@@ -42,7 +42,7 @@ pub(super) const SLOPE_KNOTS: &[(f32, f32)] =
 
 /// One detail-band contribution and the taps it cost (`F3.2`).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct DetailSample {
+pub(crate) struct DetailSample {
     /// Signed density the band adds: `amp * fade * mask * n3`.
     pub delta: f32,
     /// Band weight in `[0, 1]`, zero at both band edges.
@@ -60,7 +60,13 @@ impl Volume {
     /// centre. The fade uses the block index so both band edges are exactly zero.
     #[must_use]
     #[allow(clippy::cast_precision_loss)]
-    pub fn detail_sample(&self, x: i32, y: i32, z: i32, input: &ColumnInput) -> DetailSample {
+    pub(crate) fn detail_sample(
+        &self,
+        x: i32,
+        y: i32,
+        z: i32,
+        input: &ColumnInput,
+    ) -> DetailSample {
         let fade = band_fade(input.top, self.params.detail_down, self.params.detail_up, y);
         let coast = ramp(
             (self.params.sea + DETAIL_COAST_OFFSET) as f32,
@@ -139,7 +145,7 @@ impl Volume {
 /// The detail band weight of one block: zero at both edges, one at the top (`F3.2`).
 #[must_use]
 #[allow(clippy::cast_precision_loss)]
-pub fn band_fade(top: i32, down: i32, up: i32, y: i32) -> f32 {
+pub(crate) fn band_fade(top: i32, down: i32, up: i32, y: i32) -> f32 {
     let low = top.saturating_sub(down);
     let high = top.saturating_add(up);
     if y < low || y > high {

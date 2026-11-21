@@ -13,28 +13,28 @@ use super::rules::{ColumnFacts, Layer, Predicate, SurfaceTable, T_SNOW, holds};
 // Sea-floor bands (`E4.7`). Depth is always `d = SEA - top_solid_y`, an offset
 // from sea level, never an absolute `y`.
 /// Last depth of the shore band: `1..=4`.
-pub const SEABED_SHORE_LAST_DEPTH: i32 = 4;
+pub(crate) const SEABED_SHORE_LAST_DEPTH: i32 = 4;
 
 /// Last depth of the shelf band: `5..=14`.
-pub const SEABED_SHELF_LAST_DEPTH: i32 = 14;
+pub(crate) const SEABED_SHELF_LAST_DEPTH: i32 = 14;
 
 /// Last depth of the slope band: `15..=24`; `>= 25` is the abyss.
-pub const SEABED_SLOPE_LAST_DEPTH: i32 = 24;
+pub(crate) const SEABED_SLOPE_LAST_DEPTH: i32 = 24;
 
 /// Share of columns at a band edge that take the next, deeper material.
-pub const SEABED_DITHER_SHARE: f32 = 0.35;
+pub(crate) const SEABED_DITHER_SHARE: f32 = 0.35;
 
 /// Share of warm shelf columns that take a hashed clay patch.
-pub const SEABED_CLAY_SHARE: f32 = 0.15;
+pub(crate) const SEABED_CLAY_SHARE: f32 = 0.15;
 
 /// Temperature below which the shore band turns from sand to gravel.
 ///
 /// A calibration start, not a magic number: it is the same scale as
 /// [`T_SNOW`], and a colder shore is a description change.
-pub const T_COLD_SHORE: f32 = 0.25;
+pub(crate) const T_COLD_SHORE: f32 = 0.25;
 
 /// Temperature below which the shelf band turns from sand to gravel.
-pub const T_COLD_SHELF: f32 = 0.20;
+pub(crate) const T_COLD_SHELF: f32 = 0.20;
 
 /// Thickness of a river or lake bed layer, in blocks (`D3.3` allows 1-2).
 pub(super) const BED_LAYER_DEPTH: i32 = 2;
@@ -61,7 +61,7 @@ pub(super) const SEAFLOOR_CLAY_DOMAIN: &str = "seafloor_clay";
 /// `core:sand`, `core:gravel`, and `core:clay` without this module knowing
 /// numeric ids.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SeabedMaterials {
+pub(crate) struct SeabedMaterials {
     /// `d = 1..=4`, warm.
     pub shore_sand: Layer,
     /// `d = 1..=4`, `temp < T_COLD_SHORE`.

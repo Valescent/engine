@@ -10,17 +10,17 @@
 //! Order of the pass (`D1.4`: before routing, single pass; `D5.1`: v1 has no
 //! erosion stage to order against):
 //!
-//! 1. [`flood::priority_flood`] raises `filled` until every cell drains:
+//! 1. `flood::priority_flood` raises `filled` until every cell drains:
 //!    `filled[n] = max(h[n], filled[c] + EPS)`.
-//! 2. [`flow::receivers`] runs D8 on `filled`. Flats and pits are already
+//! 2. `flow::receivers` runs D8 on `filled`. Flats and pits are already
 //!    resolved by the flood, so every non-sea cell has a receiver and the
 //!    graph is acyclic.
-//! 3. [`flow::accumulate`] sums upstream cell counts in
+//! 3. `flow::accumulate` sums upstream cell counts in
 //!    `(filled descending, index ascending)` order and adds integer boundary
 //!    inflow, which is the only input that comes from a neighbouring tile.
 //! 4. [`lake::find_lakes`] records a level per basin, taken from the outlet's
 //!    filled height. A region that fails either gate is not recorded.
-//! 5. [`flow::river_width`], [`flow::bed_depth`] and [`flow::river_influence`]
+//! 5. `flow::river_width`, `flow::bed_depth` and `flow::river_influence`
 //!    turn accumulation into the U profile. Applying it belongs to W4.
 //!
 //! # The halo is boundary state
@@ -34,7 +34,7 @@
 //!
 //! - The values a tile publishes for the cells it shares with a neighbour are
 //!   a pure function of the shared input, so two tiles agree bit-for-bit on
-//!   them (`R1.5`). [`flood::priority_flood_from`] seeds the whole halo band
+//!   them (`R1.5`). `flood::priority_flood_from` seeds the whole halo band
 //!   at its input height, so only the interior is solved.
 //! - A river that crosses a seam stops at the boundary and is resumed by the
 //!   neighbour from its `inflow` argument. That is the `D2.1` contract: the
@@ -68,8 +68,10 @@ pub mod grid;
 pub mod lake;
 pub mod world;
 
-pub use flood::EPS;
-pub use flow::{D8, ORDER};
+#[allow(unused_imports)] // re-exported for the internal stages and unit tests
+pub(crate) use flood::EPS;
+#[allow(unused_imports)] // re-exported for the internal stages and unit tests
+pub(crate) use flow::{D8, ORDER};
 pub use grid::{
     BED_FLOOR, BORDER_CELLS, CELL_COUNT, HALO_CELLS, HYDRO_BORDER_CELLS, HydroTile, INTERIOR_START,
     MAX_LAKE_Y, MAX_TERRAIN_Y, SEA, SIDE, SIDE_CELLS, TILE_CELLS, WORLD_SIDE_CELLS,
