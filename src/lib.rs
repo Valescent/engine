@@ -78,7 +78,7 @@ const CONFIG_FILE: &str = "config.toml";
 const MAX_COLUMNS_PER_FRAME: usize = 2;
 const MAX_SECTION_BUILDS_PER_FRAME: usize = 1;
 /// Coarse section jobs kept in flight on the shared worker pool.
-const MAX_SECTION_JOBS: usize = 8;
+const MAX_SECTION_JOBS: usize = 11;
 const INTERACTION_DISTANCE: f32 = 6.0;
 const SPAWN_X: i32 = 32;
 const SPAWN_Z: i32 = 32;
