@@ -21,11 +21,11 @@ use crate::world_save;
 
 use super::COLUMN_SECTIONS;
 #[cfg(test)]
+use super::content::{demo_materials, solid_table};
+#[cfg(test)]
 use super::lod::demo_lod_sets;
 #[cfg(test)]
-use super::patch::{
-    TerrainDemo, demo_column_light, demo_fine_all, demo_materials, solid_table, worker_count,
-};
+use super::patch::{TerrainDemo, demo_column_light, demo_fine_all, worker_count};
 use super::section_key;
 
 /// A corrupt section that must be repaired before saving can resume.
@@ -466,4 +466,213 @@ pub(crate) fn demo_columns_extent(
         Ok(())
     })?;
     Ok(columns)
+}
+
+#[cfg(test)]
+mod tests {
+    use glam::{IVec2, IVec3};
+
+    use crate::content;
+    use crate::editlog;
+    use crate::pipeline;
+    use crate::section;
+
+    use super::*;
+
+    #[test]
+    fn saved_columns_replay_into_the_ring() {
+        let mut saved = Vec::new();
+        let pack = content::v1_default();
+        let mut section = section::Section::uniform(0);
+        let key = section::SectionKey {
+            column: [0, 0],
+            section: 0,
+        };
+        section.set(1, 1, 1, pack.id("core:stone").expect("stone"));
+        saved.push(section::SavedSection {
+            key,
+            edited: true,
+            baseline_hash: section::baseline_hash(&section::Section::uniform(0)),
+            section,
+            unknown_names: Vec::new(),
+        });
+        let replayed = replay_saved_sections(saved, &[], 0, &pack, None, None);
+        assert_eq!(replayed.sections, 1);
+        assert_eq!(replayed.revision, 0);
+        assert!(!replayed.read_only);
+        assert_eq!(
+            replayed.saved[0].section.get(1, 1, 1),
+            pack.id("core:stone").expect("stone")
+        );
+    }
+
+    #[test]
+    #[allow(clippy::cast_possible_truncation)]
+    fn a_journal_frame_ahead_of_the_section_store_regenerates_it() {
+        let seed = 0x5EED;
+        let pack = content::v1_default();
+        let terrain = pipeline::Terrain::new(seed).expect("the description compiles");
+        let section = terrain.section(0, 0, 0).expect("the section generates");
+        let mut cell = None;
+        for y in 0..32 {
+            for z in 0..32 {
+                for x in 0..32 {
+                    if section.get(x, y, z) != 0 {
+                        cell = Some((x, y, z));
+                        break;
+                    }
+                }
+                if cell.is_some() {
+                    break;
+                }
+            }
+            if cell.is_some() {
+                break;
+            }
+        }
+        let (x, y, z) = cell.expect("the spawn section has a solid block");
+        let old = pack
+            .name(section.get(x, y, z))
+            .expect("the block has a name");
+        let record = editlog::Edit::record(
+            [
+                i32::try_from(x).unwrap_or(0),
+                i32::try_from(y).unwrap_or(0),
+                i32::try_from(z).unwrap_or(0),
+            ],
+            old,
+            "core:air",
+            1,
+            0,
+            0,
+            0,
+        )
+        .expect("the edit records");
+        let batch = editlog::EditBatch::new(1, 0, vec![record]);
+        let replayed = replay_saved_sections(
+            Vec::new(),
+            std::slice::from_ref(&batch),
+            0,
+            &pack,
+            None,
+            Some(&terrain),
+        );
+        assert_eq!(replayed.applied, 1);
+        assert_eq!(replayed.revision, 1);
+        assert_eq!(replayed.sections, 1, "the missing section was regenerated");
+        assert_eq!(replayed.saved[0].section.get(x, y, z), 0);
+    }
+
+    #[test]
+    #[allow(clippy::cast_possible_truncation)]
+    fn a_newer_journal_frame_is_replayed_over_the_saved_section() {
+        let demo = build_terrain_demo(0x5EED, IVec2::new(2, -3), 0).expect("the v1 terrain builds");
+        let cell = IVec3::new(
+            demo.spawn.x.floor() as i32,
+            demo.spawn.y.round() as i32 - 1,
+            demo.spawn.z.floor() as i32,
+        );
+        let key = section_key(cell);
+        let old = demo.block_at(cell).expect("the spawn block exists");
+        let old_name = demo
+            .pack
+            .name(old)
+            .expect("the block has a name")
+            .to_owned();
+        let new_name = demo.pack.name(demo.air).expect("air has a name").to_owned();
+        let record =
+            editlog::Edit::record([cell.x, cell.y, cell.z], old_name, new_name, 1, 0, 0, 0)
+                .expect("the change is recorded");
+        let batch = editlog::EditBatch::new(1, 0, vec![record]);
+
+        let (loaded, replay) = build_terrain_demo_saved(
+            demo.seed,
+            demo.origin_column,
+            0,
+            &[],
+            std::slice::from_ref(&batch),
+            0,
+        )
+        .expect("the replayed patch builds");
+        assert_eq!(loaded.block_at(cell), Some(demo.air));
+        assert_eq!(replay.keys, vec![key]);
+        assert_eq!(replay.revision, 1);
+        assert_eq!(loaded.revision, 1);
+        assert_ne!(
+            loaded.baselines.get(&key).copied().unwrap_or([0; 32]),
+            [0; 32],
+            "the replay derives the generated baseline"
+        );
+
+        let (covered, replay) =
+            build_terrain_demo_saved(demo.seed, demo.origin_column, 0, &[], &[batch], 1)
+                .expect("the covered patch builds");
+        assert_eq!(covered.block_at(cell), Some(old));
+        assert_eq!(replay.keys.len(), 0);
+        assert_eq!(replay.revision, 1);
+    }
+
+    #[test]
+    #[allow(clippy::cast_possible_truncation)]
+    fn saved_sections_override_generation_when_the_baseline_matches() {
+        let mut demo =
+            build_terrain_demo(0x5EED, IVec2::new(2, -3), 0).expect("the v1 terrain builds");
+        let cell = IVec3::new(
+            demo.spawn.x.floor() as i32,
+            demo.spawn.y.round() as i32 - 1,
+            demo.spawn.z.floor() as i32,
+        );
+        let key = section_key(cell);
+        let baseline = demo.baseline_for(key);
+        let original = demo.block_at(cell).expect("the spawn block exists");
+        let air = demo.air;
+        assert!(demo.set_block(cell, air));
+        let section =
+            demo.columns[&(key.column[0], key.column[1])][usize::from(key.section)].clone();
+        let saved = section::SavedSection {
+            key,
+            edited: true,
+            baseline_hash: baseline,
+            section,
+            unknown_names: Vec::new(),
+        };
+
+        let (loaded, replay) =
+            build_terrain_demo_saved(demo.seed, demo.origin_column, 0, &[saved], &[], 0)
+                .expect("the saved patch builds");
+        assert_eq!(loaded.block_at(cell), Some(air));
+        assert_eq!(replay.keys.len(), 0);
+        assert_ne!(original, air, "the generated block was solid");
+    }
+
+    #[test]
+    #[allow(clippy::cast_possible_truncation)]
+    fn a_saved_section_with_another_baseline_is_ignored() {
+        let mut demo =
+            build_terrain_demo(0x5EED, IVec2::new(2, -3), 0).expect("the v1 terrain builds");
+        let cell = IVec3::new(
+            demo.spawn.x.floor() as i32,
+            demo.spawn.y.round() as i32 - 1,
+            demo.spawn.z.floor() as i32,
+        );
+        let key = section_key(cell);
+        let original = demo.block_at(cell).expect("the spawn block exists");
+        let air = demo.air;
+        assert!(demo.set_block(cell, air));
+        let section =
+            demo.columns[&(key.column[0], key.column[1])][usize::from(key.section)].clone();
+        let saved = section::SavedSection {
+            key,
+            edited: true,
+            baseline_hash: [0; 32],
+            section,
+            unknown_names: Vec::new(),
+        };
+
+        let (loaded, replay) =
+            build_terrain_demo_saved(demo.seed, demo.origin_column, 0, &[saved], &[], 0)
+                .expect("the saved patch builds");
+        assert_eq!(loaded.block_at(cell), Some(original));
+        assert_eq!(replay.keys.len(), 0);
+    }
 }

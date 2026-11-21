@@ -712,3 +712,247 @@ impl RingStream {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::Arc;
+
+    use crate::light2;
+    use crate::pipeline;
+    use crate::section;
+
+    use super::super::content::demo_materials;
+    use super::super::patch::{demo_column_light, demo_fine_column};
+    use super::super::persist::demo_columns_extent;
+
+    use super::*;
+
+    #[test]
+    fn a_new_column_relights_and_remeshes_its_neighbour_border() {
+        let stone: Arc<[section::Section; COLUMN_SECTIONS]> =
+            Arc::new(std::array::from_fn(|_| section::Section::uniform(1)));
+        let air: Arc<[section::Section; COLUMN_SECTIONS]> =
+            Arc::new(std::array::from_fn(|_| section::Section::uniform(0)));
+        let mut columns = ColumnMap::new();
+        columns.insert((0, 0), stone);
+        columns.insert((1, 0), air);
+        let built = build_column(BuildJob {
+            centre: (1, 0),
+            full: true,
+            detailed: true,
+            margin: 2,
+            columns,
+            previous_light: BTreeMap::new(),
+            fine_columns: BTreeSet::from([(0, 0)]),
+            materials: Arc::new(demo_materials()),
+            light_table: Arc::new(demo_light_table()),
+        });
+
+        assert!(
+            built.light.contains_key(&(0, 0)),
+            "the present neighbour is relit"
+        );
+        assert!(
+            built
+                .patches
+                .get(&(0, 0))
+                .is_some_and(|patches| !patches.is_empty()),
+            "the neighbour's border sections are remeshed"
+        );
+        assert!(
+            built.replace.contains_key(&(1, 0)),
+            "the new column is meshed at LOD0"
+        );
+    }
+
+    #[test]
+    fn narrow_border_relight_matches_a_full_relight() {
+        let seed = 0x5EED;
+        let hydro = pipeline::Terrain::new(seed)
+            .expect("the v1 description compiles")
+            .solve_world_hydro()
+            .expect("the hydrology solves");
+        let columns: ColumnMap = demo_columns_extent(seed, -1, 1, -1, 1, &hydro)
+            .expect("the tile generates")
+            .into_iter()
+            .map(|(key, stack)| (key, Arc::new(stack)))
+            .collect();
+        let table = demo_light_table();
+        let materials = demo_materials();
+        let centre = (0, 0);
+
+        // Before the centre is generated, every neighbour sees its own edge
+        // mirrored across that border. That is the state a build job starts
+        // from, and the one the narrow repair must match.
+        let mut previous = BTreeMap::new();
+        for (&key, stack) in &columns {
+            if key == centre {
+                continue;
+            }
+            let mut borders: [Option<&[section::Section; COLUMN_SECTIONS]>; 8] = [None; 8];
+            for (slot, (dx, dz)) in COLUMN_NEIGHBOURS.into_iter().enumerate() {
+                let border = (key.0 + dx, key.1 + dz);
+                if border == centre {
+                    continue;
+                }
+                borders[slot] = columns.get(&border).map(|stack| &**stack);
+            }
+            let blocks = light2::ColumnBlocks::new((**stack).clone(), &borders);
+            previous.insert(key, light2::compute_column(&blocks, &table));
+        }
+
+        let mut narrow = previous.clone();
+        let mut full = previous.clone();
+        let mut centre_borders: [Option<&[section::Section; COLUMN_SECTIONS]>; 8] = [None; 8];
+        for (slot, (dx, dz)) in COLUMN_NEIGHBOURS.into_iter().enumerate() {
+            centre_borders[slot] = columns
+                .get(&(centre.0 + dx, centre.1 + dz))
+                .map(|stack| &**stack);
+        }
+        let centre_blocks =
+            light2::ColumnBlocks::new((**columns.get(&centre).unwrap()).clone(), &centre_borders);
+        let centre_light = light2::compute_column(&centre_blocks, &table);
+        narrow.insert(centre, centre_light.clone());
+        full.insert(centre, centre_light);
+
+        for (dx, dz) in COLUMN_NEIGHBOURS {
+            let key = (centre.0 + dx, centre.1 + dz);
+            narrow.insert(
+                key,
+                relight_border(&previous[&key], &columns, key, centre, &table),
+            );
+            let mut borders: [Option<&[section::Section; COLUMN_SECTIONS]>; 8] = [None; 8];
+            for (slot, (nx, nz)) in COLUMN_NEIGHBOURS.into_iter().enumerate() {
+                borders[slot] = columns.get(&(key.0 + nx, key.1 + nz)).map(|stack| &**stack);
+            }
+            let blocks =
+                light2::ColumnBlocks::new((**columns.get(&key).unwrap()).clone(), &borders);
+            full.insert(key, light2::compute_column(&blocks, &table));
+        }
+
+        for (dx, dz) in COLUMN_NEIGHBOURS {
+            let key = (centre.0 + dx, centre.1 + dz);
+            assert_eq!(
+                narrow[&key], full[&key],
+                "neighbour {dx},{dz} matches a full relight"
+            );
+            for sy in 0..COLUMN_SECTIONS {
+                let narrow_mesh = demo_section(&columns, &narrow, &materials, key.0, key.1, sy)
+                    .map(|section| section.mesh);
+                let full_mesh = demo_section(&columns, &full, &materials, key.0, key.1, sy)
+                    .map(|section| section.mesh);
+                assert_eq!(
+                    narrow_mesh, full_mesh,
+                    "neighbour {dx},{dz} section {sy} mesh matches"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_build_waits_for_its_in_ring_dependency_window() {
+        let air: Arc<[section::Section; COLUMN_SECTIONS]> =
+            Arc::new(std::array::from_fn(|_| section::Section::uniform(0)));
+        let mut columns = ColumnMap::new();
+        for dx in -2..=2 {
+            for dz in -2..=2 {
+                columns.insert((dx, dz), Arc::clone(&air));
+            }
+        }
+        assert!(build_window_ready(&columns, (0, 0), 2, (0, 0), 2));
+
+        columns.remove(&(2, 0));
+        assert!(
+            !build_window_ready(&columns, (0, 0), 2, (0, 0), 2),
+            "a missing in-ring column defers the build"
+        );
+        assert!(
+            build_window_ready(&columns, (0, 0), 2, (0, 0), 1),
+            "outside the visible ring the absence is the permanent edge"
+        );
+        assert!(
+            build_window_ready(&columns, (0, 0), 1, (0, 0), 2),
+            "a mesh-only upgrade does not read the outer ring"
+        );
+    }
+
+    #[test]
+    fn a_mesh_only_build_ignores_the_outer_ring() {
+        let air: Arc<[section::Section; COLUMN_SECTIONS]> =
+            Arc::new(std::array::from_fn(|_| section::Section::uniform(0)));
+        let mut snapshot = ColumnMap::new();
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                snapshot.insert((dx, dz), Arc::clone(&air));
+            }
+        }
+        let mut current = snapshot.clone();
+        current.insert((2, 0), Arc::clone(&air));
+
+        assert!(neighbourhood_intact(&current, &snapshot, (0, 0), 1));
+        assert!(!neighbourhood_intact(&current, &snapshot, (0, 0), 2));
+    }
+
+    #[test]
+    fn a_complete_window_build_matches_a_full_rebuild() {
+        let seed = 0x5EED;
+        let hydro = pipeline::Terrain::new(seed)
+            .expect("the v1 description compiles")
+            .solve_world_hydro()
+            .expect("the hydrology solves");
+        let columns: ColumnMap = demo_columns_extent(seed, -2, 2, -2, 2, &hydro)
+            .expect("the tile generates")
+            .into_iter()
+            .map(|(key, stack)| (key, Arc::new(stack)))
+            .collect();
+        let centre = (0, 0);
+        assert!(
+            build_window_ready(&columns, centre, 2, centre, 2),
+            "the accepted fixture has its whole dependency window"
+        );
+
+        let materials = Arc::new(demo_materials());
+        let light_table = Arc::new(demo_light_table());
+        let fine_columns = COLUMN_NEIGHBOURS
+            .into_iter()
+            .map(|(dx, dz)| (centre.0 + dx, centre.1 + dz))
+            .collect();
+        let built = build_column(BuildJob {
+            centre,
+            full: true,
+            detailed: true,
+            margin: 2,
+            columns: columns.clone(),
+            previous_light: BTreeMap::new(),
+            fine_columns,
+            materials: Arc::clone(&materials),
+            light_table,
+        });
+        let full_light = demo_column_light(&columns);
+
+        for (dx, dz) in std::iter::once((0, 0)).chain(COLUMN_NEIGHBOURS) {
+            let key = (centre.0 + dx, centre.1 + dz);
+            assert_eq!(
+                built.light[&key], full_light[&key],
+                "column {dx},{dz} light matches a full rebuild"
+            );
+        }
+
+        let expected = demo_fine_column(&columns, &full_light, &materials, centre.0, centre.1);
+        let actual = &built.replace[&centre];
+        assert_eq!(
+            actual.len(),
+            expected.len(),
+            "the centre mesh has the same sections"
+        );
+        for (actual, expected) in actual.iter().zip(&expected) {
+            assert_eq!(actual.origin, expected.origin);
+            assert_eq!(actual.scale, expected.scale);
+            assert_eq!(
+                actual.mesh, expected.mesh,
+                "the accepted centre mesh matches a full remesh"
+            );
+        }
+    }
+}
