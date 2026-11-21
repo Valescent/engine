@@ -3,10 +3,10 @@
 use crate::error::{ErrorKind, Stage, TerrainError};
 
 /// File name of the description inside a world directory.
-pub const DESCRIPTION_FILE: &str = "description.toml";
+pub(crate) const DESCRIPTION_FILE: &str = "description.toml";
 
 /// Schema version of the description format itself.
-pub const SCHEMA_VERSION: u16 = 1;
+pub(crate) const SCHEMA_VERSION: u16 = 1;
 
 /// Height of one section on every axis (`I1.3`).
 pub const SECTION_SIZE: u32 = 32;
@@ -27,7 +27,7 @@ pub const SEA: i32 = 128;
 pub const MAX_TERRAIN_Y: i32 = 352;
 
 /// Depth below which only deep rock appears (`G1.4`).
-pub const DEEP_Y: i32 = 64;
+pub(crate) const DEEP_Y: i32 = 64;
 
 /// Blocks per macro lattice cell (`B4.1`).
 pub const MACRO_CELL: i32 = 4;
@@ -39,37 +39,37 @@ pub const TILE_BLOCKS: i32 = 128;
 pub const HYDRO_TILE: i32 = 512;
 
 /// Halo width of a hydrology tile (`D8.1`, confirm).
-pub const HYDRO_BORDER: i32 = 64;
+pub(crate) const HYDRO_BORDER: i32 = 64;
 
 /// Accumulated cells that start a river (`D3.1`).
-pub const RIVER_MIN_CELLS: u32 = 300;
+pub(crate) const RIVER_MIN_CELLS: u32 = 300;
 
 /// Accumulation scale of the river width curve (`D3.2`).
-pub const W_SCALE: f32 = 0.28;
+pub(crate) const W_SCALE: f32 = 0.28;
 
 /// Accumulation over which a river ramps up from zero width (`D3.2`).
-pub const RIVER_RAMP_CELLS: f32 = 50.0;
+pub(crate) const RIVER_RAMP_CELLS: f32 = 50.0;
 
 /// Minimum roof above a cave (`F2.5`).
-pub const CAVE_MIN_ROOF: i32 = 4;
+pub(crate) const CAVE_MIN_ROOF: i32 = 4;
 
 /// Detail band depth below the macro top (`F3.3`).
-pub const DETAIL_DOWN: i32 = 24;
+pub(crate) const DETAIL_DOWN: i32 = 24;
 
 /// Detail band height above the macro top (`F3.3`).
-pub const DETAIL_UP: i32 = 8;
+pub(crate) const DETAIL_UP: i32 = 8;
 
 /// Distance at which fog ends: `LOD2_RADIUS_BLOCKS - 64` (`O3.1`).
-pub const FOG_END: i32 = LOD2_RADIUS_BLOCKS - 64;
+pub(crate) const FOG_END: i32 = LOD2_RADIUS_BLOCKS - 64;
 
 /// LOD0 radius in blocks: 16 columns of 32 (`N1.1`).
-pub const LOD0_RADIUS_BLOCKS: i32 = 512;
+pub(crate) const LOD0_RADIUS_BLOCKS: i32 = 512;
 
 /// LOD1 radius in blocks (`N1.1`).
-pub const LOD1_RADIUS_BLOCKS: i32 = 1_024;
+pub(crate) const LOD1_RADIUS_BLOCKS: i32 = 1_024;
 
 /// LOD2 radius in blocks (`N1.1`).
-pub const LOD2_RADIUS_BLOCKS: i32 = 2_048;
+pub(crate) const LOD2_RADIUS_BLOCKS: i32 = 2_048;
 
 /// The wind axis for the rain shadow march (`E2.1`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -327,7 +327,7 @@ pub struct Description {
 /// are here rather than in the description because one description serves many
 /// worlds (`A1.1`).
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct WorldHeader {
+pub(crate) struct WorldHeader {
     /// World seed. Not part of the description hash.
     pub seed: u64,
     /// Generator version this world is pinned to (`T1.2`).

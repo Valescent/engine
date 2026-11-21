@@ -17,7 +17,7 @@ use super::terrain::{Terrain, micros};
 /// The hydrology result for one tile (`D8.2`).
 ///
 /// World mode is the v1 path: the tile is a view of one solve over
-/// [`hydro::WORLD_SIDE_CELLS`], so a basin that crosses a tile seam has one
+/// `hydro::WORLD_SIDE_CELLS`, so a basin that crosses a tile seam has one
 /// level. Tile mode remains for tiles outside that grid.
 #[derive(Clone, Debug)]
 pub enum HydroTileRef {
@@ -103,11 +103,11 @@ impl Terrain {
         self
     }
 
-    /// Solves the whole finite world at [`hydro::WORLD_SIDE_CELLS`].
+    /// Solves the whole finite world at `hydro::WORLD_SIDE_CELLS`.
     ///
     /// # Errors
     ///
-    /// Propagates [`hydro::WorldHydro::solve`].
+    /// Propagates `hydro::WorldHydro::solve`.
     pub fn solve_world_hydro(&self) -> Result<Arc<hydro::WorldHydro>, TerrainError> {
         let side = hydro::WORLD_SIDE_CELLS;
         let cells = usize::try_from(side * side).expect("the world grid fits usize");

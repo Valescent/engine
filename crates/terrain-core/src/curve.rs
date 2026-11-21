@@ -31,7 +31,7 @@ struct Segment {
 
 /// A compiled monotone cubic curve over `[0, 1]`.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Curve {
+pub(crate) struct Curve {
     /// Control points, strictly increasing in `x`.
     points: Vec<(f32, f32)>,
     /// One compiled polynomial per interval between control points.

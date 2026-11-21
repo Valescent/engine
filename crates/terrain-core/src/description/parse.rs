@@ -18,7 +18,7 @@ use super::schema::{Axis, Description, EmbeddedRef, F32_RULE, KEYS, default_v1, 
 /// an optional leading `-`; `f32` keys are eight hex digits of a bit pattern,
 /// with or without `0x` and in either case. A trailing decimal comment on an
 /// `f32` value is ignored and never trusted. NaN and infinity are rejected.
-pub fn parse(text: &str) -> Result<Description, TerrainError> {
+pub(crate) fn parse(text: &str) -> Result<Description, TerrainError> {
     let stage = Stage::Description;
     let mut values: Vec<Option<&str>> = vec![None; KEYS.len()];
     let mut in_meta = false;
@@ -114,7 +114,7 @@ pub fn parse(text: &str) -> Result<Description, TerrainError> {
 ///
 /// [`ErrorKind::DescriptionInvalid`] for any syntax, key, or value violation,
 /// including range failures caught by [`Description::validate`].
-pub fn from_toml_str(text: &str) -> Result<Description, TerrainError> {
+pub(crate) fn from_toml_str(text: &str) -> Result<Description, TerrainError> {
     let values = collect(text)?;
     let mut description = default_v1();
     for (spec, value) in KEYS.iter().zip(values) {
@@ -584,7 +584,7 @@ impl Description {
     /// output is display only.
     ///
     /// There is deliberately no `[meta]` table: [`Description`] has no field
-    /// for provenance, so emitting one would invent data. [`from_toml_str`]
+    /// for provenance, so emitting one would invent data. `from_toml_str`
     /// ignores `[meta]` when reading, and this text parses back to an equal
     /// description with identical [`Self::canonical_bytes`] and
     /// [`Self::description_hash`].

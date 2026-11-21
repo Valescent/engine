@@ -136,7 +136,7 @@ pub(super) enum LightSource<'a> {
 /// and use the coarse sky rule of
 /// [`mesh_coarse`](crate::mesher2::mesh_coarse). The `light` argument is
 /// ignored above `Lod0`.
-pub fn mesh(
+pub(crate) fn mesh(
     section: &Section,
     blocks: &PaddedBlocks,
     light: &PaddedLight,
@@ -164,7 +164,7 @@ pub fn mesh(
 /// [`PaddedBlocks::from_sections`] world-edge mirror rule.
 ///
 /// The six face neighbours are the first six entries; see
-/// [`mesh_from_face_neighbours`] for the older six-neighbour call shape.
+/// `mesh_from_face_neighbours` for the older six-neighbour call shape.
 pub fn mesh_from_neighbours(
     section: &Section,
     neighbours: &[Option<&Section>; 26],
@@ -185,7 +185,7 @@ pub fn mesh_from_neighbours(
 /// leave the six faces this is byte-identical to [`mesh_from_neighbours`] with
 /// air diagonals, and to the pre-26-neighbour behaviour. `None` face entries
 /// keep the world-edge mirror rule.
-pub fn mesh_from_face_neighbours(
+pub(crate) fn mesh_from_face_neighbours(
     section: &Section,
     neighbours: &[Option<&Section>; 6],
     light: &PaddedLight,

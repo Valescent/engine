@@ -16,7 +16,7 @@ use crate::error::{ErrorKind, Stage, TerrainError};
 use crate::section::{BlockId, Section, section_index};
 
 /// Downward skirt depth in coarse cells along a lower-resolution edge (`N3.2`).
-pub const SKIRT_DEPTH: i32 = 2;
+pub(crate) const SKIRT_DEPTH: i32 = 2;
 
 /// Air, by registry convention.
 const AIR: BlockId = 0;

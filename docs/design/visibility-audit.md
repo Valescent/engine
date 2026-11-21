@@ -1,31 +1,35 @@
 # terrain-core visibility audit
 
-**Status:** Batch 1 applied on `feature/visibility-narrow`. It narrowed 325 of the
-500 candidates across the 18 planned modules; the reachable public surface is now
-**564 items**, down from 889.
+**Status:** Batch 2 applied on `feature/visibility-narrow2`. It narrowed 181 items:
+the 175 batch-2 candidates, plus `pipeline::Curves` (which released
+`curve::Curve`) and `residency::ring`'s `revisions::RequestKey`, plus three
+forced cascades in `light2` (`ColumnLight::{sky_slot, block_slot}` and
+`ColumnLight::relight_column`, which name `LightSlot` and `Edit`). The reachable
+public surface is now **383 items**, down from 564 after batch 1 and 889 at the
+audit baseline.
 
 | Batch | Items narrowed | Reachable public items | State |
 |---|---:|---:|---|
 | Audit baseline | 0 | 889 | merged (`a6720f0`) |
-| Batch 1 | 325 | 564 | applied |
-| Batches 2-3 | 175 | 389 | remaining |
+| Batch 1 | 325 | 564 | merged (`eef849a`) |
+| Batch 2 | 181 | 383 | applied |
+| Batch 3 | remaining helpers | 383 minus batch 3 | remaining |
 
-Two items that §5 lists in batch 1 stayed public because a kept public signature
-names them: `curve::Curve` (reachable through `pipeline::Curves`) and
-`revisions::RequestKey` (reachable through `residency::ring`). Moving either would
-require narrowing the public owner in the same change, which is batch 2 work. In
-exchange, `features::scatter::{RenderShape::occludes, RenderShape::blocks_skylight}`
-narrowed with their type, so the batch still totals 325 and the recount still lands
-on 564.
+`curve::Curve` and `revisions::RequestKey` were the two items §5 left public
+because a kept public signature named them. Batch 2 narrowed their owners
+(`pipeline::Curves` and `residency::ring`) and both followed, as §5 predicted.
+`features::scatter::{RenderShape::occludes, RenderShape::blocks_skylight}` were
+narrowed with their type in batch 1, so the batch still totals 325.
 
 **Scope below:** the audit and the batch plan as merged. It implements decision 3
 of [Modular structure](modular-structure.md#8-decisions-2026-11-20): `terrain-core`
 is an internal crate, so its public surface should be what `engine` and
 `terrain-gen` need, and nothing else.
 
-**Non-goals:** No narrowing in this change. No edit to `engine`'s facade in this
-change. No change to the `terrain-gen` command surface, save formats, or golden
-outputs.
+**Non-goals:** No edit to `engine`'s facade in this change. No change to the
+`terrain-gen` command surface, save formats, or golden outputs. No behaviour,
+generation, format, or algorithm change: the batch-2 commit is visibility and
+rustdoc-link only.
 
 ## 1. Method
 
@@ -459,6 +463,61 @@ crate needs, so they need per-item care:
 | `world_save` | 2 | `MIGRATION_REPORT_PREFIX`, `DESCRIPTION_FILE` |
 | `lod` | 1 | `SKIRT_DEPTH` |
 
+### 6.1 Batch 2 result
+
+| Module | Narrowed | Public after | Notes |
+|---|---:|---:|---|
+| `residency` | 37 | 8 | `RingPlan`, `RingBudget::{v1}`, the ring entry points stay |
+| `light2` | 29 | 47 | 23 candidates plus 3 forced cascades and 3 module-local helpers |
+| `hydro::grid` | 19 | 3 | `TILE_CELLS`, `BORDER_CELLS`, `HydroTile` stay |
+| `description` | 17 | 22 | layout constants and the two non-`load` parsers |
+| `mesher2` | 14 | 48 | `mesh`, normal codes, `Side::ALL`, step skirts |
+| `save` | 11 | 19 | journal types, migration record, directory names |
+| `content` | 9 | 26 | record/render hashes, record constants, `pack_hash` |
+| `editlog` | 7 | 29 | `crc32`, wire encode/decode, replay helpers |
+| `padded` | 7 | 15 | layout constants and the free `index` |
+| `header` | 6 | 15 | `LoadStep`, `load_order`, `refuse_reason`, layout constants |
+| `hydro::world` | 5 | 22 | `OwnedWorldTile` accessors; the type stays an enum payload |
+| `pipeline` | 4 | 25 | `Curves` and its three methods |
+| `hash` | 4 | 3 | `hash64`, `hash2`, `hash3`, `hash01` |
+| `section` | 4 | 25 | record magic/version, `section_coord`, `section_index` |
+| `hydro::lake` | 3 | 1 | `find_lakes` and the lake thresholds |
+| `world_save` | 2 | 27 | report prefix and description file name |
+| `lod` | 1 | 4 | `SKIRT_DEPTH` |
+| `curve`, `revisions` | 2 | 0, 0 | released by narrowing `Curves` and `ring` |
+
+Three deviations from the table in §6 are forced by kept public signatures:
+
+- `pipeline::HydroTileRef` has `Tile(Rc<HydroTile>)` and
+  `World(OwnedWorldTile)` variant payloads. Narrowing either payload type would
+  be a `private_interfaces` violation, so `HydroTile` and `OwnedWorldTile` stay
+  public; only their accessors narrowed. That is why `hydro::grid` is 19 rather
+  than 20 and `hydro::world` is 5 rather than 6.
+- `light2::ColumnLight::{sky_slot, block_slot}` return `&LightSlot` and
+  `ColumnLight::relight_column` takes `&[Edit]`. `LightSlot` and `Edit` were
+  narrowed in this batch, so those three methods had to follow in the same
+  change. This adds three items beyond the §6 count.
+- `light2` also took `ColumnLight::new`, `ColumnBlocks::top_span` and
+  `COLUMN_SECTIONS`, which the audit counted as convenience methods; they were
+  grouped with their module rather than split into batch 3. The three extra
+  `light2` items above the §6 count are the forced cascades plus these helpers.
+
+No `unreachable_pub`, `private_interfaces`, or `private_bounds` allow was needed.
+Narrowed module-root re-exports carry `#[allow(unused_imports)]` to keep the flat
+crate-internal paths alive, matching the batch-1 treatment of `hydro::{EPS, D8,
+ORDER}`. One `clippy::struct_field_names` allow on the now-private
+`residency::Applied` documents the `applied` count field; the lint only fires
+once the struct stops being public.
+
+### 6.2 Journal family decision
+
+The batch-2 list does not include `WorldSave::journal_mut`, `JournalWriter`, or
+`JournalSink`, so the family stayed public as one unit. `journal_mut` still
+returns `&mut JournalWriter<File>`, which keeps the writer and its
+`S: JournalSink` bound reachable. Batch 3 should narrow the method and the
+writer/sink pair together, or move the method out of the public surface; there
+are no external implementors of `JournalSink`.
+
 Batch 3 is the method-level cleanup that this audit deliberately did not take:
 
 - `WorldSave::journal_mut` and `WorldSave::{begin_migration, migrate_sections,
@@ -506,17 +565,18 @@ cargo rustdoc -p terrain-core --lib -- -Z unstable-options --output-format json
 python -c "import json; d=json.load(open('target/doc/terrain_core.json', encoding='utf-8')); print(sum(1 for i in d['index'].values() if i.get('crate_id')==0 and i.get('visibility')=='public' and next(iter(i['inner'])) in {'function','struct','enum','constant','type_alias','trait','assoc_const'}))"
 ```
 
-Expected counts: 889 now, 564 after the first batch, 389 after all 500 narrow
-candidates. Treat a larger number as a missed narrowing and a smaller number as a
-removed item that the closure thought was reachable.
+Expected counts: 889 at the baseline, 564 after the first batch, 383 after the
+second. A larger number is a missed narrowing; a smaller one is a removed item or
+an unplanned cascade. Batch 3 remains on top of 383.
 
-Once the first batch is merged, tighten the doc gate:
-
-```console
-RUSTDOCFLAGS="-D warnings" cargo doc -p terrain-core --no-deps
-```
-
-This must not be enabled before the existing warnings in §8 are fixed.
+Once batch 2 is merged, the doc gate can be tightened: at this tip
+`RUSTDOCFLAGS="-D warnings" cargo doc -p terrain-core --no-deps
+--no-default-features` exits 0 with no warnings. The batch-2 change fixed the
+batch-1 links and the ten pre-existing warnings by turning links to
+newly-private items into code spans and by giving `JournalWriter`,
+`ErrorKind::InvariantViolated`, and `Terrain::footprint`-style links their full
+paths or code spans. The CI gate stays off in this change because the workflow
+file is outside this batch's ownership.
 
 ## 8. Risks
 
@@ -525,13 +585,14 @@ This must not be enabled before the existing warnings in §8 are fixed.
    `pub use` was narrowed; a public re-export of a `pub(crate)` item is a hard
    error. Apply each module in one commit and grep the module root for `pub use`
    before committing.
-2. **Rustdoc links to private items.** `cargo doc -p terrain-core` already emits
-   11 warnings at this tip: unresolved links to `super::RIVER_MIN_CELLS`,
+2. **Rustdoc links to private items.** `cargo doc -p terrain-core` emitted 11
+   warnings at the batch-1 tip: unresolved links to `super::RIVER_MIN_CELLS`,
    `Stage::Hydrology`, `ErrorKind::InvariantViolated`, and `JournalWriter` /
    `JournalWriter::flush`, plus public docs that link to the private submodules
-   `pipeline::{terrain, stages, hydro}` and `Terrain::footprint`. Narrowing adds
-   more links of the same kind. Fix them by changing the link text to code spans
-   or by linking to a public replacement; do not keep an item public only to
+   `pipeline::{terrain, stages, hydro}` and `Terrain::footprint`. Batch 2
+   narrowed more links of the same kind and fixed every one of them, so the
+   strict doc build is clean at this tip. Continue to change such link text to
+   code spans or to a public replacement; do not keep an item public only to
    satisfy a doc link.
 3. **Private types in public signatures.** The signature closure is what prevents
    this, but it depends on rustdoc recording the edge. Pay special attention to

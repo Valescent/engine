@@ -2,13 +2,13 @@
 //!
 //! A section is 32 blocks on every axis and the cell order is
 //! `x | z << 5 | y << 10`, so `x` is fastest and one `y` layer is contiguous.
-//! [`section_index`] and [`section_coord`] are the only places that formula
+//! `section_index` and `section_coord` are the only places that formula
 //! exists; every loop calls them instead of inlining the shifts.
 //!
 //! A block is a [`BlockId`]. Id `0` is air by registry convention, which is what
 //! the stored solid count tracks.
 //!
-//! [`Section::Uniform`] stores one id for the whole volume.
+//! `Section::Uniform` stores one id for the whole volume.
 //! [`Section::Paletted`] stores a palette and bit-packed palette indices, `bits`
 //! per cell, LSB-first inside `u64` words. Every lane width divides 64, so a
 //! field never straddles a word boundary.
@@ -100,7 +100,7 @@ impl Section {
         self.set_index(section_index(x, y, z), id);
     }
 
-    /// Reads one cell by [`section_index`]. Indices are masked to the volume.
+    /// Reads one cell by `section_index`. Indices are masked to the volume.
     #[must_use]
     pub fn get_index(&self, index: usize) -> BlockId {
         let index = index & (SECTION_VOLUME - 1);
@@ -115,7 +115,7 @@ impl Section {
         }
     }
 
-    /// Writes one cell by [`section_index`]. Indices are masked to the volume.
+    /// Writes one cell by `section_index`. Indices are masked to the volume.
     pub fn set_index(&mut self, index: usize, id: BlockId) {
         let index = index & (SECTION_VOLUME - 1);
         match self {
@@ -236,7 +236,7 @@ impl Section {
         }
     }
 
-    /// Demotes a section whose cells all hold one id to [`Self::Uniform`].
+    /// Demotes a section whose cells all hold one id to `Self::Uniform`.
     ///
     /// The palette is append-only, so stale entries can outnumber the ids still
     /// in use; this scans the decoded cells and ignores them. Anything else is a
@@ -374,16 +374,16 @@ pub struct SectionKey {
 /// The only place the formula exists. Coordinates are masked to `0..32`, so a
 /// caller may pass a world coordinate and address `(x & 31, y & 31, z & 31)`.
 #[must_use]
-pub fn section_index(x: u32, y: u32, z: u32) -> usize {
+pub(crate) fn section_index(x: u32, y: u32, z: u32) -> usize {
     ((x & LOCAL_MASK) | ((z & LOCAL_MASK) << LOCAL_SHIFT) | ((y & LOCAL_MASK) << (2 * LOCAL_SHIFT)))
         as usize
 }
 
 /// The `(x, y, z)` local cell of a section index.
 ///
-/// The inverse of [`section_index`]. Indices are masked to the volume.
+/// The inverse of `section_index`. Indices are masked to the volume.
 #[must_use]
-pub fn section_coord(index: usize) -> (u32, u32, u32) {
+pub(crate) fn section_coord(index: usize) -> (u32, u32, u32) {
     let index = u32::try_from(index & (SECTION_VOLUME - 1)).expect("a masked index fits u32");
     let x = index & LOCAL_MASK;
     let z = (index >> LOCAL_SHIFT) & LOCAL_MASK;

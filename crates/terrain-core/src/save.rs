@@ -4,9 +4,10 @@
 //! the code side of it. It names files, writes them atomically, rotates the one
 //! previous generation, and opens the journal after recovering a torn tail.
 //!
-//! The journal IO thread is the caller's: [`open_journal`] returns the recovered
-//! batches and a [`JournalWriter`] positioned at the recovered end. Call
-//! [`JournalWriter::flush`] on pause, on quit, and before every section save.
+//! The journal IO thread is the caller's: `open_journal` returns the recovered
+//! batches and a [`JournalWriter`](crate::editlog::JournalWriter) positioned at
+//! the recovered end. Call
+//! [`JournalWriter::flush`](crate::editlog::JournalWriter::flush) on pause, on quit, and before every section save.
 //!
 //! `world-repair` (the interactive choice between backup, quarantine, and
 //! salvage) is not implemented here. [`SectionStore::read_backup`] exposes the
@@ -26,12 +27,16 @@ mod journal;
 mod record;
 mod store;
 
-pub use journal::{JOURNAL_DIR, JOURNAL_NAME, OpenedJournal, open_journal};
-pub use record::{
+#[allow(unused_imports)] // crate-private re-exports keep the flat module paths
+pub(crate) use journal::{JOURNAL_DIR, JOURNAL_NAME, OpenedJournal, open_journal};
+#[allow(unused_imports)] // crate-private re-exports keep the flat module paths
+pub(crate) use record::{
     MIGRATION_JOURNAL, MigrationRecord, append_migration_record, read_migration_records,
 };
+#[allow(unused_imports)] // crate-private re-exports keep the flat module paths
+pub(crate) use store::SECTIONS_DIR;
 pub(crate) use store::sync_directory;
-pub use store::{RepairAction, RepairOutcome, SECTIONS_DIR, SectionStore};
+pub use store::{RepairAction, RepairOutcome, SectionStore};
 
 use std::path::PathBuf;
 

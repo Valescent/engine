@@ -52,7 +52,8 @@ impl WorldHydro {
     ///
     /// # Errors
     ///
-    /// Returns [`Stage::Hydrology`] with an [`ErrorKind::InvariantViolated`]
+    /// Returns `Stage::Hydrology` with an
+    /// [`ErrorKind::InvariantViolated`](crate::error::ErrorKind::InvariantViolated)
     /// when `side` is zero or overflows, when `height` is not exactly
     /// `side * side` cells, or when a height is not finite. Non-finite input is
     /// rejected, never clamped (`A2.3`, `S1.4`).
@@ -163,7 +164,7 @@ impl WorldHydro {
     /// wholly inside the solved world.
     ///
     /// The view uses [`HydroTile`](super::HydroTile)'s convention: local `x`/`z` in
-    /// `0..SIDE`, the owned square starting at [`INTERIOR_START`](super::grid::INTERIOR_START), and the
+    /// `0..SIDE`, the owned square starting at `INTERIOR_START`, and the
     /// cells just outside it reading the neighbouring world cells. Because the
     /// world pass already solved every cell exactly, the view never re-solves
     /// and has no halo pinning.
@@ -320,7 +321,7 @@ impl OwnedWorldTile {
     /// Wraps `tile_x`/`tile_z`, or returns `None` when the tile is not wholly
     /// inside the solved world.
     #[must_use]
-    pub fn new(world: Arc<WorldHydro>, tile_x: i32, tile_z: i32) -> Option<Self> {
+    pub(crate) fn new(world: Arc<WorldHydro>, tile_x: i32, tile_z: i32) -> Option<Self> {
         world.tile_view(tile_x, tile_z)?;
         Some(Self {
             origin_x: tile_x.checked_mul(TILE_CELLS)?,
@@ -339,25 +340,25 @@ impl OwnedWorldTile {
 
     /// Pre-detail macro height at a local cell.
     #[must_use]
-    pub fn height(&self, x: i32, z: i32) -> f32 {
+    pub(crate) fn height(&self, x: i32, z: i32) -> f32 {
         self.view().height(x, z)
     }
 
     /// Flood surface at a local cell.
     #[must_use]
-    pub fn filled(&self, x: i32, z: i32) -> f32 {
+    pub(crate) fn filled(&self, x: i32, z: i32) -> f32 {
         self.view().filled(x, z)
     }
 
     /// Lake surface at a local cell, or `0` when dry.
     #[must_use]
-    pub fn lake_level(&self, x: i32, z: i32) -> i32 {
+    pub(crate) fn lake_level(&self, x: i32, z: i32) -> i32 {
         self.view().lake_level(x, z)
     }
 
     /// Channel width in blocks at a local cell.
     #[must_use]
-    pub fn river_width(&self, x: i32, z: i32) -> f32 {
+    pub(crate) fn river_width(&self, x: i32, z: i32) -> f32 {
         self.view().river_width(x, z)
     }
 }

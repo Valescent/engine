@@ -8,7 +8,7 @@
 //! spawns a thread (`J3.1`): a caller supplies a [`JournalSink`] (a
 //! [`std::fs::File`] for the real journal, a `Vec<u8>` in tests), builds an
 //! [`EditBatch`], pushes it into a [`JournalWriter`], and recovers with
-//! [`decode_batches`].
+//! `decode_batches`.
 //!
 //! Three rules drive every shape here:
 //!
@@ -19,7 +19,7 @@
 //!   it, so a sort never decides between two records at different coordinates.
 //! - Nothing is recorded when `old == new` (`J1.4`). The [`Edit::record`]
 //!   constructor, [`EditBatch::new`], [`EditBatch::commit`], and
-//!   [`encode_batch`] each drop such a pair.
+//!   `encode_batch` each drop such a pair.
 //!
 //! # Wire layout (`J3.3`)
 //!
@@ -50,7 +50,7 @@
 //!
 //! # Group commit (`J3.1`)
 //!
-//! [`encode_batch`] and [`decode_batches`] are pure framing; [`JournalWriter`]
+//! `encode_batch` and `decode_batches` are pure framing; [`JournalWriter`]
 //! adds the policy. It buffers encoded frames and flushes them in one
 //! [`JournalSink::write_all`] when [`CommitPolicy::should_flush`] says so (64
 //! batches or 250 ms, whichever comes first), and calls
@@ -78,8 +78,9 @@ mod replay;
 #[cfg(test)]
 mod test_support;
 
-pub use frame::{
-    BlockName, Edit, EditBatch, crc32, decode_batches, decode_with_report, encode_batch,
-};
+pub use frame::{BlockName, Edit, EditBatch};
+#[allow(unused_imports)] // crate-private re-exports keep the flat module paths
+pub(crate) use frame::{crc32, decode_batches, decode_with_report, encode_batch};
 pub use log::{CommitPolicy, FlushOutcome, JournalSink, JournalWriter};
-pub use replay::{can_undo, coalesce, last_write_wins};
+#[allow(unused_imports)] // crate-private re-exports keep the flat module paths
+pub(crate) use replay::{can_undo, coalesce, last_write_wins};

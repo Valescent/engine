@@ -46,7 +46,7 @@ impl Section {
 
 /// The saved `baseline_hash` (`J4.1`): `SHA-256` over the decoded block ids of
 /// one section, two little-endian bytes per cell, in
-/// [`crate::section::section_index`] order.
+/// `crate::section::section_index` order.
 ///
 /// This is the one pinned derivation. The save writer computes it over the
 /// section as first generated and records it in the v2 record; `terrain-gen

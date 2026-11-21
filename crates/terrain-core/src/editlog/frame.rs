@@ -20,8 +20,8 @@ const MIN_RECORD_BYTES: usize = 32;
 /// One appended block change.
 ///
 /// Records are append-only. The same coordinate may appear many times; the
-/// read path is [`last_write_wins`](crate::editlog::last_write_wins) and
-/// [`coalesce`](crate::editlog::coalesce). Coordinates are world
+/// read path is `last_write_wins` and
+/// `coalesce`. Coordinates are world
 /// block coordinates, so a chunk-key layout change never rewrites the log
 /// (`A4.2`).
 #[derive(Clone, Debug)]
@@ -117,8 +117,8 @@ impl Edit {
 /// Position and names are **not** part of the order: two records that differ
 /// only in `x`/`y`/`z` compare [`Ordering::Equal`], which is why callers that
 /// care about coordinates key by [`Edit::position`] (as
-/// [`last_write_wins`](crate::editlog::last_write_wins) and
-/// [`coalesce`](crate::editlog::coalesce) do). Equal keys in one log are an invariant violation
+/// `last_write_wins` and
+/// `coalesce` do). Equal keys in one log are an invariant violation
 /// (`J2.1`); a stable sort therefore only ever sees them from bad input, and
 /// keeps them in arrival order.
 impl Ord for Edit {
@@ -242,7 +242,7 @@ impl EditBatch {
 /// representable; the length saturates so recovery treats the frame as torn
 /// instead of misreading it.
 #[must_use]
-pub fn encode_batch(batch: &EditBatch) -> Vec<u8> {
+pub(crate) fn encode_batch(batch: &EditBatch) -> Vec<u8> {
     let records: Vec<&Edit> = batch
         .edits
         .iter()
@@ -285,7 +285,7 @@ pub fn encode_batch(batch: &EditBatch) -> Vec<u8> {
 /// A *complete* frame that fails its crc, its bit widths, or its UTF-8 is
 /// rejected: a corrupt byte inside the valid region must never be silently
 /// dropped together with everything after it.
-pub fn decode_batches(bytes: &[u8]) -> Result<(Vec<EditBatch>, usize), TerrainError> {
+pub(crate) fn decode_batches(bytes: &[u8]) -> Result<(Vec<EditBatch>, usize), TerrainError> {
     let mut batches = Vec::new();
     let mut offset = 0_usize;
     while let Some(rest) = bytes.get(offset..) {
@@ -327,9 +327,9 @@ pub fn decode_batches(bytes: &[u8]) -> Result<(Vec<EditBatch>, usize), TerrainEr
     Ok((batches, offset))
 }
 
-/// Decodes like [`decode_batches`], but reports a torn tail as an error.
+/// Decodes like `decode_batches`, but reports a torn tail as an error.
 ///
-/// Recovery wants the valid prefix and its offset, which [`decode_batches`]
+/// Recovery wants the valid prefix and its offset, which `decode_batches`
 /// returns. This wrapper exists for callers that need the typed notice
 /// [`ErrorKind::JournalTornTail`] with the journal path, for example a load
 /// banner. It never truncates silently.
@@ -337,8 +337,8 @@ pub fn decode_batches(bytes: &[u8]) -> Result<(Vec<EditBatch>, usize), TerrainEr
 /// # Errors
 ///
 /// Returns [`ErrorKind::JournalTornTail`] when `bytes` ends mid-frame, and the
-/// same framing errors as [`decode_batches`] for a corrupt complete frame.
-pub fn decode_with_report(
+/// same framing errors as `decode_batches` for a corrupt complete frame.
+pub(crate) fn decode_with_report(
     bytes: &[u8],
     path: impl Into<PathBuf>,
 ) -> Result<(Vec<EditBatch>, usize), TerrainError> {
@@ -529,7 +529,7 @@ static CRC32_TABLE: [u32; 256] = crc32_table();
 ///
 /// Check value: `crc32(b"123456789") == 0xCBF4_3926`.
 #[must_use]
-pub fn crc32(bytes: &[u8]) -> u32 {
+pub(crate) fn crc32(bytes: &[u8]) -> u32 {
     crc32_update(0, bytes)
 }
 

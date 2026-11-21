@@ -49,7 +49,7 @@
 //!
 //! [`add_skirts`] appends a downward wall along selected section edges, into the
 //! opaque range, so a coarse section's lower-resolution boundary hides the gap
-//! under it instead of stitching to its finer neighbours. [`add_step_skirts`]
+//! under it instead of stitching to its finer neighbours. `add_step_skirts`
 //! is the drop-aware variant: it reads the coarse padded scratch and fills only
 //! the vertical step to the adjacent column, so a flush edge appends nothing.
 //! Skirt records copy the boundary face's `tile` and `tint`, take its air-side
@@ -62,7 +62,7 @@
 //! engine-wide `34³` scratch. The mesher reads the section plus all 26
 //! neighbours, so corner AO at a section corner sees the diagonal sections
 //! instead of defaulting them to air. [`mesh_from_neighbours`] builds that
-//! scratch from the 26-section ownership array; [`mesh_from_face_neighbours`]
+//! scratch from the 26-section ownership array; `mesh_from_face_neighbours`
 //! keeps the old six-face call shape and pads the edge and corner slots with
 //! air.
 //!
@@ -85,11 +85,19 @@ const PLANE_WIDTH: usize = crate::description::SECTION_SIZE as usize;
 /// Cells in one section face plane.
 const PLANE_CELLS: usize = PLANE_WIDTH * PLANE_WIDTH;
 
-pub use greedy::{mesh, mesh_from_face_neighbours, mesh_from_neighbours};
-pub use lod::{MeshLod, SHADE_PER_CELL, WATER_SKY_ATTEN, mesh_coarse};
+pub use greedy::mesh_from_neighbours;
+#[allow(unused_imports)] // crate-private re-exports keep the flat module paths
+pub(crate) use greedy::{mesh, mesh_from_face_neighbours};
+#[allow(unused_imports)] // crate-private re-exports keep the flat module paths
+pub(crate) use lod::SHADE_PER_CELL;
+pub use lod::{MeshLod, WATER_SKY_ATTEN, mesh_coarse};
 pub use material::{Material, MaterialProps};
-pub use record::{
+#[allow(unused_imports)] // crate-private re-exports keep the flat module paths
+pub(crate) use record::{
     NORMAL_CROSS_A, NORMAL_CROSS_B, NORMAL_NEG_X, NORMAL_NEG_Y, NORMAL_NEG_Z, NORMAL_POS_X,
-    NORMAL_POS_Y, NORMAL_POS_Z, Quad, SectionMesh, quad_count,
+    NORMAL_POS_Y, NORMAL_POS_Z,
 };
-pub use skirt::{Side, SkirtEdges, add_skirts, add_step_skirts, skirt_blocks};
+pub use record::{Quad, SectionMesh, quad_count};
+pub use skirt::{Side, SkirtEdges, add_skirts};
+#[allow(unused_imports)] // crate-private re-exports keep the flat module paths
+pub(crate) use skirt::{add_step_skirts, skirt_blocks};

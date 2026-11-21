@@ -6,7 +6,7 @@ use super::greedy::{LightSource, collect_all};
 use super::material::MaterialProps;
 use super::record::SectionMesh;
 
-pub const SHADE_PER_CELL: u8 = 1;
+pub(crate) const SHADE_PER_CELL: u8 = 1;
 
 /// Extra sky-light loss per water block above a coarse face (`L2.4`, `N3.5`).
 pub const WATER_SKY_ATTEN: u8 = 1;

@@ -2,7 +2,7 @@
 pub const HEADER_FILE: &str = "header.bin";
 
 /// First four bytes of every header.
-pub const MAGIC: [u8; 4] = *b"TWLD";
+pub(crate) const MAGIC: [u8; 4] = *b"TWLD";
 
 /// Header/save format version this build writes (`A1.2`).
 ///
@@ -10,10 +10,10 @@ pub const MAGIC: [u8; 4] = *b"TWLD";
 pub const HEADER_FORMAT_VERSION: u16 = 2;
 
 /// The oldest header layout this build still reads.
-pub const HEADER_FORMAT_V1: u16 = 1;
+pub(crate) const HEADER_FORMAT_V1: u16 = 1;
 
 /// Number of steps in the load order (`A1.5`).
-pub const LOAD_STEP_COUNT: usize = 7;
+pub(crate) const LOAD_STEP_COUNT: usize = 7;
 
 /// Migration state carried by the header (`A16`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

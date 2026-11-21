@@ -470,7 +470,7 @@ fn top_span_skips_open_air() {
 
 /// Pins one fixed seed's whole-column light.
 ///
-/// The block field comes from [`hash64`] alone, so the pin does not depend
+/// The block field comes from `hash64` alone, so the pin does not depend
 /// on the generator. Sky, block, and the interleaved digest are pinned
 /// separately: a change in either channel names itself.
 #[test]

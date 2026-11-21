@@ -18,7 +18,7 @@
 //! 3. `flow::accumulate` sums upstream cell counts in
 //!    `(filled descending, index ascending)` order and adds integer boundary
 //!    inflow, which is the only input that comes from a neighbouring tile.
-//! 4. [`lake::find_lakes`] records a level per basin, taken from the outlet's
+//! 4. `lake::find_lakes` records a level per basin, taken from the outlet's
 //!    filled height. A region that fails either gate is not recorded.
 //! 5. `flow::river_width`, `flow::bed_depth` and `flow::river_influence`
 //!    turn accumulation into the U profile. Applying it belongs to W4.
@@ -28,7 +28,7 @@
 //! A solved grid is `160 x 160` cells: the `128 x 128` interior the tile owns,
 //! plus `HYDRO_HYDRO_BORDER_CELLS = 16` cells (`64` blocks) of halo on every side
 //! (`D8.1`). The halo is *input*, not a second interior. After
-//! [`HydroTile::solve`] a halo cell reports its input height as its filled
+//! `HydroTile::solve` a halo cell reports its input height as its filled
 //! height, `1 + inflow` as its accumulation, and `None` as its receiver. Two
 //! consequences follow, and both are deliberate:
 //!
@@ -44,7 +44,7 @@
 //!
 //! # Mode b: the whole world (`D8.2`)
 //!
-//! v1 uses **world mode**. [`WorldHydro::solve`] runs one priority-flood, one D8
+//! v1 uses **world mode**. `WorldHydro::solve` runs one priority-flood, one D8
 //! pass, one accumulation and one lake pass over the entire `WORLD_HALF_EXTENT`
 //! grid (512 x 512 cells for the v1 world). There is no halo and no basin-size
 //! cap: a basin that crosses a 512-block tile seam is one connected region, so
@@ -55,7 +55,7 @@
 //!
 //! # World constants
 //!
-//! [`HydroTile::solve`] has no world-description argument, so the sea level and
+//! `HydroTile::solve` has no world-description argument, so the sea level and
 //! the terrain ceiling that the gates need are pinned here. They mirror
 //! [`crate::description::SEA`] and [`crate::description::MAX_TERRAIN_Y`], and
 //! `world_constants_match_the_description` fails if they ever drift apart.
@@ -72,12 +72,16 @@ pub mod world;
 pub(crate) use flood::EPS;
 #[allow(unused_imports)] // re-exported for the internal stages and unit tests
 pub(crate) use flow::{D8, ORDER};
-pub use grid::{
-    BED_FLOOR, BORDER_CELLS, CELL_COUNT, HALO_CELLS, HYDRO_BORDER_CELLS, HydroTile, INTERIOR_START,
-    MAX_LAKE_Y, MAX_TERRAIN_Y, SEA, SIDE, SIDE_CELLS, TILE_CELLS, WORLD_SIDE_CELLS,
+#[allow(unused_imports)] // crate-private re-exports keep the flat module paths
+pub(crate) use grid::{
+    BED_FLOOR, CELL_COUNT, HALO_CELLS, HYDRO_BORDER_CELLS, HydroTile, INTERIOR_START, MAX_LAKE_Y,
+    MAX_TERRAIN_Y, SEA, SIDE, SIDE_CELLS, WORLD_SIDE_CELLS,
 };
+pub use grid::{BORDER_CELLS, TILE_CELLS};
 pub use lake::Lake;
-pub use world::{OwnedWorldTile, WorldHydro, WorldTileView};
+#[allow(unused_imports)] // crate-private re-exports keep the flat module paths
+pub(crate) use world::OwnedWorldTile;
+pub use world::{WorldHydro, WorldTileView};
 
 /// Sea level as a routing threshold. `128` is exact in `f32`.
 #[allow(clippy::cast_precision_loss)]

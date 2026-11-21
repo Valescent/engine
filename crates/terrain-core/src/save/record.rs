@@ -10,13 +10,13 @@ use crate::section::SectionKey;
 use super::{corrupt, io_error};
 
 /// Append-only record of a migration in progress.
-pub const MIGRATION_JOURNAL: &str = "migration.journal";
+pub(crate) const MIGRATION_JOURNAL: &str = "migration.journal";
 /// Bytes in one `migration.journal` record.
 const MIGRATION_RECORD_LEN: usize = 22;
 
 /// One completed section transform, for resume (`A16`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MigrationRecord {
+pub(crate) struct MigrationRecord {
     /// Section that was transformed.
     pub key: SectionKey,
     /// CRC of the section file before the transform.
@@ -28,7 +28,7 @@ pub struct MigrationRecord {
 impl MigrationRecord {
     /// Encodes the 22-byte record, checksum last.
     #[must_use]
-    pub fn encode(self) -> [u8; MIGRATION_RECORD_LEN] {
+    pub(crate) fn encode(self) -> [u8; MIGRATION_RECORD_LEN] {
         let mut out = [0_u8; MIGRATION_RECORD_LEN];
         out[0..4].copy_from_slice(&self.key.column[0].to_le_bytes());
         out[4..8].copy_from_slice(&self.key.column[1].to_le_bytes());
@@ -42,7 +42,7 @@ impl MigrationRecord {
 
     /// Decodes one record, returning `None` for a bad checksum or length.
     #[must_use]
-    pub fn decode(bytes: &[u8]) -> Option<Self> {
+    pub(crate) fn decode(bytes: &[u8]) -> Option<Self> {
         let bytes: [u8; MIGRATION_RECORD_LEN] = bytes.try_into().ok()?;
         let checksum = crate::header::crc32(&bytes[..18]);
         let stored = u32::from_le_bytes([bytes[18], bytes[19], bytes[20], bytes[21]]);
@@ -72,7 +72,9 @@ impl MigrationRecord {
 ///
 /// [`crate::error::ErrorKind::IoError`] for a filesystem failure and
 /// [`crate::error::ErrorKind::CorruptSection`] for a bad complete record.
-pub fn read_migration_records(path: &Path) -> Result<(Vec<MigrationRecord>, u64), TerrainError> {
+pub(crate) fn read_migration_records(
+    path: &Path,
+) -> Result<(Vec<MigrationRecord>, u64), TerrainError> {
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), 0)),
@@ -94,7 +96,10 @@ pub fn read_migration_records(path: &Path) -> Result<(Vec<MigrationRecord>, u64)
 /// # Errors
 ///
 /// [`crate::error::ErrorKind::IoError`] for a filesystem failure.
-pub fn append_migration_record(path: &Path, record: MigrationRecord) -> Result<(), TerrainError> {
+pub(crate) fn append_migration_record(
+    path: &Path,
+    record: MigrationRecord,
+) -> Result<(), TerrainError> {
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)

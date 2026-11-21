@@ -14,10 +14,10 @@
 //! declaration order produce identical ids. Ids are never saved, hashed, or
 //! reported; they are an in-memory index into [`ContentPack::records`].
 //!
-//! [`record_hash`] covers canonical parsed bytes (`A5.3`): struct field order,
+//! `record_hash` covers canonical parsed bytes (`A5.3`): struct field order,
 //! little-endian fixed-width integers, length-prefixed strings, sorted map
 //! entries, and `-0.0` normalised to `+0.0`. Whitespace, comments, and file
-//! order never enter it. [`ContentPack::pack_hash`] hashes the name-sorted
+//! order never enter it. `ContentPack::pack_hash` hashes the name-sorted
 //! `(kind, name, record_version, record_hash)` list, which is what a
 //! description pins through its `CONTENT` reference.
 //!
@@ -41,9 +41,11 @@ mod hash;
 mod pack;
 mod record;
 
-pub use hash::{KIND_BLOCK, record_hash, render_hash};
+#[allow(unused_imports)] // crate-private re-exports keep the flat module paths
+pub(crate) use hash::{KIND_BLOCK, record_hash, render_hash};
 pub use pack::{ContentPack, UNKNOWN_SKY_ATTEN};
-pub use record::{
-    BlockRecord, FaceTextures, LAMP_EMISSION, LIGHT_LEVELS, MAX_NAME_BYTES, MAX_RECORDS,
-    RenderLayer, RenderShape, UNKNOWN_BASE, WATER_SKY_ATTEN, v1_default,
+pub use record::{BlockRecord, FaceTextures, LIGHT_LEVELS, RenderLayer, RenderShape, v1_default};
+#[allow(unused_imports)] // crate-private re-exports keep the flat module paths
+pub(crate) use record::{
+    LAMP_EMISSION, MAX_NAME_BYTES, MAX_RECORDS, UNKNOWN_BASE, WATER_SKY_ATTEN,
 };

@@ -216,7 +216,7 @@ impl Volume {
 
     /// The roof thickness in blocks for one column (`F2.5`).
     ///
-    /// [`crate::description::CAVE_MIN_ROOF`] unless [`Volume::mouth_open`] holds, in
+    /// `crate::description::CAVE_MIN_ROOF` unless [`Volume::mouth_open`] holds, in
     /// which case the entrance ramp lowers it towards zero.
     #[must_use]
     #[allow(clippy::cast_precision_loss)]

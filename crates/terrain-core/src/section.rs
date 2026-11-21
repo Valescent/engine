@@ -2,13 +2,13 @@
 //!
 //! `I1.1`, `I1.2`. A section is 32 blocks on every axis and the cell order is
 //! `x | z << 5 | y << 10`, so `x` is fastest and one `y` layer is contiguous.
-//! [`section_index`] and [`section_coord`] are the only places that formula
+//! `section_index` and `section_coord` are the only places that formula
 //! exists; every loop calls them instead of inlining the shifts.
 //!
 //! A block is a [`BlockId`]. Id `0` is air by registry convention, which is what
 //! the stored solid count tracks.
 //!
-//! [`Section::Uniform`] stores one id for the whole volume.
+//! `Section::Uniform` stores one id for the whole volume.
 //! [`Section::Paletted`] stores a palette and bit-packed palette indices, `bits`
 //! per cell, LSB-first inside `u64` words. Every lane width divides 64, so a
 //! field never straddles a word boundary.
@@ -28,7 +28,7 @@
 //! | Offset | Width | Field |
 //! |---|---|---|
 //! | `0..4` | 4 | magic `"TSEC"` |
-//! | `4..6` | 2 | record version: [`SECTION_RECORD_VERSION`] |
+//! | `4..6` | 2 | record version: `SECTION_RECORD_VERSION` |
 //! | `6..10` | 4 | column `x: i32` |
 //! | `10..14` | 4 | column `z: i32` |
 //! | `14..15` | 1 | section slot `y: u8` (`0..12`) |
@@ -63,7 +63,7 @@
 //! duplicating it.
 //!
 //! A name the pack does not hold decodes to a placeholder id starting at
-//! [`UNKNOWN_BASE`](crate::content::UNKNOWN_BASE) — one per distinct unknown
+//! `UNKNOWN_BASE` — one per distinct unknown
 //! name, in palette order — and is reported in [`SavedSection::unknown_names`].
 //! It never fails the record. The placeholder range is finite, so a section with
 //! more distinct unknown names than it can hold is a `ManifestIncompatible`
@@ -84,8 +84,9 @@ mod storage;
 mod tests;
 
 pub use baseline::baseline_hash;
-pub use codec::{
-    SECTION_RECORD_MAGIC, SECTION_RECORD_VERSION, SavedSection, decode_record, decode_record_at,
-    encode_record,
-};
-pub use storage::{BlockId, Section, SectionKey, section_coord, section_index};
+#[allow(unused_imports)] // crate-private re-exports keep the flat module paths
+pub(crate) use codec::{SECTION_RECORD_MAGIC, SECTION_RECORD_VERSION};
+pub use codec::{SavedSection, decode_record, decode_record_at, encode_record};
+pub use storage::{BlockId, Section, SectionKey};
+#[allow(unused_imports)] // crate-private re-exports keep the flat module paths
+pub(crate) use storage::{section_coord, section_index};

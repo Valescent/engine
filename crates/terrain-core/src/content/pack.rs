@@ -35,8 +35,8 @@ impl ContentPack {
     /// `DescriptionInvalid { key: "CONTENT" }`, with the `rule` naming the first
     /// offender, when:
     ///
-    /// - the pack holds more than [`MAX_RECORDS`] records;
-    /// - a name is empty, longer than [`MAX_NAME_BYTES`](super::record::MAX_NAME_BYTES), outside the charset,
+    /// - the pack holds more than `MAX_RECORDS` records;
+    /// - a name is empty, longer than `MAX_NAME_BYTES`, outside the charset,
     ///   or not `namespace:name`;
     /// - a name is declared twice (which would also duplicate its id);
     /// - `record_version` is `0`;
@@ -107,7 +107,7 @@ impl ContentPack {
 
     /// The properties of one runtime id (`A5.2`).
     ///
-    /// `None` for an id outside the pack, including the [`UNKNOWN_BASE`](super::record::UNKNOWN_BASE)
+    /// `None` for an id outside the pack, including the `UNKNOWN_BASE`
     /// placeholder range.
     #[must_use]
     pub fn props(&self, id: BlockId) -> Option<&BlockRecord> {
@@ -130,13 +130,13 @@ impl ContentPack {
     /// Refuses generation against a pack that does not match `pinned` exactly (`A5.4`).
     ///
     /// Every pinned record must be present with the same `record_version` and
-    /// the same [`record_hash`]. Extra records in `self` are ignored: a
+    /// the same `record_hash`. Extra records in `self` are ignored: a
     /// superset is fine, a subset is not. Missing, changed, or re-versioned
     /// records are all `DescriptionInvalid { key: "CONTENT" }`, with the rule
     /// naming which case fired.
     ///
     /// This is the *generation* check only. Opening saved terrain is allowed
-    /// with missing names, which degrade to [`UNKNOWN_BASE`](super::record::UNKNOWN_BASE) placeholders
+    /// with missing names, which degrade to `UNKNOWN_BASE` placeholders
     /// (`T1.6`), and never regenerates against a subset.
     ///
     /// # Errors

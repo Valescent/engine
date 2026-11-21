@@ -3,8 +3,8 @@ use crate::hash::sha256;
 use super::pack::ContentPack;
 use super::record::BlockRecord;
 
-/// Record kind tag for a block, the first element of the [`ContentPack::pack_hash`] tuple.
-pub const KIND_BLOCK: u8 = 1;
+/// Record kind tag for a block, the first element of the `ContentPack::pack_hash` tuple.
+pub(crate) const KIND_BLOCK: u8 = 1;
 
 impl ContentPack {
     /// Hashes the name-sorted `(kind, name, record_version, record_hash)` list (`A5.3`).
@@ -12,7 +12,7 @@ impl ContentPack {
     /// Declaration order, whitespace, and comments cannot affect the result.
     /// The digest is the pin a description stores in its `CONTENT` reference.
     #[must_use]
-    pub fn pack_hash(&self) -> [u8; 32] {
+    pub(crate) fn pack_hash(&self) -> [u8; 32] {
         let mut order: Vec<usize> = (0..self.records.len()).collect();
         order.sort_unstable_by_key(|&index| self.records[index].name.as_str());
 
@@ -41,14 +41,14 @@ impl ContentPack {
 /// 7. `drops`: `u32` entry count, then each `(name, count)` in name order.
 ///
 /// Texture references are **not** hashed (ADR-0015): they are presentation
-/// state, so a re-texture cannot change [`Self`], [`ContentPack::pack_hash`],
+/// state, so a re-texture cannot change [`Self`], `ContentPack::pack_hash`,
 /// or a saved section's baseline.
 ///
 /// The function is total: a record that `load` would reject still hashes its
 /// bytes (a non-finite `hardness` hashes its bit pattern) rather than panicking.
 /// Ids are deliberately absent; they are runtime state.
 #[must_use]
-pub fn record_hash(record: &BlockRecord) -> [u8; 32] {
+pub(crate) fn record_hash(record: &BlockRecord) -> [u8; 32] {
     let mut out = Vec::with_capacity(96);
     push_name(&mut out, &record.name);
     out.extend_from_slice(&record.record_version.to_le_bytes());
@@ -70,15 +70,15 @@ pub fn record_hash(record: &BlockRecord) -> [u8; 32] {
     sha256(&out)
 }
 
-/// Hashes a record's presentation state, which [`record_hash`] deliberately
+/// Hashes a record's presentation state, which `record_hash` deliberately
 /// excludes (`ADR-0015`).
 ///
 /// Layout: each of `textures.top`, `textures.side`, `textures.bottom` as a
 /// `u32` byte length followed by UTF-8 bytes. The result changes when a block
-/// is re-textured and is stable across everything [`record_hash`] covers, so
+/// is re-textured and is stable across everything `record_hash` covers, so
 /// visual baselines can track appearance without forking world identity.
 #[must_use]
-pub fn render_hash(record: &BlockRecord) -> [u8; 32] {
+pub(crate) fn render_hash(record: &BlockRecord) -> [u8; 32] {
     let mut out = Vec::with_capacity(96);
     push_name(&mut out, &record.textures.top);
     push_name(&mut out, &record.textures.side);

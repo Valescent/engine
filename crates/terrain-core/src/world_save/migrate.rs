@@ -186,7 +186,7 @@ impl WorldSave {
 }
 
 /// Prefix of the JSON report written after a migration (`A16`).
-pub const MIGRATION_REPORT_PREFIX: &str = "migration-report-";
+pub(crate) const MIGRATION_REPORT_PREFIX: &str = "migration-report-";
 
 /// One migration report, written beside the header.
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -12,21 +12,21 @@ use super::membership::{Class, Membership, column_index, membership};
 
 /// `K2.4`: the check name an urgent-queue overflow is reported under.
 ///
-/// The scheduler never panics on this. [`ClassCaps::admit`] returns
+/// The scheduler never panics on this. `ClassCaps::admit` returns
 /// [`Admit::Overflow`] and the caller raises
 /// [`ErrorKind::InvariantViolated`](crate::error::ErrorKind::InvariantViolated)
 /// with this name.
-pub const URGENT_OVERFLOW_CHECK: &str = "urgent_queue_overflow";
+pub(crate) const URGENT_OVERFLOW_CHECK: &str = "urgent_queue_overflow";
 
 /// One column-level scheduling request (`K2.4`, `K3.1`).
 ///
 /// The column is `[key.coord[0], key.coord[2]]`: residency is per column, so the
 /// vertical coordinate of a section-level key is not part of the order (`K1.2`).
 /// `centre` is the camera column the request was classified against; it is
-/// stored rather than read from a global so [`compare`] stays a pure function of
+/// stored rather than read from a global so `compare` stays a pure function of
 /// its two arguments.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Request {
+pub(crate) struct Request {
     /// Priority class.
     pub class: Class,
     /// Identity used at apply time: coordinate, stage, revision.
@@ -38,13 +38,13 @@ pub struct Request {
 impl Request {
     /// A request for `key`'s column, classified against `centre`.
     #[must_use]
-    pub const fn new(class: Class, key: RequestKey, centre: [i32; 2]) -> Self {
+    pub(crate) const fn new(class: Class, key: RequestKey, centre: [i32; 2]) -> Self {
         Self { class, key, centre }
     }
 
     /// The column this request is for, `[x, z]`.
     #[must_use]
-    pub const fn column(&self) -> [i32; 2] {
+    pub(crate) const fn column(&self) -> [i32; 2] {
         [self.key.coord[0], self.key.coord[2]]
     }
 
@@ -53,7 +53,7 @@ impl Request {
     /// Computed in `i64` first, so `i32::MIN` and `i32::MAX` on opposite sides
     /// cannot overflow or wrap.
     #[must_use]
-    pub fn ring(&self) -> i32 {
+    pub(crate) fn ring(&self) -> i32 {
         let [dx, dz] = self.offset();
         i32::try_from(dx.abs().max(dz.abs())).unwrap_or(i32::MAX)
     }
@@ -63,7 +63,7 @@ impl Request {
     /// Integer-only on purpose (`K2.2`): `sqrt` would introduce a float and a
     /// rounding rule into the order, and the sort never needs the root.
     #[must_use]
-    pub fn distance_squared(&self) -> i64 {
+    pub(crate) fn distance_squared(&self) -> i64 {
         let [dx, dz] = self.offset();
         dx * dx + dz * dz
     }
@@ -82,16 +82,16 @@ impl Request {
 ///
 /// The keys are applied in this order and no other:
 ///
-/// 1. [`Class`], strict (`K2.1`);
+/// 1. `Class`, strict (`K2.1`);
 /// 2. Chebyshev ring (`K2.2`);
 /// 3. squared Euclidean distance (`K2.2`);
-/// 4. [`column_index`] (`K2.2` "column index"), then the column itself so two
+/// 4. `column_index` (`K2.2` "column index"), then the column itself so two
 ///    distinct columns always compare unequal.
 ///
 /// [`Ordering::Less`] means `a` runs before `b`. The result is a total order:
 /// same class, same column, and same centre compares [`Ordering::Equal`].
 #[must_use]
-pub fn compare(a: &Request, b: &Request) -> Ordering {
+pub(crate) fn compare(a: &Request, b: &Request) -> Ordering {
     a.class
         .cmp(&b.class)
         .then_with(|| a.ring().cmp(&b.ring()))
@@ -105,7 +105,7 @@ pub fn compare(a: &Request, b: &Request) -> Ordering {
 /// Fields are public so the caller can make them runtime config; the values from
 /// [`Self::answered`] are the `v1` defaults and the ones the tests pin.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ClassCaps {
+pub(crate) struct ClassCaps {
     /// Cap for [`Class::Urgent`] requests.
     pub urgent: usize,
     /// Cap for [`Class::Visible`] requests.
@@ -121,7 +121,7 @@ pub struct ClassCaps {
 impl ClassCaps {
     /// The `K2.4` answer: `64 / 1,200 / 1,200 / 128 / 64`.
     #[must_use]
-    pub const fn answered() -> Self {
+    pub(crate) const fn answered() -> Self {
         Self {
             urgent: 64,
             visible: 1_200,
@@ -133,7 +133,7 @@ impl ClassCaps {
 
     /// The cap for one class.
     #[must_use]
-    pub const fn cap(&self, class: Class) -> usize {
+    pub(crate) const fn cap(&self, class: Class) -> usize {
         match class {
             Class::Urgent => self.urgent,
             Class::Visible => self.visible,
@@ -157,7 +157,7 @@ impl ClassCaps {
     ///   `InvariantViolated { check: URGENT_OVERFLOW_CHECK }` and carries on.
     ///
     /// A zero cap drops every arrival of that class without growing the queue.
-    pub fn admit(&self, queue: &mut Vec<Request>, request: Request) -> Admit {
+    pub(crate) fn admit(&self, queue: &mut Vec<Request>, request: Request) -> Admit {
         let cap = self.cap(request.class);
         if request.class == Class::Urgent {
             queue.push(request);
@@ -200,9 +200,9 @@ impl Default for ClassCaps {
     }
 }
 
-/// `K2.4`: what [`ClassCaps::admit`] did.
+/// `K2.4`: what `ClassCaps::admit` did.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Admit {
+pub(crate) enum Admit {
     /// Pushed below the cap.
     Queued,
     /// One lowest-priority request was dropped; the queue is at its cap.
@@ -219,7 +219,11 @@ pub enum Admit {
 /// that was applied. All three are plain counts; saturation at `u64::MAX` is the
 /// only clamp.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct Applied {
+#[allow(
+    clippy::struct_field_names,
+    reason = "`applied` is the K3.2 outcome name, not a restatement of the type"
+)]
+pub(crate) struct Applied {
     /// Results that matched their request and were used.
     pub applied: u64,
     /// Results whose request had moved on; the buffers are freed (`K3.4`).
@@ -231,7 +235,7 @@ pub struct Applied {
 impl Applied {
     /// All three counters at zero.
     #[must_use]
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             applied: 0,
             discarded_stale: 0,
@@ -249,7 +253,7 @@ impl Applied {
     /// `dropped_before_start` is the third outcome and is counted by
     /// [`Self::drop_before_start`] on the admission path, because a job that was
     /// dropped never produces a result to pass here (`K3.2`).
-    pub fn accept(&mut self, requested: &RequestKey, finished: &RequestKey) -> bool {
+    pub(crate) fn accept(&mut self, requested: &RequestKey, finished: &RequestKey) -> bool {
         if requested.accepts(finished) {
             self.applied = self.applied.saturating_add(1);
             true
@@ -260,7 +264,7 @@ impl Applied {
     }
 
     /// `K3.2`: counts one request dropped before it started.
-    pub fn drop_before_start(&mut self) {
+    pub(crate) fn drop_before_start(&mut self) {
         self.dropped_before_start = self.dropped_before_start.saturating_add(1);
     }
 
@@ -268,7 +272,7 @@ impl Applied {
     ///
     /// Used to assert the accounting is total: one counter moves per decision.
     #[must_use]
-    pub fn total(&self) -> u64 {
+    pub(crate) fn total(&self) -> u64 {
         self.applied
             .saturating_add(self.discarded_stale)
             .saturating_add(self.dropped_before_start)
@@ -366,7 +370,7 @@ pub fn plan_ring(
     }
 }
 
-/// One column-level request used only to reuse [`compare`]'s ring order.
+/// One column-level request used only to reuse `compare`'s ring order.
 fn ring_request(column: [i32; 2], centre: [i32; 2]) -> Request {
     Request::new(
         Class::Ring,

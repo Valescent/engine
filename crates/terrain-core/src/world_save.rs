@@ -23,9 +23,13 @@ mod migrate;
 mod worker;
 mod world;
 
-pub use migrate::{MIGRATION_REPORT_PREFIX, MigrationReport, write_migration_report};
+#[allow(unused_imports)] // crate-private re-exports keep the flat module paths
+pub(crate) use migrate::MIGRATION_REPORT_PREFIX;
+pub use migrate::{MigrationReport, write_migration_report};
 pub use worker::SaveWorker;
-pub use world::{DESCRIPTION_FILE, GENERATOR_VERSION, WorldSave};
+#[allow(unused_imports)] // crate-private re-exports keep the flat module paths
+pub(crate) use world::DESCRIPTION_FILE;
+pub use world::{GENERATOR_VERSION, WorldSave};
 
 use std::path::Path;
 

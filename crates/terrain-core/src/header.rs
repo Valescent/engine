@@ -37,17 +37,18 @@
 //!
 //! # Load order (`A1.5`)
 //!
-//! [`load_order`] is the refusal order: header crc, format support, description
+//! `load_order` is the refusal order: header crc, format support, description
 //! present and parses, recomputed hash matches, generator version supported,
-//! manifest validation, journal recovery. [`refuse_reason`] names the step that
+//! manifest validation, journal recovery. `refuse_reason` names the step that
 //! refused a given error. A missing description is an error; this module never
 //! creates a world file.
 
 mod codec;
 mod layout;
 
-pub use codec::{HASH_ALGORITHM, LoadStep, crc32, load_order, refuse_reason};
-pub use layout::{
-    HEADER_FILE, HEADER_FORMAT_V1, HEADER_FORMAT_VERSION, Header, LOAD_STEP_COUNT, MAGIC,
-    MigrationState, now_unix_seconds,
-};
+pub use codec::{HASH_ALGORITHM, crc32};
+#[allow(unused_imports)] // crate-private re-exports keep the flat module paths
+pub(crate) use codec::{LoadStep, load_order, refuse_reason};
+pub use layout::{HEADER_FILE, HEADER_FORMAT_VERSION, Header, MigrationState, now_unix_seconds};
+#[allow(unused_imports)] // crate-private re-exports keep the flat module paths
+pub(crate) use layout::{HEADER_FORMAT_V1, LOAD_STEP_COUNT, MAGIC};

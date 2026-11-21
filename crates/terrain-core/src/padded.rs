@@ -15,7 +15,7 @@
 //! index(x, y, z) = (x + 1) + 34 * ((z + 1) + 34 * (y + 1))
 //! ```
 //!
-//! [`index`] clamps each axis to `-1..=32`, so a stray lookup cannot escape the
+//! `index` clamps each axis to `-1..=32`, so a stray lookup cannot escape the
 //! array.
 //!
 //! # Neighbour order (`I2.4`)
@@ -54,20 +54,20 @@ use crate::description::SECTION_SIZE;
 use crate::section::{BlockId, Section};
 
 /// Blocks of padding on each side of a section (`I2.3`).
-pub const PAD: i32 = 1;
+pub(crate) const PAD: i32 = 1;
 
 /// Edge length of the padded scratch cube.
-pub const PADDED_WIDTH: usize = SECTION_SIZE as usize + 2;
+pub(crate) const PADDED_WIDTH: usize = SECTION_SIZE as usize + 2;
 
 /// Cells in the padded scratch cube.
-pub const PADDED_VOLUME: usize = PADDED_WIDTH * PADDED_WIDTH * PADDED_WIDTH;
+pub(crate) const PADDED_VOLUME: usize = PADDED_WIDTH * PADDED_WIDTH * PADDED_WIDTH;
 
 /// [`SECTION_SIZE`] as the signed coordinate type used by the scratch.
 #[allow(
     clippy::cast_possible_wrap,
     reason = "SECTION_SIZE is 32, far inside i32"
 )]
-pub const LOCAL_SIZE: i32 = SECTION_SIZE as i32;
+pub(crate) const LOCAL_SIZE: i32 = SECTION_SIZE as i32;
 
 /// Lowest local coordinate of the scratch (`-1`).
 pub const LOCAL_MIN: i32 = -PAD;
@@ -76,10 +76,10 @@ pub const LOCAL_MIN: i32 = -PAD;
 pub const LOCAL_MAX: i32 = LOCAL_SIZE;
 
 /// Highest nibble value.
-pub const NIBBLE_MAX: u8 = 15;
+pub(crate) const NIBBLE_MAX: u8 = 15;
 
 /// Low nibble mask.
-pub const NIBBLE_MASK: u8 = 0x0F;
+pub(crate) const NIBBLE_MASK: u8 = 0x0F;
 
 /// Neighbours in a section's one-block pad, in the documented total order.
 ///
@@ -121,7 +121,7 @@ pub const NEIGHBOUR_ORDER: [(i32, i32, i32); 26] = [
 ];
 
 /// Index of a local coordinate in the scratch, clamped to `-1..=32`.
-pub fn index(x: i32, y: i32, z: i32) -> usize {
+pub(crate) fn index(x: i32, y: i32, z: i32) -> usize {
     axis(x) + PADDED_WIDTH * (axis(z) + PADDED_WIDTH * axis(y))
 }
 
@@ -288,7 +288,7 @@ impl std::fmt::Debug for PaddedBlocks {
 ///
 /// Sky and block light are separate arrays of expanded nibbles (`L2.2`). Local
 /// coordinates and the index formula match [`PaddedBlocks`]. A fresh scratch is
-/// the uniform air rule: sky [`NIBBLE_MAX`], block `0`.
+/// the uniform air rule: sky `NIBBLE_MAX`, block `0`.
 #[derive(Clone)]
 pub struct PaddedLight {
     /// Expanded sky nibbles, one byte per cell.

@@ -201,7 +201,7 @@ pub(crate) struct SectionKey {
 /// `accepts` the current one. Otherwise it is discarded as
 /// stale and counted separately from a job dropped before it started (`K3.2`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct RequestKey {
+pub(crate) struct RequestKey {
     /// The request's coordinate, in its stage's units.
     pub coord: [i32; 3],
     /// The stage that produces the result.

@@ -1,8 +1,8 @@
 //! The terrain generator, its tile caches, and the column memo.
 //!
 //! A [`Terrain`] owns every compiled field, table, and cache for one seed.
-//! Column and section assembly lives in [`super::stages`]; the world hydrology
-//! handle lives in [`super::hydro`]. The split is organisational only and the
+//! Column and section assembly lives in `super::stages`; the world hydrology
+//! handle lives in `super::hydro`. The split is organisational only and the
 //! generation order is unchanged.
 
 use std::cell::RefCell;
@@ -75,7 +75,7 @@ const DEFAULT_VIEW_RADIUS: i32 = 16;
 
 /// The macro curves of `C1.1` and `C1.6`, normalised to `[0, 1]`.
 #[derive(Clone, Debug)]
-pub struct Curves {
+pub(crate) struct Curves {
     /// `curve_base(continentalness)`, normalised between `MIN_BASE` and `MAX_BASE`.
     pub base: Curve,
     /// `curve_relief(roughness)`, normalised between 0 and `MAX_RELIEF`.
@@ -96,7 +96,7 @@ impl Curves {
     /// # Errors
     ///
     /// Only if a knot table is invalid, which is a code defect rather than data.
-    pub fn v1() -> Result<Self, TerrainError> {
+    pub(crate) fn v1() -> Result<Self, TerrainError> {
         Ok(Self {
             base: Curve::new(&[
                 (0.0, 0.0),
@@ -124,13 +124,13 @@ impl Curves {
 
     /// Base elevation in blocks relative to sea.
     #[must_use]
-    pub fn base_blocks(&self, continentalness: f32) -> f32 {
+    pub(crate) fn base_blocks(&self, continentalness: f32) -> f32 {
         MIN_BASE + self.base.sample(continentalness) * (MAX_BASE - MIN_BASE)
     }
 
     /// Relief in blocks.
     #[must_use]
-    pub fn relief_blocks(&self, roughness: f32) -> f32 {
+    pub(crate) fn relief_blocks(&self, roughness: f32) -> f32 {
         self.relief.sample(roughness) * MAX_RELIEF
     }
 }

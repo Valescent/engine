@@ -12,7 +12,7 @@ use super::repair::ColumnView;
 use super::table::{LIGHT_LEVELS, LightTable, emission, packed_props, sky_atten, step_cost};
 
 /// Capacity of the fixed BFS ring buffer.
-pub const QUEUE_CAPACITY: usize = 16 * 32_768;
+pub(crate) const QUEUE_CAPACITY: usize = 16 * 32_768;
 
 /// [`PADDED_WIDTH`] as the coordinate type.
 #[allow(

@@ -9,16 +9,16 @@ use super::repair::{ColumnView, Edit, relight_bounds};
 use super::table::{AIR_ID, BEDROCK_ID, LIGHT_LEVELS, LightTable};
 
 /// Sections per column (`I1.3`).
-pub const COLUMN_SECTIONS: usize = 12;
+pub(crate) const COLUMN_SECTIONS: usize = 12;
 
 /// Cells in one section.
-pub const SECTION_CELLS: usize = 32_768;
+pub(crate) const SECTION_CELLS: usize = 32_768;
 
 /// Height of a whole column in blocks (`C4.3`).
-pub const COLUMN_HEIGHT: i32 = 384;
+pub(crate) const COLUMN_HEIGHT: i32 = 384;
 
 /// `u64` words in one packed section.
-pub const NIBBLE_WORDS: usize = 2048;
+pub(crate) const NIBBLE_WORDS: usize = 2048;
 
 pub(super) const WORLD_TOP: i32 = COLUMN_HEIGHT - 1;
 
@@ -45,7 +45,7 @@ const BORDER_OFFSETS: [(i32, i32); 8] = [
 /// write-time demotion are constant time; without it a single write would have
 /// to rescan the section.
 #[derive(Clone)]
-pub struct NibbleArray {
+pub(crate) struct NibbleArray {
     data: Box<[u64]>,
     counts: [u16; 16],
 }
@@ -53,7 +53,7 @@ pub struct NibbleArray {
 impl NibbleArray {
     /// A packed array whose cells all hold `value`.
     #[must_use]
-    pub fn new(value: u8) -> Self {
+    pub(crate) fn new(value: u8) -> Self {
         let value = value & 0x0F;
         let mut counts = [0_u16; 16];
         counts[usize::from(value)] = section_cells_u16();
@@ -65,13 +65,13 @@ impl NibbleArray {
 
     /// Reads one cell. Indices are masked to the section volume.
     #[must_use]
-    pub fn get(&self, index: usize) -> u8 {
+    pub(crate) fn get(&self, index: usize) -> u8 {
         let index = index & (SECTION_CELLS - 1);
         nibble(self.data[index >> 4] >> ((index & 15) << 2))
     }
 
     /// Writes one cell, masking `value` to four bits. Indices are masked.
-    pub fn set(&mut self, index: usize, value: u8) {
+    pub(crate) fn set(&mut self, index: usize, value: u8) {
         let index = index & (SECTION_CELLS - 1);
         let value = value & 0x0F;
         let shift = (index & 15) << 2;
@@ -86,7 +86,7 @@ impl NibbleArray {
     }
 
     /// Sets every cell to `value`.
-    pub fn set_all(&mut self, value: u8) {
+    pub(crate) fn set_all(&mut self, value: u8) {
         let value = value & 0x0F;
         self.data.fill(splat(value));
         self.counts = [0; 16];
@@ -95,7 +95,7 @@ impl NibbleArray {
 
     /// The single value every cell holds, or `None` when the section varies.
     #[must_use]
-    pub fn is_uniform(&self) -> Option<u8> {
+    pub(crate) fn is_uniform(&self) -> Option<u8> {
         let mut found = None;
         for (value, count) in self.counts.iter().enumerate() {
             if *count == 0 {
@@ -111,7 +111,7 @@ impl NibbleArray {
 
     /// Words in the array, for the metrics and save layers.
     #[must_use]
-    pub fn words(&self) -> &[u64] {
+    pub(crate) fn words(&self) -> &[u64] {
         &self.data
     }
 }
@@ -132,7 +132,7 @@ impl std::fmt::Debug for NibbleArray {
 
 /// One section's light, either uniform or packed (`K1.5`).
 #[derive(Clone)]
-pub enum LightSlot {
+pub(crate) enum LightSlot {
     /// One value for the whole section; no allocation.
     Uniform(u8),
     /// Packed nibbles.
@@ -142,13 +142,13 @@ pub enum LightSlot {
 impl LightSlot {
     /// A uniform slot.
     #[must_use]
-    pub const fn uniform(value: u8) -> Self {
+    pub(crate) const fn uniform(value: u8) -> Self {
         Self::Uniform(value & 0x0F)
     }
 
     /// Reads one cell.
     #[must_use]
-    pub fn get(&self, index: usize) -> u8 {
+    pub(crate) fn get(&self, index: usize) -> u8 {
         match self {
             Self::Uniform(value) => *value & 0x0F,
             Self::Packed(cells) => cells.get(index),
@@ -157,7 +157,7 @@ impl LightSlot {
 
     /// Writes one cell, promoting a uniform slot and demoting a packed one that
     /// becomes uniform again.
-    pub fn set(&mut self, index: usize, value: u8) {
+    pub(crate) fn set(&mut self, index: usize, value: u8) {
         let value = value & 0x0F;
         match self {
             Self::Uniform(current) => {
@@ -181,13 +181,13 @@ impl LightSlot {
     }
 
     /// Sets every cell, releasing any allocation.
-    pub fn set_all(&mut self, value: u8) {
+    pub(crate) fn set_all(&mut self, value: u8) {
         *self = Self::uniform(value);
     }
 
     /// The single value the slot holds, or `None` when it varies.
     #[must_use]
-    pub fn is_uniform(&self) -> Option<u8> {
+    pub(crate) fn is_uniform(&self) -> Option<u8> {
         match self {
             Self::Uniform(value) => Some(*value & 0x0F),
             Self::Packed(cells) => cells.is_uniform(),
@@ -196,7 +196,7 @@ impl LightSlot {
 
     /// Whether the slot owns a packed array.
     #[must_use]
-    pub fn is_packed(&self) -> bool {
+    pub(crate) fn is_packed(&self) -> bool {
         matches!(self, Self::Packed(_))
     }
 }
@@ -243,7 +243,7 @@ impl Default for ColumnLight {
 impl ColumnLight {
     /// An open-air column.
     #[must_use]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             sky: std::array::from_fn(|_| LightSlot::Uniform(LIGHT_LEVELS)),
             block: std::array::from_fn(|_| LightSlot::Uniform(0)),
@@ -265,13 +265,13 @@ impl ColumnLight {
 
     /// The sky slot of one section.
     #[must_use]
-    pub fn sky_slot(&self, section: usize) -> &LightSlot {
+    pub(crate) fn sky_slot(&self, section: usize) -> &LightSlot {
         &self.sky[section % COLUMN_SECTIONS]
     }
 
     /// The block slot of one section.
     #[must_use]
-    pub fn block_slot(&self, section: usize) -> &LightSlot {
+    pub(crate) fn block_slot(&self, section: usize) -> &LightSlot {
         &self.block[section % COLUMN_SECTIONS]
     }
 
@@ -439,7 +439,7 @@ impl ColumnBlocks {
 
     /// The cached span, if any.
     #[must_use]
-    pub fn top_span(&self) -> Option<i32> {
+    pub(crate) fn top_span(&self) -> Option<i32> {
         self.top_span
     }
 
@@ -499,7 +499,7 @@ impl ColumnBlocks {
     /// Every section at or below the halo top is included: the lossless
     /// vertical sky rule lets an edit darken the whole column beneath it.
     #[must_use]
-    pub fn affected_sections(edits: &[Edit]) -> [bool; COLUMN_SECTIONS] {
+    pub(crate) fn affected_sections(edits: &[Edit]) -> [bool; COLUMN_SECTIONS] {
         let mut touched = [false; COLUMN_SECTIONS];
         if let Some((low, high)) = relight_bounds(edits) {
             for (section, flag) in touched.iter_mut().enumerate() {
@@ -513,7 +513,7 @@ impl ColumnBlocks {
 
 /// Counters for one job, for the top-span test and the metrics layer.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct LightStats {
+pub(crate) struct LightStats {
     /// Cells visited by the vertical sky pass.
     pub vertical_cells: usize,
     /// Cells pushed as sky BFS seeds.
@@ -536,7 +536,7 @@ pub fn compute_column(blocks: &ColumnBlocks, props: &LightTable) -> ColumnLight 
 
 /// [`compute_column`], also returning the job counters.
 #[must_use]
-pub fn compute_column_stats(
+pub(crate) fn compute_column_stats(
     blocks: &ColumnBlocks,
     props: &LightTable,
 ) -> (ColumnLight, LightStats) {

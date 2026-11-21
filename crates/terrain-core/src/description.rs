@@ -23,11 +23,16 @@ mod schema;
 #[cfg(test)]
 mod tests;
 
-pub use parse::{from_toml_str, load, parse};
+pub use parse::load;
+#[allow(unused_imports)] // crate-private re-exports keep the flat module paths
+pub(crate) use parse::{from_toml_str, parse};
 pub use schema::{
-    Axis, CAVE_MIN_ROOF, DEEP_Y, DESCRIPTION_FILE, DETAIL_DOWN, DETAIL_UP, Description,
-    EmbeddedRef, FOG_END, HYDRO_BORDER, HYDRO_TILE, KEYS, KeySpec, LOD0_RADIUS_BLOCKS,
-    LOD1_RADIUS_BLOCKS, LOD2_RADIUS_BLOCKS, MACRO_CELL, MAX_TERRAIN_Y, RIVER_MIN_CELLS,
-    RIVER_RAMP_CELLS, SCHEMA_VERSION, SEA, SECTION_SIZE, SECTION_VOLUME, SECTIONS_PER_COLUMN,
-    TILE_BLOCKS, W_SCALE, WORLD_HEIGHT, WorldHeader, default_v1,
+    Axis, Description, EmbeddedRef, HYDRO_TILE, KEYS, KeySpec, MACRO_CELL, MAX_TERRAIN_Y, SEA,
+    SECTION_SIZE, SECTION_VOLUME, SECTIONS_PER_COLUMN, TILE_BLOCKS, WORLD_HEIGHT, default_v1,
+};
+#[allow(unused_imports)] // crate-private re-exports keep the flat module paths
+pub(crate) use schema::{
+    CAVE_MIN_ROOF, DEEP_Y, DESCRIPTION_FILE, DETAIL_DOWN, DETAIL_UP, FOG_END, HYDRO_BORDER,
+    LOD0_RADIUS_BLOCKS, LOD1_RADIUS_BLOCKS, LOD2_RADIUS_BLOCKS, RIVER_MIN_CELLS, RIVER_RAMP_CELLS,
+    SCHEMA_VERSION, W_SCALE, WorldHeader,
 };

@@ -9,9 +9,9 @@
 //! # Storage
 //!
 //! Light is 15 levels, two channels (sky, block), one nibble per cell.
-//! [`ColumnLight`] holds one [`LightSlot`] per section per channel. A slot is
-//! either [`LightSlot::Uniform`] (one byte, no allocation — all air is sky 15 /
-//! block 0, all solid is sky 0) or [`LightSlot::Packed`] (a [`NibbleArray`] of
+//! [`ColumnLight`] holds one `LightSlot` per section per channel. A slot is
+//! either `LightSlot::Uniform` (one byte, no allocation — all air is sky 15 /
+//! block 0, all solid is sky 0) or `LightSlot::Packed` (a `NibbleArray` of
 //! 2048 words). Promotion and demotion happen on write, so a section that
 //! becomes uniform again releases its array.
 //!
@@ -30,12 +30,12 @@
 //! `L2.4` requires.
 //!
 //! Every loop has a fixed bound. The BFS queue is a fixed-capacity ring buffer
-//! ([`QUEUE_CAPACITY`]); if a pathological field ever fills it, the remainder is
+//! (`QUEUE_CAPACITY`); if a pathological field ever fills it, the remainder is
 //! relaxed by a bounded sweep that reaches the same fixed point.
 //!
 //! # Repair
 //!
-//! [`ColumnLight::relight_column`] is two-phase: the writable region is cleared,
+//! `ColumnLight::relight_column` is two-phase: the writable region is cleared,
 //! then re-lit from sky seeds, emitters, and the unchanged cells around it.
 //! Every cell is a maximum over sources, so the result is the unique fixed point
 //! and cannot depend on order. The writable region is the whole border ring for
@@ -62,12 +62,17 @@ mod table;
 #[cfg(test)]
 mod tests;
 
-pub use bfs::QUEUE_CAPACITY;
-pub use column::{
-    COLUMN_HEIGHT, COLUMN_SECTIONS, ColumnBlocks, ColumnLight, LightSlot, LightStats, NIBBLE_WORDS,
-    NibbleArray, SECTION_CELLS, compute_column, compute_column_stats,
+#[allow(unused_imports)] // crate-private re-exports keep the flat module paths
+pub(crate) use bfs::QUEUE_CAPACITY;
+#[allow(unused_imports)] // crate-private re-exports keep the flat module paths
+pub(crate) use column::{
+    COLUMN_HEIGHT, COLUMN_SECTIONS, LightSlot, LightStats, NIBBLE_WORDS, NibbleArray,
+    SECTION_CELLS, compute_column_stats,
 };
-pub use repair::{ColumnView, Edit, RELIGHT_RADIUS};
+pub use column::{ColumnBlocks, ColumnLight, compute_column};
+#[allow(unused_imports)] // crate-private re-exports keep the flat module paths
+pub(crate) use repair::Edit;
+pub use repair::{ColumnView, RELIGHT_RADIUS};
 pub use table::{
     AIR_ID, BEDROCK_ID, CROSS_QUAD_IDS, LAMP_EMISSION, LAMP_ID, LEAVES_ID, LIGHT_LEVELS,
     LightProps, LightTable, WATER_ID, WATER_SKY_ATTEN, default_table,

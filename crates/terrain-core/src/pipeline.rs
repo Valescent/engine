@@ -18,10 +18,10 @@
 //! from water.
 //!
 //! The world graph here is the v1 authoring of `C1.1`/`C1.6`/`C2.2`. Curve knots
-//! live in [`Curves::v1`] and each one is a column of `terrain-interview.md`.
+//! live in `Curves::v1` and each one is a column of `terrain-interview.md`.
 //!
-//! The implementation is split into [`terrain`] (generator, caches, memo),
-//! [`stages`] (column and section assembly, materials, biomes), and [`hydro`]
+//! The implementation is split into `terrain` (generator, caches, memo),
+//! `stages` (column and section assembly, materials, biomes), and `hydro`
 //! (world hydrology handle). Every public item is re-exported here, so
 //! `pipeline::<item>` paths are unchanged.
 
@@ -43,4 +43,6 @@ mod tests;
 
 pub use hydro::HydroTileRef;
 pub use stages::{AIR, TerrainMaterials, WATER};
-pub use terrain::{Curves, Terrain, TileData};
+#[allow(unused_imports)] // Curves stays crate-private; Terrain is the facade
+pub(crate) use terrain::Curves;
+pub use terrain::{Terrain, TileData};

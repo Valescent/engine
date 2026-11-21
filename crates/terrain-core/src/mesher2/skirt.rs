@@ -37,7 +37,7 @@ pub enum Side {
 
 impl Side {
     /// Every side, in the fixed order skirts are appended.
-    pub const ALL: [Self; crate::revisions::FACE_COUNT] =
+    pub(crate) const ALL: [Self; crate::revisions::FACE_COUNT] =
         [Self::North, Self::South, Self::East, Self::West];
 
     /// The set bit of this side in [`SkirtEdges`].
@@ -145,8 +145,8 @@ impl SkirtEdges {
     }
 }
 
-/// World-block height of a skirt at `lod`: [`SKIRT_DEPTH`] cells.
-pub const fn skirt_blocks(lod: MeshLod) -> u32 {
+/// World-block height of a skirt at `lod`: `SKIRT_DEPTH` cells.
+pub(crate) const fn skirt_blocks(lod: MeshLod) -> u32 {
     SKIRT_DEPTH.unsigned_abs() * lod.cells_per_block()
 }
 
@@ -169,7 +169,7 @@ struct SkirtCell {
 ///
 /// A coarse section draws only where its covered fine sections are absent, so
 /// its lower-resolution edges can sit over a hole. A skirt continues the exposed
-/// boundary wall downward by [`SKIRT_DEPTH`] cells, which is [`skirt_blocks`]
+/// boundary wall downward by `SKIRT_DEPTH` cells, which is `skirt_blocks`
 /// world blocks, and hides the gap without stitching.
 ///
 /// For each selected side the lowest exposed top face of every boundary column
@@ -180,7 +180,7 @@ struct SkirtCell {
 /// face's `tile` and `tint`, take its air-side `sky`/`blk`, and always use fully
 /// open AO.
 ///
-/// A boundary face within [`SKIRT_DEPTH`] cells of the section floor gets fewer
+/// A boundary face within `SKIRT_DEPTH` cells of the section floor gets fewer
 /// layers, because world geometry below `y = 0` belongs to the section below.
 /// An empty mesh adds nothing.
 ///
@@ -226,13 +226,13 @@ pub fn add_skirts(mesh: &mut SectionMesh, edges: SkirtEdges, lod: MeshLod) -> u3
 /// - a flush edge (the adjacent coarse column reaches or passes the boundary
 ///   top) appends nothing;
 /// - a one-cell drop appends one cell;
-/// - a larger drop or an open neighbour appends at most [`SKIRT_DEPTH`] cells.
+/// - a larger drop or an open neighbour appends at most `SKIRT_DEPTH` cells.
 ///
 /// Cells below the section floor are never emitted. Records, edge order, the
 /// per-edge normal, fully open AO (`0xFF`, so a skirt never darkens), `sky`/`blk`
 /// from the boundary face, and [`SectionMesh::skirts`] all match [`add_skirts`];
 /// a repeated call returns `0`. The return value is the number of quads added.
-pub fn add_step_skirts(
+pub(crate) fn add_step_skirts(
     mesh: &mut SectionMesh,
     blocks: &PaddedBlocks,
     props: &MaterialProps,

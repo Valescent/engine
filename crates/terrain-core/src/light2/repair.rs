@@ -16,7 +16,7 @@ pub const RELIGHT_RADIUS: i32 = 15;
 
 /// One changed cell. The blocks are already updated when a repair runs.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Edit {
+pub(crate) struct Edit {
     /// Local `x` in `0..32`.
     pub x: i32,
     /// World `y` in `0..384`.
@@ -30,7 +30,7 @@ pub struct Edit {
 impl Edit {
     /// Builds an edit record.
     #[must_use]
-    pub const fn new(x: i32, y: i32, z: i32, block: BlockId) -> Self {
+    pub(crate) const fn new(x: i32, y: i32, z: i32, block: BlockId) -> Self {
         Self { x, y, z, block }
     }
 }
@@ -139,7 +139,7 @@ impl ColumnLight {
     /// `props` is the material table: a single [`crate::light2::LightProps`]
     /// record cannot describe a whole column, so the parameter is the table
     /// type.
-    pub fn relight_column(
+    pub(crate) fn relight_column(
         &mut self,
         blocks: &ColumnBlocks,
         props: &LightTable,
@@ -155,7 +155,7 @@ impl ColumnLight {
     ///
     /// The caller guarantees no cell outside `y_lo..=y_hi` changed. The band is
     /// widened by one cell so the flood has unchanged values to stop against.
-    /// [`Self::relight_column`] derives the band from edits; a column whose own
+    /// `Self::relight_column` derives the band from edits; a column whose own
     /// sky seed did not move can use a narrow band around the edit instead of
     /// repairing from `y = 0`.
     pub fn relight_span(

@@ -14,7 +14,7 @@
 //! # Fields
 //!
 //! `temp = clamp(lat(|z - equator| / half_span) + noise - alt, 0, 1)`, where `lat` is a
-//! caller-supplied monotone [`crate::curve::Curve`] that is warm at 0 and cold at 1,
+//! caller-supplied monotone `crate::curve::Curve` that is warm at 0 and cold at 1,
 //! `noise` is a three-octave fBm at 1/512 cycles per block scaled by `TEMP_NOISE_AMP`,
 //! and `alt = max(h_macro - SEA, 0) * lapse` (`E1.1`, `E1.2`). Latitude and the noise are
 //! sampled at the cell's base block coordinate, so a cell mirrors with its counterpart

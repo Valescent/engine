@@ -66,7 +66,7 @@
 //! # Entrance (`F2.5`)
 //!
 //! The entrance field is a two-octave fBm at `1/192` through `Volume::entrance`'s
-//! curve. Above `entrance_t` it lowers the roof from [`crate::description::CAVE_MIN_ROOF`]
+//! curve. Above `entrance_t` it lowers the roof from `crate::description::CAVE_MIN_ROOF`
 //! to zero over a 0.05 ramp and eases the density threshold, which is what turns a
 //! chamber into a mouth. Hard exclusions are applied first and are never overridden:
 //! `y < 1` is out of range for the carve, `top_solid_y <= SEA + 1` is sea floor,

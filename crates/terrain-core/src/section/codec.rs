@@ -8,7 +8,7 @@
 //! | Offset | Width | Field |
 //! |---|---|---|
 //! | `0..4` | 4 | magic `"TSEC"` |
-//! | `4..6` | 2 | record version: [`SECTION_RECORD_VERSION`] |
+//! | `4..6` | 2 | record version: `SECTION_RECORD_VERSION` |
 //! | `6..10` | 4 | column `x: i32` |
 //! | `10..14` | 4 | column `z: i32` |
 //! | `14..15` | 1 | section slot `y: u8` (`0..12`) |
@@ -43,7 +43,7 @@
 //! duplicating it.
 //!
 //! A name the pack does not hold decodes to a placeholder id starting at
-//! [`UNKNOWN_BASE`] — one per distinct unknown name, in palette order — and is
+//! `UNKNOWN_BASE` — one per distinct unknown name, in palette order — and is
 //! reported in [`SavedSection::unknown_names`]. It never fails the record. The
 //! placeholder range is finite, so a section with more distinct unknown names
 //! than it can hold is a `ManifestIncompatible` manifest failure rather than a
@@ -63,13 +63,13 @@ use crate::error::{ErrorKind, SectionFault, Stage, TerrainError};
 use crate::header::crc32;
 
 /// Magic at the start of every saved section record.
-pub const SECTION_RECORD_MAGIC: [u8; 4] = *b"TSEC";
+pub(crate) const SECTION_RECORD_MAGIC: [u8; 4] = *b"TSEC";
 
 /// Version of the canonical section record this build writes and reads.
 ///
 /// Version 1 was the provisional layout in `terrain-gen`; the canonical record
 /// stores names and a 32-byte baseline, so it is version 2.
-pub const SECTION_RECORD_VERSION: u16 = 2;
+pub(crate) const SECTION_RECORD_VERSION: u16 = 2;
 
 /// Fixed bytes before the record body.
 pub(super) const RECORD_HEADER_LEN: usize = 53;
@@ -77,7 +77,7 @@ pub(super) const RECORD_HEADER_LEN: usize = 53;
 /// `edited` bit in the flag byte.
 const FLAG_EDITED: u8 = 1;
 
-/// Record kind for [`Section::Uniform`].
+/// Record kind for `Section::Uniform`.
 const KIND_UNIFORM: u8 = 0;
 
 /// Record kind for [`Section::Paletted`].

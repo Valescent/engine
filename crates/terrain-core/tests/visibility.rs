@@ -1,26 +1,36 @@
-//! Compile-time guard for the public surface kept after visibility batch 1.
+//! Compile-time guard for the public surface kept after visibility batches 1 and 2.
 //!
 //! `terrain-core` is an internal crate: its public surface is what `engine` and
 //! the `terrain-gen` binary need, and nothing else. This test imports exactly the
-//! paths the binary imports, so narrowing one of them by accident fails to
-//! compile instead of narrowing silently. The `compile_fail` doctest in
-//! `terrain-core`'s crate docs guards the opposite direction: a path that batch 1
-//! made crate-private must stay crate-private.
+//! paths the binary imports, plus the batch-2 survivors the engine names, so
+//! narrowing one of them by accident fails to compile instead of narrowing
+//! silently. The `compile_fail` doctests in `terrain-core`'s crate docs guard the
+//! opposite direction: a path the batches made crate-private must stay
+//! crate-private.
 
 use std::mem::size_of;
 
 use terrain_core::climate::{Biome, BiomeTable, smoothstep01};
-use terrain_core::content::{ContentPack, v1_default};
+use terrain_core::content::{ContentPack, LIGHT_LEVELS, RenderShape, v1_default};
 use terrain_core::description::{
     self, Axis, Description, EmbeddedRef, HYDRO_TILE, KEYS, MACRO_CELL, MAX_TERRAIN_Y, SEA,
-    SECTIONS_PER_COLUMN, TILE_BLOCKS, default_v1, load,
+    SECTION_SIZE, SECTIONS_PER_COLUMN, TILE_BLOCKS, WORLD_HEIGHT, default_v1, load,
 };
 use terrain_core::error::{ErrorKind, Stage, TerrainError};
 use terrain_core::hash::{mix, sha256};
 use terrain_core::header::{self, Header};
-use terrain_core::hydro::{BORDER_CELLS, TILE_CELLS};
+use terrain_core::hydro::{BORDER_CELLS, TILE_CELLS, WorldHydro};
 use terrain_core::lattice::floor_div;
+use terrain_core::lod::{Fine64, Octants};
+use terrain_core::mesher2::{
+    Material, MaterialProps, MeshLod, Quad, SectionMesh, SkirtEdges, add_skirts, mesh_coarse,
+    mesh_from_neighbours, quad_count,
+};
+use terrain_core::padded::{LOCAL_MAX, LOCAL_MIN, NEIGHBOUR_ORDER, PaddedBlocks, PaddedLight};
 use terrain_core::pipeline::{AIR, Terrain, WATER};
+use terrain_core::residency::{
+    DEMO_VIEW_RADIUS, RingBudget, RingPlan, UNLOAD_MARGIN, demo_view_radius, in_ring, plan_ring,
+};
 use terrain_core::save::{RepairAction, RepairOutcome, SectionStore};
 use terrain_core::section::{self, BlockId, Section, SectionKey, decode_record_at};
 use terrain_core::world_save::{MigrationReport, WorldSave, write_migration_report};
@@ -76,8 +86,50 @@ fn the_tool_imports_stay_public() {
     let _ = description::MACRO_CELL;
     let _ = section::decode_record_at;
 
-    // The types are real, not aliases to zero-sized placeholders.
+    // Types are real, not aliases to zero-sized placeholders.
     assert!(size_of::<Description>() > 0);
     assert!(size_of::<Terrain>() > 0);
     assert!(size_of::<Section>() > 0);
+}
+
+#[test]
+fn the_batch_2_survivors_stay_public() {
+    // Signature-forced and engine-facing types kept when their module was
+    // narrowed. `Option` forces the path to resolve without a value.
+    let _: Option<WorldHydro> = None;
+    let _: Option<ContentPack> = None;
+    let _: Option<RenderShape> = None;
+    let _: Option<Material> = None;
+    let _: Option<MaterialProps> = None;
+    let _: Option<MeshLod> = None;
+    let _: Option<Quad> = None;
+    let _: Option<SectionMesh> = None;
+    let _: Option<SkirtEdges> = None;
+    let _: Option<PaddedBlocks> = None;
+    let _: Option<PaddedLight> = None;
+    let _: Option<RingBudget> = None;
+    let _: Option<RingPlan> = None;
+
+    // Free functions and constants the engine names directly.
+    let _ = LIGHT_LEVELS;
+    let _ = LOCAL_MIN;
+    let _ = LOCAL_MAX;
+    let _ = NEIGHBOUR_ORDER;
+    let _ = DEMO_VIEW_RADIUS;
+    let _ = UNLOAD_MARGIN;
+    let _ = SECTION_SIZE;
+    let _ = WORLD_HEIGHT;
+    let _ = demo_view_radius;
+    let _ = in_ring;
+    let _ = plan_ring;
+    let _ = add_skirts;
+    let _ = mesh_coarse;
+    let _ = mesh_from_neighbours;
+    let _ = quad_count;
+
+    // Signatures that force a type public: the LOD octant aliases are the
+    // parameter types of `lod::downsample{,4}`, and `MeshLod`/`SkirtEdges` are
+    // parameters of the skirt and coarse-mesh entry points.
+    let _: Option<Octants<'_>> = None;
+    let _: Option<Fine64<'_>> = None;
 }

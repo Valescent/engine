@@ -14,11 +14,21 @@
 //! use terrain_core::noise::unit;
 //! # fn main() {}
 //! ```
+//!
+//! ```compile_fail
+//! // Batch 2 narrowed the batch-2 modules' internals; `Budget` is crate-private
+//! // even though `residency` itself stays a public module.
+//! use terrain_core::residency::Budget;
+//! # fn main() {}
+//! ```
 
 pub mod climate;
+#[allow(dead_code)]
 pub mod content;
 pub mod curve;
+#[allow(dead_code)]
 pub mod description;
+#[allow(dead_code)]
 pub mod editlog;
 pub mod error;
 // Batch 1 of the visibility narrowing made these modules crate-internal. Their
@@ -30,12 +40,16 @@ pub mod features;
 #[allow(dead_code)]
 pub mod graph;
 pub mod hash;
+#[allow(dead_code)]
 pub mod header;
 pub mod height;
+#[allow(dead_code)]
 pub mod hydro;
 pub mod lattice;
+#[allow(dead_code)]
 pub mod light2;
 pub mod lod;
+#[allow(dead_code)]
 pub mod mesher2;
 #[allow(dead_code)]
 pub mod metrics2;
@@ -43,10 +57,13 @@ pub mod metrics2;
 pub mod noise;
 pub mod padded;
 pub mod pipeline;
+#[allow(dead_code)]
 pub mod residency;
 #[allow(dead_code)]
 pub mod revisions;
+#[allow(dead_code)]
 pub mod save;
+#[allow(dead_code)]
 pub mod section;
 #[allow(dead_code)]
 pub mod strata;
@@ -54,4 +71,5 @@ pub mod strata;
 pub mod surface;
 #[allow(dead_code)]
 pub mod volume;
+#[allow(dead_code)]
 pub mod world_save;

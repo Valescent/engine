@@ -12,7 +12,7 @@ use super::frame::Edit;
 /// function of the input set, so two arrival orders produce identical bytes.
 /// This is the read-side answer to `J2.1`; the log itself is never rewritten.
 #[must_use]
-pub fn last_write_wins(edits: &[Edit]) -> Vec<Edit> {
+pub(crate) fn last_write_wins(edits: &[Edit]) -> Vec<Edit> {
     let mut winners: BTreeMap<Coord, &Edit> = BTreeMap::new();
     for edit in edits {
         let key = edit.position();
@@ -35,7 +35,7 @@ pub fn last_write_wins(edits: &[Edit]) -> Vec<Edit> {
 /// write's revision, author, batch, and seq, because that is the write the net
 /// value came from. Output is sorted by coordinate.
 #[must_use]
-pub fn coalesce(edits: &[Edit]) -> Vec<Edit> {
+pub(crate) fn coalesce(edits: &[Edit]) -> Vec<Edit> {
     let mut ordered: Vec<&Edit> = edits.iter().collect();
     ordered.sort();
 
@@ -66,7 +66,7 @@ pub fn coalesce(edits: &[Edit]) -> Vec<Edit> {
 /// `None` when the caller has no value for the coordinate at all, which never
 /// counts as a match: the caller maps "no block" to the air name explicitly.
 #[must_use]
-pub fn can_undo(edit: &Edit, current: Option<&str>) -> bool {
+pub(crate) fn can_undo(edit: &Edit, current: Option<&str>) -> bool {
     current.is_some_and(|name| name == edit.new)
 }
 

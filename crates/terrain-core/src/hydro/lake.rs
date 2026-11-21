@@ -24,10 +24,10 @@ use super::{MAX_LAKE_Y, SEA, floor_i32};
 /// Minimum water depth for a cell to count as part of a basin: ~1 block.
 ///
 /// A cell shallower than this is a filled flat, not a lake (`D2.6`).
-pub const LAKE_MIN_DEPTH: f32 = 1.0;
+pub(crate) const LAKE_MIN_DEPTH: f32 = 1.0;
 
 /// Minimum area for a recorded lake, in cells (`D7.2`): numbered 12.
-pub const LAKE_MIN_CELLS: usize = 12;
+pub(crate) const LAKE_MIN_CELLS: usize = 12;
 
 /// Four-connectivity for lake regions: a diagonal touch is not one lake.
 const CONNECTED: [D8; 4] = [D8::N, D8::E, D8::S, D8::W];
@@ -39,7 +39,7 @@ const CONNECTED: [D8; 4] = [D8::N, D8::E, D8::S, D8::W];
 /// inner lip of the spill; the surface is `floor(filled[outlet])`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Lake {
-    /// Water surface in blocks, never above [`super::MAX_LAKE_Y`].
+    /// Water surface in blocks, never above `super::MAX_LAKE_Y`.
     pub level: i32,
     /// Tile-local cell index of the spill lip, the lowest filled cell.
     pub outlet: u32,
@@ -69,7 +69,7 @@ pub struct Lake {
 /// pins `filled` to the input height, so a halo cell can never be part of a
 /// region and a basin is always contained in the interior.
 #[must_use]
-pub fn find_lakes(height: &[f32], filled: &[f32], side: usize) -> (Vec<i32>, Vec<Lake>) {
+pub(crate) fn find_lakes(height: &[f32], filled: &[f32], side: usize) -> (Vec<i32>, Vec<Lake>) {
     let cells = side * side;
     let mut level_of = vec![0_i32; cells];
     let mut lakes: Vec<Lake> = Vec::new();

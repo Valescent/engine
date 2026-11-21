@@ -11,25 +11,25 @@ use super::pack::ContentPack;
 /// stays opaque, collidable, hardness-high, and drop-free, and keeps its
 /// original name on disk. A pack may therefore never fill this range: runtime
 /// ids below it are real content.
-pub const UNKNOWN_BASE: BlockId = 0xF000;
+pub(crate) const UNKNOWN_BASE: BlockId = 0xF000;
 
-/// Most records one pack may hold, so no real id reaches [`UNKNOWN_BASE`].
+/// Most records one pack may hold, so no real id reaches `UNKNOWN_BASE`.
 ///
 /// `MAX_RECORDS <= UNKNOWN_BASE` is asserted by a test, not by a cast, so the
 /// constant stays usable in array bounds and comparisons.
-pub const MAX_RECORDS: usize = 0xF000;
+pub(crate) const MAX_RECORDS: usize = 0xF000;
 
 /// Longest legal stable name in bytes (`A5.1`).
-pub const MAX_NAME_BYTES: usize = 64;
+pub(crate) const MAX_NAME_BYTES: usize = 64;
 
 /// Highest light level; the range of `opacity`, `sky_atten`, and `emission`.
 pub const LIGHT_LEVELS: u8 = 15;
 
 /// Skylight lost per water block (`L2.4`).
-pub const WATER_SKY_ATTEN: u8 = 1;
+pub(crate) const WATER_SKY_ATTEN: u8 = 1;
 
 /// Light a lamp emits in the placeholder pack (`L2.1`).
-pub const LAMP_EMISSION: u8 = 14;
+pub(crate) const LAMP_EMISSION: u8 = 14;
 
 /// How the mesher draws a block (`H4.2`).
 ///
@@ -71,7 +71,7 @@ impl RenderShape {
         }
     }
 
-    /// Stable canonical tag; part of [`record_hash`](super::hash::record_hash).
+    /// Stable canonical tag; part of `record_hash`.
     #[must_use]
     pub const fn tag(self) -> u8 {
         match self {
@@ -122,7 +122,7 @@ impl RenderLayer {
         }
     }
 
-    /// Stable canonical tag; part of [`record_hash`](super::hash::record_hash).
+    /// Stable canonical tag; part of `record_hash`.
     #[must_use]
     pub const fn tag(self) -> u8 {
         match self {
@@ -135,8 +135,8 @@ impl RenderLayer {
 
 /// Per-face texture references (ADR-0015).
 ///
-/// Presentation only: a record's textures are **not** part of [`record_hash`](super::hash::record_hash)
-/// or [`ContentPack::pack_hash`], so re-texturing a block never invalidates a
+/// Presentation only: a record's textures are **not** part of `record_hash`
+/// or `ContentPack::pack_hash`, so re-texturing a block never invalidates a
 /// saved world or a pinned generation description. Empty strings are invalid;
 /// every record names all three faces even when they are the same texture.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -173,13 +173,13 @@ impl FaceTextures {
 
 /// One block definition from the content pack (`A5.2`).
 ///
-/// Field order **is** the canonical hash order; see [`record_hash`](super::hash::record_hash). Every
+/// Field order **is** the canonical hash order; see `record_hash`. Every
 /// field is required: there are no defaults, because a default that differs
 /// from the author's intent is a silent world change.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BlockRecord {
     /// Stable `namespace:name`, lowercase `[a-z0-9_]`, at most
-    /// [`MAX_NAME_BYTES`] bytes, immutable once shipped (`A5.1`).
+    /// `MAX_NAME_BYTES` bytes, immutable once shipped (`A5.1`).
     pub name: String,
     /// Version of this record's property set; `0` is invalid (`T1.5`).
     pub record_version: u32,
@@ -205,7 +205,7 @@ pub struct BlockRecord {
     /// drops, as for air and water.
     pub drops: BTreeMap<String, u8>,
     /// Per-face texture references. Presentation only; excluded from
-    /// [`record_hash`](super::hash::record_hash) by ADR-0015.
+    /// `record_hash` by ADR-0015.
     pub textures: FaceTextures,
 }
 

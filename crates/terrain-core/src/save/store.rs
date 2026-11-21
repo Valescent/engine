@@ -11,7 +11,7 @@ use crate::section::{self, SavedSection, Section, SectionKey};
 use super::{corrupt, io_error};
 
 /// Directory holding one file per section.
-pub const SECTIONS_DIR: &str = "sections";
+pub(crate) const SECTIONS_DIR: &str = "sections";
 
 /// Current suffix (`S1.5`).
 const CURRENT_SUFFIX: &str = ".sect";

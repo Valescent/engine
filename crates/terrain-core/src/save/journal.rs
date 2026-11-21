@@ -10,12 +10,12 @@ use crate::error::TerrainError;
 use super::io_error;
 
 /// Directory holding append-only journal frames.
-pub const JOURNAL_DIR: &str = "journal";
+pub(crate) const JOURNAL_DIR: &str = "journal";
 /// First journal segment. A new segment starts only when a save is interrupted.
-pub const JOURNAL_NAME: &str = "0001.journal";
+pub(crate) const JOURNAL_NAME: &str = "0001.journal";
 
 /// The recovered journal, positioned after its last complete frame.
-pub struct OpenedJournal {
+pub(crate) struct OpenedJournal {
     /// Every committed batch in the recovered prefix, in file order.
     pub recovered: Vec<EditBatch>,
     /// Appends new batches after the recovered prefix.
@@ -34,15 +34,15 @@ impl std::fmt::Debug for OpenedJournal {
 
 /// Opens (or creates) the journal, recovering and truncating a torn tail.
 ///
-/// The valid prefix is decoded with [`editlog::decode_batches`]; when the file
+/// The valid prefix is decoded with `editlog::decode_batches`; when the file
 /// ends mid-frame the file is truncated to the recovered offset before the
 /// writer is constructed, which is the [`JournalWriter`] contract.
 ///
 /// # Errors
 ///
 /// [`crate::error::ErrorKind::IoError`] for a filesystem failure and the framing errors from
-/// [`editlog::decode_batches`] for a corrupt complete frame.
-pub fn open_journal(root: impl AsRef<Path>) -> Result<OpenedJournal, TerrainError> {
+/// `editlog::decode_batches` for a corrupt complete frame.
+pub(crate) fn open_journal(root: impl AsRef<Path>) -> Result<OpenedJournal, TerrainError> {
     let directory = root.as_ref().join(JOURNAL_DIR);
     fs::create_dir_all(&directory)
         .map_err(|error| io_error("create_dir_all", &directory, &error))?;

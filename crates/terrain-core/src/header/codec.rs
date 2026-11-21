@@ -179,7 +179,7 @@ impl Header {
 /// Closed: adding a step is a change to the answer, not a data edit. There is
 /// deliberately no "create" step.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub enum LoadStep {
+pub(crate) enum LoadStep {
     /// The header reads and its `crc32` matches.
     HeaderChecksum,
     /// The header `format_version` is supported by this build.
@@ -200,7 +200,7 @@ pub enum LoadStep {
 ///
 /// Header crc, format support, description present and parsing, recomputed
 /// hash, generator version support, manifest validation, journal recovery.
-pub const fn load_order() -> [LoadStep; LOAD_STEP_COUNT] {
+pub(crate) const fn load_order() -> [LoadStep; LOAD_STEP_COUNT] {
     [
         LoadStep::HeaderChecksum,
         LoadStep::FormatSupport,
@@ -219,7 +219,7 @@ pub const fn load_order() -> [LoadStep; LOAD_STEP_COUNT] {
 /// byte-identical. A header checksum or header I/O failure refuses at
 /// [`LoadStep::HeaderChecksum`]; a section checksum later in the session is not
 /// a load refusal and maps to `None`.
-pub fn refuse_reason(err: &TerrainError) -> Option<LoadStep> {
+pub(crate) fn refuse_reason(err: &TerrainError) -> Option<LoadStep> {
     match &err.kind {
         ErrorKind::CorruptSection { path, .. } | ErrorKind::IoError { path, .. }
             if is_header_file(path) =>

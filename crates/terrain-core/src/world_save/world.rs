@@ -18,7 +18,7 @@ use crate::section::{SavedSection, Section, SectionKey};
 use super::io_error;
 
 /// Canonical generation parameters, beside the header.
-pub const DESCRIPTION_FILE: &str = "description.toml";
+pub(crate) const DESCRIPTION_FILE: &str = "description.toml";
 /// Generator version this build writes and reads (`T1.2`).
 ///
 /// Version 2 solved hydrology over the whole finite world instead of per tile,

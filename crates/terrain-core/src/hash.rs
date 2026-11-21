@@ -5,7 +5,7 @@
 //! - [`sha256`] over canonical description bytes. It is the world identity
 //!   ([`crate::description::Description::description_hash`]) and the content
 //!   digest. Identity is a 32-byte value, so the digest width is the contract.
-//! - [`hash64`], a `SplitMix64` finaliser chain, for named streams and per-block
+//! - `hash64`, a `SplitMix64` finaliser chain, for named streams and per-block
 //!   randomness. It is integer-only, so it is exact on every target.
 //!
 //! Both are implemented here rather than pulled from a crate because the
@@ -176,7 +176,7 @@ pub fn mix(mut z: u64) -> u64 {
 
 /// Converts a stream name into a stable domain tag.
 ///
-/// Callers hold the tag and pass it to [`hash64`]; it never changes for a given
+/// Callers hold the tag and pass it to `hash64`; it never changes for a given
 /// name, so a stream id is fixed forever.
 #[must_use]
 pub fn domain(name: &str) -> u64 {
@@ -191,7 +191,7 @@ pub fn domain(name: &str) -> u64 {
 /// Words are folded in order, so `hash64(s, d, &[x, z])` and
 /// `hash64(s, d, &[z, x])` are different streams by construction.
 #[must_use]
-pub fn hash64(seed: u64, domain: u64, words: &[i64]) -> u64 {
+pub(crate) fn hash64(seed: u64, domain: u64, words: &[i64]) -> u64 {
     let mut hash = mix(seed ^ domain);
     for word in words {
         hash = mix(hash ^ word.cast_unsigned());
@@ -201,20 +201,20 @@ pub fn hash64(seed: u64, domain: u64, words: &[i64]) -> u64 {
 
 /// Hashes a 2D coordinate pair.
 #[must_use]
-pub fn hash2(seed: u64, domain: u64, x: i32, z: i32) -> u64 {
+pub(crate) fn hash2(seed: u64, domain: u64, x: i32, z: i32) -> u64 {
     hash64(seed, domain, &[i64::from(x), i64::from(z)])
 }
 
 /// Hashes a 3D coordinate triple.
 #[must_use]
-pub fn hash3(seed: u64, domain: u64, x: i32, y: i32, z: i32) -> u64 {
+pub(crate) fn hash3(seed: u64, domain: u64, x: i32, y: i32, z: i32) -> u64 {
     hash64(seed, domain, &[i64::from(x), i64::from(y), i64::from(z)])
 }
 
 /// Maps a hash into `[0, 1)` using the top 24 bits, which are exact in `f32`.
 #[allow(clippy::cast_precision_loss)]
 #[must_use]
-pub fn hash01(hash: u64) -> f32 {
+pub(crate) fn hash01(hash: u64) -> f32 {
     let top = (hash >> 40) as u32;
     (top as f32) * (1.0 / 16_777_216.0)
 }

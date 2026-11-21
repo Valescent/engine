@@ -6,22 +6,22 @@ use crate::hash::mix;
 ///
 /// Runtime config in the end; pinned here as the `v1` default so the tests have
 /// one number to hold.
-pub const VIEW_RADIUS: i32 = 16;
+pub(crate) const VIEW_RADIUS: i32 = 16;
 
 /// `K1.4`: columns kept resident beyond the visible radius.
 pub const UNLOAD_MARGIN: i32 = 2;
 
 /// `K1.1`: meshing stops one ring inside the loaded set, so the outer generated
 /// ring always has meshed neighbours.
-pub const MESHING_MARGIN: i32 = 1;
+pub(crate) const MESHING_MARGIN: i32 = 1;
 
 /// `K2.2`: the coarse frustum test is widened by this many degrees so a small
 /// head turn does not reshuffle the queue.
-pub const FRUSTUM_SLACK_DEGREES: f32 = 20.0;
+pub(crate) const FRUSTUM_SLACK_DEGREES: f32 = 20.0;
 
 /// `K1.1`: the visible radius. Columns at ring `<= 16` are wanted (`K1.1`).
 #[must_use]
-pub const fn load_radius() -> i32 {
+pub(crate) const fn load_radius() -> i32 {
     VIEW_RADIUS
 }
 
@@ -30,19 +30,19 @@ pub const fn load_radius() -> i32 {
 /// `R + UNLOAD_MARGIN = 18`, so at most `(2*18+1)^2 = 1,369` columns are
 /// resident against `1,089` wanted.
 #[must_use]
-pub const fn unload_radius() -> i32 {
+pub(crate) const fn unload_radius() -> i32 {
     VIEW_RADIUS + UNLOAD_MARGIN
 }
 
 /// `K1.1`: columns inside this ring are meshed; the outer ring is not.
 #[must_use]
-pub const fn meshing_radius() -> i32 {
+pub(crate) const fn meshing_radius() -> i32 {
     VIEW_RADIUS - MESHING_MARGIN
 }
 
 /// `K2.2`: [`FRUSTUM_SLACK_DEGREES`] in radians, the unit a frustum test wants.
 #[must_use]
-pub fn frustum_slack() -> f32 {
+pub(crate) fn frustum_slack() -> f32 {
     FRUSTUM_SLACK_DEGREES * (std::f32::consts::PI / 180.0)
 }
 
@@ -52,7 +52,7 @@ pub fn frustum_slack() -> f32 {
 /// so `Urgent < Visible < Ring < Prefetch < Background` and a sort by class puts
 /// urgent work first. Class order always outranks every other key (`K2.1`).
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
-pub enum Class {
+pub(crate) enum Class {
     /// `0`: the player's column and 8 neighbours, pending edits, collision and
     /// lighting needs. Never dropped and never blocked by the column cap.
     Urgent,
@@ -68,7 +68,7 @@ pub enum Class {
 
 impl Class {
     /// Every class, in priority order.
-    pub const ALL: [Self; 5] = [
+    pub(crate) const ALL: [Self; 5] = [
         Self::Urgent,
         Self::Visible,
         Self::Ring,
@@ -78,7 +78,7 @@ impl Class {
 
     /// Stable lowercase name for logs, counters, and the overlay.
     #[must_use]
-    pub const fn name(self) -> &'static str {
+    pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::Urgent => "urgent",
             Self::Visible => "visible",
@@ -90,7 +90,7 @@ impl Class {
 
     /// Index into the fixed per-class arrays, `0..5`, in priority order.
     #[must_use]
-    pub const fn index(self) -> usize {
+    pub(crate) const fn index(self) -> usize {
         match self {
             Self::Urgent => 0,
             Self::Visible => 1,
@@ -103,7 +103,7 @@ impl Class {
 
 /// `K1.4`: where a column sits relative to the visible ring.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
-pub enum Membership {
+pub(crate) enum Membership {
     /// Inside the visible radius: loaded, meshed, and prioritised.
     Visible,
     /// Inside the unload margin: resident and unmeshed, but not prioritised.
@@ -132,7 +132,7 @@ pub fn in_ring(column: [i32; 2], centre: [i32; 2], radius: i32) -> bool {
 /// [`UNLOAD_MARGIN`] rings are [`Membership::Resident`], everything beyond is
 /// [`Membership::Absent`]. A negative radius makes every column absent.
 #[must_use]
-pub fn membership(column: [i32; 2], centre: [i32; 2], visible_radius: i32) -> Membership {
+pub(crate) fn membership(column: [i32; 2], centre: [i32; 2], visible_radius: i32) -> Membership {
     if visible_radius < 0 {
         return Membership::Absent;
     }
@@ -149,7 +149,7 @@ pub fn membership(column: [i32; 2], centre: [i32; 2], visible_radius: i32) -> Me
     }
 }
 
-/// Domain word for [`column_index`]. Pinned: changing it changes the queue order
+/// Domain word for `column_index`. Pinned: changing it changes the queue order
 /// of ties, never the terrain.
 const COLUMN_DOMAIN: u64 = 0x636f_6c75_6d6e_2d76;
 
@@ -159,13 +159,13 @@ const COLUMN_DOMAIN: u64 = 0x636f_6c75_6d6e_2d76;
 /// run and every platform but need not be a cryptographic hash. The in-tree
 /// `SplitMix64` finaliser is integer-only (`A3.1`), so no hash crate is involved.
 #[must_use]
-pub fn column_index(column: [i32; 2]) -> u64 {
+pub(crate) fn column_index(column: [i32; 2]) -> u64 {
     let x = u64::from(column[0].cast_unsigned());
     let z = u64::from(column[1].cast_unsigned());
     mix(mix(COLUMN_DOMAIN ^ x) ^ z)
 }
 
-/// The demo's column-ring cap: the spec's [`VIEW_RADIUS`].
+/// The demo's column-ring cap: the spec's `VIEW_RADIUS`.
 ///
 /// The demo chooses its radius from `config.toml` with [`demo_view_radius`], so
 /// this is an upper bound rather than the radius actually streamed.
@@ -179,14 +179,14 @@ pub const DEMO_VIEW_RADIUS: i32 = 16;
 ///
 /// It matches the spec's degradation floor (`MIN_VIEW_RADIUS`), keeping a
 /// coherent ring even when `render_distance_chunks` is set below it.
-pub const MIN_DEMO_VIEW_RADIUS: i32 = 4;
+pub(crate) const MIN_DEMO_VIEW_RADIUS: i32 = 4;
 
 /// Derives the demo's column-ring radius from `render_distance_chunks`.
 ///
 /// The ring follows the camera's visible extent: the camera's fog end is
 /// `render_distance_chunks * 32` blocks, so a ring of that many columns ends
 /// exactly at the fog and no resident column is spent beyond it. The spec's
-/// [`DEMO_VIEW_RADIUS`] remains the cap, and [`MIN_DEMO_VIEW_RADIUS`] keeps a
+/// [`DEMO_VIEW_RADIUS`] remains the cap, and `MIN_DEMO_VIEW_RADIUS` keeps a
 /// small setting coherent. With the default `12` this is a 625-column ring;
 /// `[world] render_distance_chunks = 16` selects the spec's 1,089-column ring.
 #[must_use]

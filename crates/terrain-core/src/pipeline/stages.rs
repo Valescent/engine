@@ -118,7 +118,7 @@ impl Terrain {
     /// The per-column biome pick at one world column (`E3.3`).
     ///
     /// This is the same value [`Terrain::column`] uses for the surface rules and
-    /// [`Terrain::footprint`] uses for features. It is exposed for the blend
+    /// `Terrain::footprint` uses for features. It is exposed for the blend
     /// tests and debug dumps; generation itself reads the cached tile directly.
     ///
     /// # Errors

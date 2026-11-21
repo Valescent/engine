@@ -4,7 +4,7 @@ use super::membership::Class;
 
 /// `K4.1`: the per-frame work caps, in items and bytes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Budget {
+pub(crate) struct Budget {
     /// Columns whose work may start in one frame. Class 0 is exempt.
     pub max_columns_per_frame: u32,
     /// Mesh bytes that may be uploaded in one frame.
@@ -16,7 +16,7 @@ pub struct Budget {
 impl Budget {
     /// The steady-state `K4.1` answer: `2` columns, `4 MiB`, `3 ms`.
     #[must_use]
-    pub const fn v1() -> Self {
+    pub(crate) const fn v1() -> Self {
         Self {
             max_columns_per_frame: 2,
             max_upload_bytes_per_frame: 4 * 1024 * 1024,
@@ -29,7 +29,7 @@ impl Budget {
     /// Class 0 bypasses the column cap by definition (`K4.1`); the caller still
     /// has to pass the byte test below.
     #[must_use]
-    pub const fn allows_columns(&self, columns: u32, class: Class) -> bool {
+    pub(crate) const fn allows_columns(&self, columns: u32, class: Class) -> bool {
         matches!(class, Class::Urgent) || columns < self.max_columns_per_frame
     }
 
@@ -39,7 +39,7 @@ impl Budget {
     /// from this one (`K4.1`). The class is taken so the call site states which
     /// rule it applies; the answer does not depend on it.
     #[must_use]
-    pub fn allows_upload(&self, bytes: u64, used: u64, class: Class) -> bool {
+    pub(crate) fn allows_upload(&self, bytes: u64, used: u64, class: Class) -> bool {
         let _ = class;
         used.checked_add(bytes)
             .is_some_and(|total| total <= self.max_upload_bytes_per_frame)
@@ -55,7 +55,7 @@ impl Default for Budget {
 /// `K4.4`: the post-teleport budget, `8` columns and `16 MiB`, until the 3x3 is
 /// resident. The apply cap does not change.
 #[must_use]
-pub const fn teleport_budget() -> Budget {
+pub(crate) const fn teleport_budget() -> Budget {
     Budget {
         max_columns_per_frame: 8,
         max_upload_bytes_per_frame: 16 * 1024 * 1024,

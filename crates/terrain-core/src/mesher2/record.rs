@@ -3,21 +3,21 @@
 use super::skirt::SkirtEdges;
 
 /// Face direction code for a `+X` quad.
-pub const NORMAL_POS_X: u8 = 0;
+pub(crate) const NORMAL_POS_X: u8 = 0;
 /// Face direction code for a `-X` quad.
-pub const NORMAL_NEG_X: u8 = 1;
+pub(crate) const NORMAL_NEG_X: u8 = 1;
 /// Face direction code for a `+Y` quad.
-pub const NORMAL_POS_Y: u8 = 2;
+pub(crate) const NORMAL_POS_Y: u8 = 2;
 /// Face direction code for a `-Y` quad.
-pub const NORMAL_NEG_Y: u8 = 3;
+pub(crate) const NORMAL_NEG_Y: u8 = 3;
 /// Face direction code for a `+Z` quad.
-pub const NORMAL_POS_Z: u8 = 4;
+pub(crate) const NORMAL_POS_Z: u8 = 4;
 /// Face direction code for a `-Z` quad.
-pub const NORMAL_NEG_Z: u8 = 5;
+pub(crate) const NORMAL_NEG_Z: u8 = 5;
 /// First diagonal of a cutout cross quad.
-pub const NORMAL_CROSS_A: u8 = 6;
+pub(crate) const NORMAL_CROSS_A: u8 = 6;
 /// Second diagonal of a cutout cross quad.
-pub const NORMAL_CROSS_B: u8 = 7;
+pub(crate) const NORMAL_CROSS_B: u8 = 7;
 
 /// One packed 8-byte quad record (`M3.1`).
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

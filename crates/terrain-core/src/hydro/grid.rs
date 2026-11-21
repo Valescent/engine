@@ -7,19 +7,19 @@ use crate::description::{HYDRO_BORDER, HYDRO_TILE, MACRO_CELL, RIVER_MIN_CELLS};
 use crate::error::TerrainError;
 
 /// Sea level, mirroring `description::SEA` (`C1.2`).
-pub const SEA: i32 = 128;
+pub(crate) const SEA: i32 = 128;
 
 /// Highest possible terrain top, mirroring `description::MAX_TERRAIN_Y` (`C1.5`).
-pub const MAX_TERRAIN_Y: i32 = 352;
+pub(crate) const MAX_TERRAIN_Y: i32 = 352;
 
 /// A lake is never filled above this (`D7.2`): `MAX_TERRAIN_Y - 32`.
-pub const MAX_LAKE_Y: i32 = MAX_TERRAIN_Y - 32;
+pub(crate) const MAX_LAKE_Y: i32 = MAX_TERRAIN_Y - 32;
 
 /// Lowest a river bed may reach (`D3.3`): `SEA - 30`, and never below `y = 1`.
 ///
 /// `SEA - 30` is `98`, so the `y = 1` bound is implied and never the binding
 /// one in v1. `flow::clamp_bed` applies both.
-pub const BED_FLOOR: i32 = SEA - 30;
+pub(crate) const BED_FLOOR: i32 = SEA - 30;
 
 // `BED_FLOOR` is `98`, so the `y = 1` bound in `D3.3` never binds.
 const _: () = assert!(BED_FLOOR >= 1);
@@ -32,37 +32,37 @@ pub const TILE_CELLS: i32 = HYDRO_TILE / MACRO_CELL;
 /// `HYDRO_BORDER` in the description is `64` **blocks**, which is
 /// `64 / MACRO_CELL = 16` cells. The unit is part of the name so a future
 /// reader cannot mistake the stored 160-cell grid for a 64-cell halo.
-pub const HYDRO_BORDER_CELLS: i32 = HYDRO_BORDER / MACRO_CELL;
+pub(crate) const HYDRO_BORDER_CELLS: i32 = HYDRO_BORDER / MACRO_CELL;
 
 /// Compatibility alias for callers that predate the unit suffix.
 ///
-/// Kept equal to [`HYDRO_BORDER_CELLS`]; new code should use the suffixed name.
+/// Kept equal to `HYDRO_BORDER_CELLS`; new code should use the suffixed name.
 pub const BORDER_CELLS: i32 = HYDRO_BORDER_CELLS;
 
 /// Cells along one edge of the v1 whole world: `2 * WORLD_HALF_EXTENT / MACRO_CELL`.
 ///
 /// `WORLD_HALF_EXTENT = 1024` blocks, so the world is 2048 blocks across and
-/// `512` cells on a side. [`WorldHydro::solve`](super::WorldHydro::solve) takes an explicit `side`, so a
+/// `512` cells on a side. `WorldHydro::solve` takes an explicit `side`, so a
 /// test or a larger world does not depend on this constant; the description
 /// test pins it to the schema.
-pub const WORLD_SIDE_CELLS: i32 = 512;
+pub(crate) const WORLD_SIDE_CELLS: i32 = 512;
 
 /// Cells along every axis of a solved grid, halo included: `128 + 2 * 16`.
-pub const SIDE: i32 = TILE_CELLS + 2 * HYDRO_BORDER_CELLS;
+pub(crate) const SIDE: i32 = TILE_CELLS + 2 * HYDRO_BORDER_CELLS;
 
 /// First cell of the grid that the tile owns. The halo runs up to it.
-pub const INTERIOR_START: i32 = HYDRO_BORDER_CELLS;
+pub(crate) const INTERIOR_START: i32 = HYDRO_BORDER_CELLS;
 
 /// [`SIDE`] as a slice stride.
 #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-pub const SIDE_CELLS: usize = SIDE as usize;
+pub(crate) const SIDE_CELLS: usize = SIDE as usize;
 
-/// [`HYDRO_BORDER_CELLS`] as a slice bound.
+/// `HYDRO_BORDER_CELLS` as a slice bound.
 #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-pub const HALO_CELLS: usize = HYDRO_BORDER_CELLS as usize;
+pub(crate) const HALO_CELLS: usize = HYDRO_BORDER_CELLS as usize;
 
 /// Cells in one solved grid: `160 * 160`.
-pub const CELL_COUNT: usize = SIDE_CELLS * SIDE_CELLS;
+pub(crate) const CELL_COUNT: usize = SIDE_CELLS * SIDE_CELLS;
 
 // `D8.1`: the tile owns 512 blocks (128 cells) and the halo is 16 cells
 // (64 blocks). Both are multiples of the macro lattice, so no cell straddles a
@@ -73,8 +73,8 @@ const _: () = assert!(HYDRO_BORDER == 64 && HYDRO_BORDER_CELLS == 16);
 /// A solved hydrology tile: the six per-cell fields plus the recorded lakes.
 ///
 /// Cell coordinates are tile-local and include the halo: `(0, 0)` is the
-/// outer corner of the halo, and [`INTERIOR_START`] is the first cell the tile
-/// owns. Row stride is [`SIDE_CELLS`], and the cell index used by [`flow`] is
+/// outer corner of the halo, and `INTERIOR_START` is the first cell the tile
+/// owns. Row stride is `SIDE_CELLS`, and the cell index used by [`flow`] is
 /// `z * SIDE_CELLS + x`.
 ///
 /// Every field is a pure function of `(height, inflow)`, so two tiles built
@@ -108,7 +108,7 @@ impl HydroTile {
     /// Returns [`Stage::Hydrology`] with an [`ErrorKind::InvariantViolated`]
     /// when either slice has the wrong length or a height is not finite. A
     /// non-finite height is never clamped; it is rejected (`A2.3`, `S1.4`).
-    pub fn solve(height: &[f32], inflow: &[u32]) -> Result<Self, TerrainError> {
+    pub(crate) fn solve(height: &[f32], inflow: &[u32]) -> Result<Self, TerrainError> {
         if height.len() != CELL_COUNT {
             return Err(invalid("hydro height length"));
         }
@@ -143,25 +143,25 @@ impl HydroTile {
 
     /// The pre-detail macro height the tile was solved from.
     #[must_use]
-    pub fn height(&self, x: i32, z: i32) -> f32 {
+    pub(crate) fn height(&self, x: i32, z: i32) -> f32 {
         cell(&self.height, x, z).copied().unwrap_or(0.0)
     }
 
     /// The flood surface. Routing and accumulation read this, never terrain.
     #[must_use]
-    pub fn filled(&self, x: i32, z: i32) -> f32 {
+    pub(crate) fn filled(&self, x: i32, z: i32) -> f32 {
         cell(&self.filled, x, z).copied().unwrap_or(0.0)
     }
 
     /// Upstream cell count, `1` at a headwater plus `inflow`.
     #[must_use]
-    pub fn accumulation(&self, x: i32, z: i32) -> u32 {
+    pub(crate) fn accumulation(&self, x: i32, z: i32) -> u32 {
         cell(&self.accumulation, x, z).copied().unwrap_or(0)
     }
 
     /// D8 receiver cell index, or `None` at the sea, a halo cell, or a sink.
     #[must_use]
-    pub fn receiver(&self, x: i32, z: i32) -> Option<u32> {
+    pub(crate) fn receiver(&self, x: i32, z: i32) -> Option<u32> {
         cell(&self.receiver, x, z).copied().flatten()
     }
 
@@ -169,19 +169,19 @@ impl HydroTile {
     ///
     /// A recorded level is always above [`SEA`], so `0` is unambiguous.
     #[must_use]
-    pub fn lake_level(&self, x: i32, z: i32) -> i32 {
+    pub(crate) fn lake_level(&self, x: i32, z: i32) -> i32 {
         cell(&self.lake_level, x, z).copied().unwrap_or(0)
     }
 
     /// Channel width in blocks at this cell, `0` below the river threshold.
     #[must_use]
-    pub fn river_width(&self, x: i32, z: i32) -> f32 {
+    pub(crate) fn river_width(&self, x: i32, z: i32) -> f32 {
         cell(&self.river_width, x, z).copied().unwrap_or(0.0)
     }
 
     /// Recorded lakes, sorted by outlet cell index. Dry regions are absent.
     #[must_use]
-    pub fn lakes(&self) -> &[Lake] {
+    pub(crate) fn lakes(&self) -> &[Lake] {
         &self.lakes
     }
 }
