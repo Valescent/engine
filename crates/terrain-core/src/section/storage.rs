@@ -116,7 +116,7 @@ impl Section {
     }
 
     /// Writes one cell by `section_index`. Indices are masked to the volume.
-    pub fn set_index(&mut self, index: usize, id: BlockId) {
+    pub(crate) fn set_index(&mut self, index: usize, id: BlockId) {
         let index = index & (SECTION_VOLUME - 1);
         match self {
             Self::Uniform(current) => {
@@ -166,7 +166,7 @@ impl Section {
     }
 
     /// Decodes the whole section, the only bulk decode path.
-    pub fn write_blocks(&self, out: &mut [BlockId; SECTION_VOLUME]) {
+    pub(crate) fn write_blocks(&self, out: &mut [BlockId; SECTION_VOLUME]) {
         match self {
             Self::Uniform(id) => out.fill(*id),
             Self::Paletted { .. } => {
@@ -190,14 +190,14 @@ impl Section {
 
     /// Bits per cell. Always the smallest width that fits [`Self::palette`].
     #[must_use]
-    pub fn bits(&self) -> u8 {
+    pub(crate) fn bits(&self) -> u8 {
         bits_for(self.palette().len())
     }
 
     /// The uniform id, or `None` when the section is paletted.
     ///
     /// A paletted section is never demoted implicitly, so this stays `None`
-    /// until [`Self::compact`] runs.
+    /// until `Self::compact` runs.
     #[must_use]
     pub fn is_uniform(&self) -> Option<BlockId> {
         match self {
@@ -208,7 +208,7 @@ impl Section {
 
     /// Number of cells whose id is not `0`, maintained in `O(1)`.
     #[must_use]
-    pub fn solid_count(&self) -> usize {
+    pub(crate) fn solid_count(&self) -> usize {
         match self {
             Self::Uniform(id) => {
                 if *id == 0 {
@@ -228,7 +228,7 @@ impl Section {
     /// `O(1)` for the reserved air id `0`, which the solid count tracks. A
     /// palette is append-only, so any other id is answered by decoding.
     #[must_use]
-    pub fn is_empty(&self, air: BlockId) -> bool {
+    pub(crate) fn is_empty(&self, air: BlockId) -> bool {
         match self {
             Self::Uniform(id) => *id == air,
             Self::Paletted { .. } if air == 0 => self.solid_count() == 0,
@@ -241,7 +241,7 @@ impl Section {
     /// The palette is append-only, so stale entries can outnumber the ids still
     /// in use; this scans the decoded cells and ignores them. Anything else is a
     /// no-op. Call it lazily, on save or a timer, never on every write.
-    pub fn compact(&mut self) {
+    pub(crate) fn compact(&mut self) {
         let Self::Paletted {
             palette,
             bits,
@@ -266,7 +266,7 @@ impl Section {
 
     /// The palette as an owned copy, for the save layer.
     #[must_use]
-    pub fn palette_snapshot(&self) -> Vec<BlockId> {
+    pub(crate) fn palette_snapshot(&self) -> Vec<BlockId> {
         self.palette().to_vec()
     }
 
@@ -284,7 +284,7 @@ impl Section {
     /// Rejects a palette or width that breaks the invariants of `I1.1`: the
     /// palette must be non-empty and unique, `bits` must be the smallest allowed
     /// width for it, the word count must match, and every decoded index must be
-    /// inside the palette. The result is never demoted; call [`Self::compact`].
+    /// inside the palette. The result is never demoted; call `Self::compact`.
     pub fn from_palette(palette: &[BlockId], bits: u8, data: &[u64]) -> Result<Self, &'static str> {
         if palette.is_empty() {
             return Err("palette is empty");

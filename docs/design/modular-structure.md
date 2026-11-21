@@ -840,6 +840,14 @@ The owner answered the open questions:
 5. **Size budgets are CI warnings, not failures.** A check reports offenders; it tightens into a hard
    gate once the current tree is under the limits.
 
+Decision 3's surface target is met. Three visibility batches took the reachable
+`terrain-core` public surface from 889 items to 325: what remains is the
+`engine`/`terrain-gen` surface plus the items a kept public signature forces, and
+the journal writer family is now crate-private as one unit. The strict rustdoc
+gate (`RUSTDOCFLAGS="-D warnings" cargo doc -p terrain-core --no-deps
+--no-default-features`) runs in CI. The item-by-item evidence is in the
+[Visibility audit](visibility-audit.md).
+
 Still open, and cheap to decide later: whether `BlockId` lives in `content` or a leaf `ids` module
 (the plan prefers `content`), the trigger for a future `terrain-demo` crate, and whether `tracy`
 stays a default feature.

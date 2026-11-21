@@ -519,7 +519,7 @@ impl Description {
     /// comment, and an empty `[meta]` table last. `parse` of this text returns a
     /// description with identical [`Self::canonical_bytes`].
     #[must_use]
-    pub fn emit(&self) -> String {
+    pub(crate) fn emit(&self) -> String {
         let mut out = String::with_capacity(1_024);
         for spec in KEYS {
             let _ = write!(out, "{} = ", spec.name);
@@ -589,7 +589,7 @@ impl Description {
     /// description with identical [`Self::canonical_bytes`] and
     /// [`Self::description_hash`].
     #[must_use]
-    pub fn to_toml_string(&self) -> String {
+    pub(crate) fn to_toml_string(&self) -> String {
         let mut out = String::with_capacity(1_024);
         let _ = writeln!(out, "WORLD_HEIGHT = {}", self.world_height);
         let _ = writeln!(out, "SEA = {}", self.sea);

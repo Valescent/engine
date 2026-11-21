@@ -10,7 +10,7 @@ impl Description {
     ///
     /// Field order is structure order. Strings are length-prefixed with a
     /// `u32` byte count. Floats are bit patterns with `-0.0` normalised.
-    pub fn canonical_bytes(&self) -> Result<Vec<u8>, TerrainError> {
+    pub(crate) fn canonical_bytes(&self) -> Result<Vec<u8>, TerrainError> {
         self.validate()?;
         let mut out = Vec::with_capacity(256);
         out.extend_from_slice(&self.schema_version.to_le_bytes());

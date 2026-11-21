@@ -401,7 +401,7 @@ pub(super) const F32_RULE: &str = "f32 must be bit-pattern hex";
 impl Description {
     /// Checks ranges and finiteness. `A1.1` rejects NaN, infinity, and
     /// impossible geometry at load.
-    pub fn validate(&self) -> Result<(), TerrainError> {
+    pub(crate) fn validate(&self) -> Result<(), TerrainError> {
         let stage = Stage::Description;
         if self.schema_version != SCHEMA_VERSION {
             return Err(reject(stage, "schema_version", "unsupported"));

@@ -13,21 +13,21 @@ use super::frame::{EditBatch, encode_batch};
 /// is the spec default (64 batches, 250 ms, 10 s). Every method is pure: the
 /// caller passes monotonic milliseconds and no clock is read here.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CommitPolicy {
+pub(crate) struct CommitPolicy {
     /// Flush once this many complete batches are buffered.
-    pub max_batches: u32,
+    pub(crate) max_batches: u32,
     /// Flush once this many monotonic milliseconds have passed since the last
     /// successful flush.
-    pub max_age_ms: u64,
+    pub(crate) max_age_ms: u64,
     /// Sync once this many monotonic milliseconds have passed since the last
     /// successful sync.
-    pub fsync_ms: u64,
+    pub(crate) fsync_ms: u64,
 }
 
 impl CommitPolicy {
     /// The spec defaults: 64 batches, 250 ms, 10 s.
     #[must_use]
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             max_batches: 64,
             max_age_ms: 250,
@@ -44,7 +44,7 @@ impl CommitPolicy {
     /// that emptiness test correct for a caller that counts bytes separately.
     /// No clock is read.
     #[must_use]
-    pub const fn should_flush(
+    pub(crate) const fn should_flush(
         &self,
         queued_batches: u32,
         queued_bytes: u64,
@@ -61,7 +61,7 @@ impl CommitPolicy {
     /// [`JournalWriter::flush`] instead of waiting for this threshold. No clock
     /// is read.
     #[must_use]
-    pub const fn should_sync(&self, since_sync_ms: u64) -> bool {
+    pub(crate) const fn should_sync(&self, since_sync_ms: u64) -> bool {
         since_sync_ms >= self.fsync_ms
     }
 }
@@ -79,7 +79,7 @@ impl Default for CommitPolicy {
 /// position. The trait is path-agnostic on purpose, so a sink failure is
 /// reported as [`ErrorKind::IoError`] with the method name and a placeholder
 /// path.
-pub trait JournalSink {
+pub(crate) trait JournalSink {
     /// Appends all of `bytes`.
     fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()>;
 
@@ -115,7 +115,7 @@ impl JournalSink for Vec<u8> {
 
 /// What [`JournalWriter::flush_if_due`] did.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FlushOutcome {
+pub(crate) enum FlushOutcome {
     /// Nothing was due; the buffer is untouched.
     Idle,
     /// The buffer was written in one `write_all`; no sync was due.
@@ -146,7 +146,7 @@ pub enum FlushOutcome {
 /// write failure as session-fatal and recover the tail on reopen rather than
 /// blindly retrying. A failed `sync_data` happens after the bytes were written:
 /// the pending count is already cleared and only durability is missing.
-pub struct JournalWriter<S: JournalSink> {
+pub(crate) struct JournalWriter<S: JournalSink> {
     sink: S,
     policy: CommitPolicy,
     buffer: Vec<u8>,
@@ -164,7 +164,7 @@ pub struct JournalWriter<S: JournalSink> {
 impl<S: JournalSink> JournalWriter<S> {
     /// Wraps `sink` with the spec policy (or a caller-tuned one).
     #[must_use]
-    pub const fn new(sink: S, policy: CommitPolicy) -> Self {
+    pub(crate) const fn new(sink: S, policy: CommitPolicy) -> Self {
         Self {
             sink,
             policy,
@@ -185,7 +185,8 @@ impl<S: JournalSink> JournalWriter<S> {
     /// The frame is built now, so a later mutation of `batch` cannot change
     /// what is written. Nothing is flushed until a policy threshold or an
     /// explicit [`flush`](Self::flush).
-    pub fn push(&mut self, batch: &EditBatch) -> Result<(), TerrainError> {
+    #[allow(clippy::unnecessary_wraps)] // the fallible signature is the writer's error surface
+    pub(crate) fn push(&mut self, batch: &EditBatch) -> Result<(), TerrainError> {
         let frame = encode_batch(batch);
         self.pending_bytes = self
             .pending_bytes
@@ -210,7 +211,7 @@ impl<S: JournalSink> JournalWriter<S> {
     ///
     /// See [`JournalWriter`]. A write failure leaves the buffer pending; a sync
     /// failure leaves the bytes written but not durable.
-    pub fn flush_if_due(&mut self, now_ms: u64) -> Result<FlushOutcome, TerrainError> {
+    pub(crate) fn flush_if_due(&mut self, now_ms: u64) -> Result<FlushOutcome, TerrainError> {
         self.clock_ms = self.clock_ms.max(now_ms);
         let since_flush_ms = self.clock_ms.saturating_sub(self.last_flush_ms);
         if !self
@@ -240,7 +241,7 @@ impl<S: JournalSink> JournalWriter<S> {
     ///
     /// See [`JournalWriter`]. A write failure leaves the buffer pending; a sync
     /// failure leaves the bytes written but not durable.
-    pub fn flush(&mut self) -> Result<(), TerrainError> {
+    pub(crate) fn flush(&mut self) -> Result<(), TerrainError> {
         self.write_pending()?;
         self.sync()
     }
@@ -249,38 +250,38 @@ impl<S: JournalSink> JournalWriter<S> {
     ///
     /// This does not flush: pending frames are discarded with the writer.
     #[must_use]
-    pub fn into_sink(self) -> S {
+    pub(crate) fn into_sink(self) -> S {
         self.sink
     }
 
     /// Batches successfully written to the sink, whether or not yet synced.
     #[must_use]
-    pub const fn batches_written(&self) -> u64 {
+    pub(crate) const fn batches_written(&self) -> u64 {
         self.batches_written
     }
 
     /// Encoded bytes successfully written to the sink, whether or not yet
     /// synced.
     #[must_use]
-    pub const fn bytes_written(&self) -> u64 {
+    pub(crate) const fn bytes_written(&self) -> u64 {
         self.bytes_written
     }
 
     /// Successful `sync_data` calls.
     #[must_use]
-    pub const fn syncs(&self) -> u64 {
+    pub(crate) const fn syncs(&self) -> u64 {
         self.syncs
     }
 
     /// Batches buffered but not yet written. A failed write leaves this intact.
     #[must_use]
-    pub const fn pending_batches(&self) -> u32 {
+    pub(crate) const fn pending_batches(&self) -> u32 {
         self.pending_batches
     }
 
     /// Encoded bytes buffered but not yet written.
     #[must_use]
-    pub const fn pending_bytes(&self) -> u64 {
+    pub(crate) const fn pending_bytes(&self) -> u64 {
         self.pending_bytes
     }
 

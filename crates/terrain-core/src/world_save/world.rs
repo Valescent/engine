@@ -39,7 +39,7 @@ pub struct WorldSave {
     /// The verified header. Updated in place before it is written back.
     pub header: Header,
     /// The description the header's hash was verified against.
-    pub description: Description,
+    pub(crate) description: Description,
     /// Section file access under `sections/`.
     pub sections: SectionStore,
     /// Append-only edit frames. `None` only while a trim replaces the file.
@@ -181,8 +181,8 @@ impl WorldSave {
         &self.recovered
     }
 
-    /// The journal writer, for a caller that owns the IO loop.
-    pub fn journal_mut(&mut self) -> &mut JournalWriter<File> {
+    /// The journal writer, for this crate's IO loop.
+    pub(crate) fn journal_mut(&mut self) -> &mut JournalWriter<File> {
         self.journal.as_mut().expect("the journal is open")
     }
 
@@ -190,7 +190,7 @@ impl WorldSave {
     ///
     /// # Errors
     ///
-    /// The same errors as [`SectionStore::read_all`].
+    /// The same errors as `SectionStore::read_all`.
     pub fn read_sections(&self) -> Result<Vec<SavedSection>, TerrainError> {
         self.sections.read_all()
     }
@@ -205,7 +205,7 @@ impl WorldSave {
     /// # Errors
     ///
     /// The encoding errors from [`JournalWriter::push`].
-    pub fn record_batch(&mut self, batch: &EditBatch) -> Result<(), TerrainError> {
+    pub(crate) fn record_batch(&mut self, batch: &EditBatch) -> Result<(), TerrainError> {
         let Some(journal) = self.journal.as_mut() else {
             return Err(closed_journal());
         };
@@ -217,7 +217,7 @@ impl WorldSave {
     /// # Errors
     ///
     /// [`ErrorKind::IoError`] when the header cannot be written.
-    pub fn advance_revision(&mut self, revision: u64) -> Result<(), TerrainError> {
+    pub(crate) fn advance_revision(&mut self, revision: u64) -> Result<(), TerrainError> {
         if revision > self.header.revision {
             self.header.revision = revision;
             self.header_dirty = true;
@@ -233,7 +233,7 @@ impl WorldSave {
     /// # Errors
     ///
     /// [`ErrorKind::IoError`] from the journal.
-    pub fn flush(&mut self) -> Result<(), TerrainError> {
+    pub(crate) fn flush(&mut self) -> Result<(), TerrainError> {
         if let Some(journal) = self.journal.as_mut() {
             journal.flush()?;
         }
@@ -251,7 +251,7 @@ impl WorldSave {
     ///
     /// [`ErrorKind::IoError`] for a filesystem failure, or the encoding errors
     /// from [`SectionStore::write`].
-    pub fn save_section(
+    pub(crate) fn save_section(
         &mut self,
         key: SectionKey,
         baseline_hash: [u8; 32],

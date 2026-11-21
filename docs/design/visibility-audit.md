@@ -1,19 +1,19 @@
 # terrain-core visibility audit
 
-**Status:** Batch 2 applied on `feature/visibility-narrow2`. It narrowed 181 items:
-the 175 batch-2 candidates, plus `pipeline::Curves` (which released
-`curve::Curve`) and `residency::ring`'s `revisions::RequestKey`, plus three
-forced cascades in `light2` (`ColumnLight::{sky_slot, block_slot}` and
-`ColumnLight::relight_column`, which name `LightSlot` and `Edit`). The reachable
-public surface is now **383 items**, down from 564 after batch 1 and 889 at the
-audit baseline.
+**Status:** Batch 3 applied on `feature/visibility-narrow3`. It narrowed 58 more
+items: the journal writer family as one unit (`WorldSave::journal_mut` plus
+`JournalWriter`, `JournalSink`, `CommitPolicy`, and `FlushOutcome`), the
+remaining `WorldSave` migration and durability methods, `Terrain::{with_pack,
+overlay, macro_height}`, the unreferenced `Description`, `Header`, `Section`,
+`SectionStore`, and `ContentPack` helpers. The reachable public surface is now
+**325 items**, down from 564 after batch 1 and 889 at the audit baseline.
 
 | Batch | Items narrowed | Reachable public items | State |
 |---|---:|---:|---|
 | Audit baseline | 0 | 889 | merged (`a6720f0`) |
 | Batch 1 | 325 | 564 | merged (`eef849a`) |
-| Batch 2 | 181 | 383 | applied |
-| Batch 3 | remaining helpers | 383 minus batch 3 | remaining |
+| Batch 2 | 181 | 383 | merged (`07320ec`) |
+| Batch 3 | 58 | 325 | applied |
 
 `curve::Curve` and `revisions::RequestKey` were the two items §5 left public
 because a kept public signature named them. Batch 2 narrowed their owners
@@ -118,8 +118,9 @@ test is retained; those items are called out separately in §4.4.
   private. Those warnings are handled in §8, not by keeping the item.
 - **Trait impls and orphan rules are not modelled by the count.** A public trait
   bounds a public generic type more tightly than a free function does. The one
-  such case here, `editlog::JournalSink`, is kept public because
-  `JournalWriter<S: JournalSink>` stays public.
+  such case here, `editlog::JournalSink`, was public at the audit baseline
+  because `JournalWriter<S: JournalSink>` was public; batch 3 narrowed both
+  together, so the trait and its bound left the public surface as one unit.
 - **Macros and generics.** No exported macros exist. Generic instantiations are
   counted once at the definition; a public type parameter's bounds are part of
   the signature closure.
@@ -255,16 +256,16 @@ narrowed: `Terrain::{new, column, counters, description_hash, hydro_tile}`,
 
 ### 4.3 Facade methods and their return types
 
-These types are used directly by `engine`, so their whole public method surface is
-kept in this pass. Narrowing a rarely called method here would force a second
-audit of the types it returns.
+These types are used directly by `engine`, so the first pass kept their whole
+public method surface. Batch 3 then narrowed the methods with no external caller
+(§6.3); the counts below are the final public methods after all three batches.
 
 | Type | Methods kept | Reason |
 |---|---:|---|
-| `pipeline::Terrain` | 15 | the supported generation entry point |
-| `section::Section` | 17 | section reads and writes used by the engine |
-| `save::SectionStore` | 16 | repair and section storage used by the tool |
-| `world_save::WorldSave` | 17 | world open, save, and migration |
+| `pipeline::Terrain` | 12 | the supported generation entry point |
+| `section::Section` | 10 | section reads and writes used by the engine |
+| `save::SectionStore` | 7 | repair and section storage used by the tool |
+| `world_save::WorldSave` | 7 | world open, save, and migration |
 | `world_save::SaveWorker` | 5 | background saves |
 | `error::TerrainError` | 5 | error type crossing the boundary |
 
@@ -511,30 +512,61 @@ once the struct stops being public.
 
 ### 6.2 Journal family decision
 
-The batch-2 list does not include `WorldSave::journal_mut`, `JournalWriter`, or
-`JournalSink`, so the family stayed public as one unit. `journal_mut` still
-returns `&mut JournalWriter<File>`, which keeps the writer and its
-`S: JournalSink` bound reachable. Batch 3 should narrow the method and the
-writer/sink pair together, or move the method out of the public surface; there
-are no external implementors of `JournalSink`.
+Batch 2 left `WorldSave::journal_mut`, `JournalWriter`, and `JournalSink` public
+as one unit, because `journal_mut` returned `&mut JournalWriter<File>` and the
+writer's `S: JournalSink` bound kept the trait reachable. There were no external
+implementors of `JournalSink` and no external caller of `journal_mut`.
 
-Batch 3 is the method-level cleanup that this audit deliberately did not take:
+Batch 3 took the coherent option: it narrowed the accessor and the whole writer
+family in one commit. `journal_mut`, `JournalWriter`, `JournalSink`,
+`CommitPolicy`, and `FlushOutcome` are now `pub(crate)`. No public method returns
+a crate-private type, and no public generic is bounded by a crate-private trait.
+`WorldSave` still owns the journal, and the engine reaches it through
+`SaveWorker::{record_batch, save_section, flush, shutdown}`, which stay public.
 
-- `WorldSave::journal_mut` and `WorldSave::{begin_migration, migrate_sections,
-  resume_migration, finish_migration, migrate_with_report, advance_revision,
-  flush}`. Narrowing `journal_mut` would remove `JournalWriter` and
-  `JournalSink` from the public surface as a unit.
-- `Terrain::{with_pack, overlay, macro_height}`. These are public today but no
-  external caller uses them; narrowing them may also release `Curves` and
-  `TerrainMaterials`.
-- `Description` helpers not used by the tool, `Section` helpers that are only
-  used internally or by unit tests, and `ContentPack` convenience methods.
+The remaining batch-3 candidates were also taken:
 
-Traits and generic bounds come last: `JournalSink` is public today only because
-`JournalWriter<S: JournalSink>` is public. Narrowing the writer and the trait in
-the same commit is the only way to avoid a `private_bounds` warning. There are no
-external implementations of the trait in this workspace, so no orphan-rule
-constraint blocks the change.
+- `WorldSave::{begin_migration, migrate_sections, resume_migration,
+  finish_migration, migrate_with_report, advance_revision, flush,
+  record_batch, save_section}`. `migrate` stays public because `terrain-gen`
+  calls it; the step methods and the durability helpers are crate-private.
+- `Terrain::{with_pack, overlay, macro_height}`. `new` still calls `with_pack`
+  and the pipeline still calls `macro_height`, but neither crosses the crate
+  boundary; `overlay` is used only by unit tests.
+- `Description::{emit, to_toml_string, canonical_bytes, validate}`;
+  `Header::{encode, decode, encode_v1, validate}`; seven `Section` helpers
+  (`bits`, `compact`, `is_empty`, `palette_snapshot`, `set_index`,
+  `solid_count`, `write_blocks`); nine `SectionStore` helpers
+  (`backup_path_for`, `canonical_bytes`, `corrupt_path_for`, `read_all`,
+  `read_backup`, `replace`, `root`, `sections_dir`, `temp_path_for`); and four
+  `ContentPack` helpers (`props`, `sky_atten`, `emission`, `check_compatible`).
+
+Two items deliberately stay public even though no caller names them:
+`ContentPack::is_empty` is the paired accessor for the public `len`
+(`clippy::len_without_is_empty`), and the test-only `Section` constructors
+(`uniform`, `from_blocks`, `from_palette`, `get_index`, `is_uniform`) are used by
+integration tests that a visibility batch does not edit.
+
+### 6.3 Batch 3 result
+
+| Module | Narrowed | Public after | Notes |
+|---|---:|---:|---|
+| `editlog` | 17 | 12 | `CommitPolicy`, `JournalSink`, `FlushOutcome`, `JournalWriter` and its methods |
+| `world_save` | 10 | 17 | five `WorldSave` durability helpers and five migration steps |
+| `pipeline` | 3 | 22 | `with_pack`, `overlay`, `macro_height` |
+| `description` | 4 | 18 | `emit`, `to_toml_string`, `canonical_bytes`, `validate` |
+| `header` | 4 | 11 | `encode`, `decode`, `encode_v1`, `validate` |
+| `section` | 7 | 18 | palette and storage helpers used only inside the crate |
+| `save` | 9 | 10 | `SectionStore` path, backup, and read helpers |
+| `content` | 4 | 22 | `props`, `sky_atten`, `emission`, `check_compatible` |
+| **Total** | **58** | **325** | |
+
+No forced cascade was needed: every type named by a kept public signature stayed
+public. `TerrainMaterials` is still returned by `Terrain::materials`, and
+`Terrain::new` still builds through the now-private `with_pack`. Two clippy
+allows document newly-private code: `clippy::unnecessary_wraps` on
+`JournalWriter::push` (its fallible signature is the writer's error surface) and
+`dead_code` on `Terrain::overlay` until a caller adopts the read model.
 
 ## 7. Verification recipe
 
@@ -566,17 +598,18 @@ python -c "import json; d=json.load(open('target/doc/terrain_core.json', encodin
 ```
 
 Expected counts: 889 at the baseline, 564 after the first batch, 383 after the
-second. A larger number is a missed narrowing; a smaller one is a removed item or
-an unplanned cascade. Batch 3 remains on top of 383.
+second, and 325 after the third. A larger number is a missed narrowing; a smaller
+number is a removed item or an unplanned cascade. Batch 3 has no unplanned
+cascade: the count fell by exactly the 58 items it names.
 
-Once batch 2 is merged, the doc gate can be tightened: at this tip
+The strict doc gate now runs in CI:
 `RUSTDOCFLAGS="-D warnings" cargo doc -p terrain-core --no-deps
---no-default-features` exits 0 with no warnings. The batch-2 change fixed the
-batch-1 links and the ten pre-existing warnings by turning links to
-newly-private items into code spans and by giving `JournalWriter`,
-`ErrorKind::InvariantViolated`, and `Terrain::footprint`-style links their full
-paths or code spans. The CI gate stays off in this change because the workflow
-file is outside this batch's ownership.
+--no-default-features` exits 0 with no warnings. Batch 2 fixed the batch-1 links
+and the ten pre-existing warnings; batch 3 fixed the seven links its narrowing
+broke by turning them into code spans. The CI step gates `terrain-core` only:
+the workspace documentation build still reports pre-existing private-item links
+under `src/v0/` in the engine, which is outside this audit's ownership. See
+[CI](../dev/ci.md#strict-rustdoc-gate).
 
 ## 8. Risks
 
@@ -589,9 +622,9 @@ file is outside this batch's ownership.
    warnings at the batch-1 tip: unresolved links to `super::RIVER_MIN_CELLS`,
    `Stage::Hydrology`, `ErrorKind::InvariantViolated`, and `JournalWriter` /
    `JournalWriter::flush`, plus public docs that link to the private submodules
-   `pipeline::{terrain, stages, hydro}` and `Terrain::footprint`. Batch 2
-   narrowed more links of the same kind and fixed every one of them, so the
-   strict doc build is clean at this tip. Continue to change such link text to
+   `pipeline::{terrain, stages, hydro}` and `Terrain::footprint`. Batch 2 and
+   batch 3 narrowed more links of the same kind and fixed every one of them, so
+   the strict doc build is clean at this tip. Continue to change such link text to
    code spans or to a public replacement; do not keep an item public only to
    satisfy a doc link.
 3. **Private types in public signatures.** The signature closure is what prevents

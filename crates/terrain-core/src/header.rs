@@ -26,7 +26,7 @@
 //! | … | 4 | `crc32: u32` over every preceding byte |
 //!
 //! Strings are length-prefixed with one byte, which bounds each to 255 bytes;
-//! [`Header::validate`] refuses to write a longer one rather than truncating.
+//! `Header::validate` refuses to write a longer one rather than truncating.
 //! `created` and `last_saved` are UTC epoch seconds, never ordering keys.
 //!
 //! # Durability (`J3.4`)

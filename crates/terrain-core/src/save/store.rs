@@ -51,13 +51,13 @@ impl SectionStore {
 
     /// The world directory this store writes under.
     #[must_use]
-    pub fn root(&self) -> &Path {
+    pub(crate) fn root(&self) -> &Path {
         &self.root
     }
 
     /// The directory holding section files.
     #[must_use]
-    pub fn sections_dir(&self) -> PathBuf {
+    pub(crate) fn sections_dir(&self) -> PathBuf {
         self.root.join(SECTIONS_DIR)
     }
 
@@ -72,13 +72,13 @@ impl SectionStore {
 
     /// The previous-generation file for one section.
     #[must_use]
-    pub fn backup_path_for(&self, key: SectionKey) -> PathBuf {
+    pub(crate) fn backup_path_for(&self, key: SectionKey) -> PathBuf {
         with_suffix(&self.path_for(key), BACKUP_SUFFIX)
     }
 
     /// The in-flight file for one section.
     #[must_use]
-    pub fn temp_path_for(&self, key: SectionKey) -> PathBuf {
+    pub(crate) fn temp_path_for(&self, key: SectionKey) -> PathBuf {
         with_suffix(&self.path_for(key), TEMP_SUFFIX)
     }
 
@@ -138,7 +138,7 @@ impl SectionStore {
     /// If the current file is missing and `.tmp` verifies, `.tmp` is promoted.
     /// A stale `.tmp` beside a valid current file is deleted. A current file
     /// that fails its CRC is an error and is never silently replaced; use
-    /// [`Self::read_backup`] to offer the previous generation.
+    /// `Self::read_backup` to offer the previous generation.
     ///
     /// # Errors
     ///
@@ -179,7 +179,7 @@ impl SectionStore {
     /// # Errors
     ///
     /// The same errors as [`Self::read`], for any current or promoted file.
-    pub fn read_all(&self) -> Result<Vec<SavedSection>, TerrainError> {
+    pub(crate) fn read_all(&self) -> Result<Vec<SavedSection>, TerrainError> {
         let directory = self.sections_dir();
         if !directory.is_dir() {
             return Ok(Vec::new());
@@ -217,7 +217,7 @@ impl SectionStore {
 
     /// The canonical record bytes for a decoded section.
     #[must_use]
-    pub fn canonical_bytes(&self, saved: &SavedSection) -> Vec<u8> {
+    pub(crate) fn canonical_bytes(&self, saved: &SavedSection) -> Vec<u8> {
         section::encode_record(
             &self.pack,
             saved.key,
@@ -233,7 +233,7 @@ impl SectionStore {
     ///
     /// [`ErrorKind::IoError`] for a filesystem failure and
     /// [`ErrorKind::CorruptSection`] when the bytes do not verify.
-    pub fn replace(&self, key: SectionKey, bytes: &[u8]) -> Result<(), TerrainError> {
+    pub(crate) fn replace(&self, key: SectionKey, bytes: &[u8]) -> Result<(), TerrainError> {
         self.install_bytes(key, bytes)
     }
 
@@ -243,7 +243,10 @@ impl SectionStore {
     ///
     /// [`ErrorKind::IoError`] for a filesystem failure and
     /// [`ErrorKind::CorruptSection`] for a damaged backup.
-    pub fn read_backup(&self, key: SectionKey) -> Result<Option<SavedSection>, TerrainError> {
+    pub(crate) fn read_backup(
+        &self,
+        key: SectionKey,
+    ) -> Result<Option<SavedSection>, TerrainError> {
         let backup = self.backup_path_for(key);
         if !backup.is_file() {
             return Ok(None);
@@ -258,7 +261,7 @@ impl SectionStore {
 
     /// The quarantined file for one damaged section (`S1.5`).
     #[must_use]
-    pub fn corrupt_path_for(&self, key: SectionKey) -> PathBuf {
+    pub(crate) fn corrupt_path_for(&self, key: SectionKey) -> PathBuf {
         with_suffix(&self.path_for(key), ".corrupt")
     }
 

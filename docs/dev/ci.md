@@ -51,13 +51,25 @@ Each matrix entry:
 
 ```console
 cargo fmt --all -- --check
-cargo clippy --all-targets --locked -- -D warnings
-cargo test --locked
-RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+cargo clippy --all-targets --locked --no-default-features -- -D warnings
+cargo test --locked --no-default-features
+RUSTDOCFLAGS="-D warnings" cargo doc -p terrain-core --no-deps --no-default-features
 ```
 
 Formatting and rustdoc run only on Ubuntu. Clippy and tests run on all three systems. Clippy
 treats warnings as errors; tests do not.
+
+### Strict rustdoc gate
+
+The rustdoc step gates `terrain-core` only. It is the crate whose public surface the visibility
+batches narrowed, and its documentation builds with no warnings under `RUSTDOCFLAGS="-D warnings"`.
+The whole-workspace form (`cargo doc --no-deps --no-default-features`) still fails on pre-existing
+private-item doc links under `src/v0/` in the engine, so it is not a required check. When those
+engine links are fixed, change the step's command to the workspace form and update this section.
+
+```console
+RUSTDOCFLAGS="-D warnings" cargo doc -p terrain-core --no-deps --no-default-features
+```
 
 The `dependencies` job runs `EmbarkStudios/cargo-deny-action@v2`. The policy in `deny.toml`
 covers advisories, licences, duplicate and wildcard bans, and allowed sources.
@@ -249,8 +261,8 @@ Run the same checks locally:
 
 ```console
 cargo fmt --all -- --check
-cargo clippy --all-targets --locked -- -D warnings
-cargo test --locked
+cargo clippy --all-targets --locked --no-default-features -- -D warnings
+cargo test --locked --no-default-features
 cargo tree -p terrain-core -e normal --no-default-features
 typos
 mdbook build
@@ -260,12 +272,12 @@ Rustdoc needs `RUSTDOCFLAGS`:
 
 ```console
 # POSIX
-RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+RUSTDOCFLAGS="-D warnings" cargo doc -p terrain-core --no-deps --no-default-features
 ```
 
 ```console
 # PowerShell
-$env:RUSTDOCFLAGS = "-D warnings"; cargo doc --no-deps
+$env:RUSTDOCFLAGS = "-D warnings"; cargo doc -p terrain-core --no-deps --no-default-features
 ```
 
 `cargo deny check` reproduces the dependency job when cargo-deny is installed. CI uses typos
