@@ -47,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The demo now has one app-facing seam: `DemoRuntime` owns the patch, ring, save worker, repair prompt, pending rebuild, and edit queue behind `open/tick/edit/shutdown/repair/stats`, and `App` holds one `demo` field instead of six. The demo stores no renderer and names no `winit`/`wgpu` in production code; behaviour, log lines, and budgets are unchanged.
 - `app.rs` is split into `app/mod.rs` (App, handler, lifecycle, `RunError`), `app/input.rs` (keys, mouse, capture, hotbar, edits), and `app/frame.rs` (frame order, timing, overlay, uploads, streaming), with the frame sequence unchanged.
 - The demo module is split further: `demo/build.rs` owns the incremental rebuild (3x3 light scope, 26-neighbour remesh) and `demo/content.rs` owns the material/light/texture-layer tables, leaving `demo/mod.rs` as the `DemoRuntime` seam. All 32 demo tests are preserved.
+- `mesher2` and `light2` are split into submodules behind unchanged parent paths: `mesher2/{record,material,lod,greedy,cross,skirt,tests}` and `light2/{table,column,bfs,repair,tests}`. Both add a pinned output hash (mesh records and column light) taken before the split and unchanged after it.
 - A non-blocking CI size-budget check reports Rust files over 1,000 lines (currently 21) instead of failing; it tightens into a gate once the tree is under budget.
 
 ### Fixed
