@@ -103,22 +103,39 @@ at 12 or ~46 s at 16 after the narrow border relight (`ENGINE_NO_VSYNC=1`).
 ## Meshing and LOD
 
 - Fine sections are greedy-meshed with `MeshLod::Lod0` inside a two-column radius, with one extra
-  ring of fine meshes kept as a transition buffer. A coarse region is split at the same cutoff:
-  LOD1 owns complete `2x2` column squares from radius 4 outward, and LOD2 owns complete `4x4`
-  column squares entirely beyond radius 7. The bands stay coherent as the ring shrinks: at the
-  default 12 complete far squares remain on the `8..11` band (bases `8` and `-12`); at 8 no
-  complete square is clear of the LOD1 radius, so the outer band falls back to LOD1 and LOD2 is
-  empty.
+  ring of fine meshes kept as the active LOD0 transition buffer (ring `3`). A coarse region is split
+  at the same cutoff: LOD1 owns complete `2x2` column squares from radius 4 outward, and LOD2 owns
+  complete `4x4` column squares entirely beyond radius 7. The bands stay coherent as the ring
+  shrinks: at the default 12 complete far squares remain on the `8..11` band (bases `8` and `-12`);
+  at 8 no complete square is clear of the LOD1 radius, so the outer band falls back to LOD1 and LOD2
+  is empty.
+- **Coverage contract:** every resident column in the visible `(2r+1)` square is covered by exactly
+  one active band: LOD0 (ring `3` or less), a complete LOD1 region, a clipped LOD1 region, or a
+  complete LOD2 region. The active set has no duplicate section origins and no column drawn by two
+  bands.
+- Complete regions must be aligned, so two kinds of column are left over and are covered by
+  explicit clipped LOD1 regions: the positive row/column of an even-width ring (the outermost `+r`
+  base has no `+1` neighbour), and the negative edge of the LOD0 square where an aligned `2x2` base
+  straddles the fine cutoff. A clipped region keeps its aligned `2x2` origin and scale, but its mask
+  names the columns it draws; every other cell is air. It therefore never draws over LOD0, a
+  complete LOD1 region, or LOD2. LOD2 is never used for a clipped region.
+- Cost of the clipped pass: at radius 12 it emits 32 clipped bases (25 on the positive rim, 7 at
+  the LOD0 boundary), 96 active sections (75 rim, 21 boundary), about 122k quads and +0.6 MB of ring
+  footprint; at 16 it emits 40 bases (33 rim, 7 boundary), 120 sections (99 rim, 21 boundary), about
+  156k quads and +0.8 MB. The sections are cached and remeshed only when a mask or a column within
+  one expanded base changes, so a full-ring fill does not rebuild the rim on every coarse pass.
 - Each quad takes the layer of the face it belongs to: the block's top reference for `+Y`, bottom
   for `-Y`, and side for `±X`/`±Z` and cross quads (`ADR-0015`). `Textures` are presentation-only,
   so changing one never invalidates a saved section.
 - `demo_coarse_regions` downsamples every complete 2x2x2 fine group with `lod::downsample`, meshes
-  with `mesh_coarse` at Lod1, and appends skirts on all sides. `demo_far_regions` does the same
-  for complete `4x4` column squares with `lod::downsample4` (64 fine sections, the same
-  most-frequent-solid vote), `mesh_coarse` at Lod2, and Lod2 skirts (two cells = eight blocks).
-- A region is active only when all of its columns are outside the fine buffer, and an LOD1 region
-  is suppressed when an active LOD2 square covers it, so the three bands never overlap. Coarse
-  LOD is rebuilt whole in the background and is disposable. The LOD2 half shares the same
+  with `mesh_coarse` at Lod1, and appends skirts on all sides. `demo_coarse_regions_masked` is the
+  same path with the clipped-region mask: an unmasked or missing column contributes air.
+  `demo_far_regions` does the same for complete `4x4` column squares with `lod::downsample4` (64
+  fine sections, the same most-frequent-solid vote), `mesh_coarse` at Lod2, and Lod2 skirts (two
+  cells = eight blocks).
+- A region is active only when all of its drawn columns are outside the fine buffer, and an LOD1
+  region is suppressed when an active LOD2 square covers it, so the three bands never overlap.
+  Coarse LOD is rebuilt whole in the background and is disposable. The LOD2 half shares the same
   throttled job (`TERRAIN_DEMO_COARSE_MS`); an edit only sets `far_dirty`, so the edit path never
   pays for a 64-section derivation.
 - `TerrainSection` carries `scale` (1/2/4); the shader scales quad origins, widths, heights, face
@@ -257,10 +274,13 @@ cargo tree -p terrain-core -e normal --no-default-features
 - The renderer's texture array is still placeholder art: per-face references resolve to the eleven
   procedural layers by name, and an unknown name falls back to stone. Skirts on coarse meshes inherit
   the boundary face's layer rather than the side layer.
-- Coarse regions are aligned squares, so the outermost column on the positive x/z axes has no
-  complete region and relies on the fine transition buffer; the rest of the rim is covered.
+- Coarse regions are aligned squares. The positive rim of an even-width ring and the negative edge
+  of the LOD0 square are covered by clipped LOD1 regions whose non-drawn cells are air, so every
+  resident ring column is covered once; the clipped section's `2x2` bounds can still overlap a
+  finer section even though it emits no geometry there.
 - Coarse sections carry skirts on all sides, but a dedicated fine/coarse stitch (instead of the
-  extra fine transition ring) and a visible loading indicator are not implemented.
+  extra fine transition ring and clipped LOD1 regions) and a visible loading indicator are not
+  implemented.
 - No normative older section record exists, so migration fixtures cannot be added yet.
 - The camera and entities are still `f32`/world-space on the CPU. Camera-relative rendering is
   applied, but the spec's `f64` camera migration is not.
