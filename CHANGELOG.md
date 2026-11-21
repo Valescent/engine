@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The headless terrain stack now lives in a `terrain-core` workspace crate (generation through persistence), and `terrain-gen` moved with its tests and goldens. `engine` re-exports the moved modules, so existing paths still work, and CI proves the tool resolves no `wgpu`, `winit`, `wgpu-profiler`, or `tracy-client`.
 - Generation version 4: the desert centre moved to `(0.84, 0.15, weight 1.15)`, lifting the thinnest coverage (seed 9 desert 5.09% -> 6.89%) and bringing the desert/tundra blend from p90 63.32 to 57.68 while every pair's median stays in 20-28. Two golden section hashes move; the counter baseline is unchanged.
 - The frozen v0 stack (`world`, `light`, `mesh`, `mesher`, `generation`, `streaming`, `voxel`) now lives under `src/v0/` with crate-root re-exports, so every existing path keeps working; `terrain-gen` is split into `src/bin/terrain-gen/` with one module per subcommand, with byte-identical goldens, counters, and calibration output.
+- The crate root is now 34 lines: `startup.rs` owns `run`/config/seed/world choice, `app.rs` owns the winit app/frame/input, and `src/demo/` owns the terrain runtime (`patch`, `lod`, `stream`, `edit`, `persist`). Pure moves with all 59 tests preserved and no public-surface change.
 - A non-blocking CI size-budget check reports Rust files over 1,000 lines (currently 21) instead of failing; it tightens into a gate once the tree is under budget.
 
 ### Fixed

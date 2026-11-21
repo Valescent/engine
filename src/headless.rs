@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use glam::Vec2;
 use tracing::info;
 
-use crate::App;
+use crate::app::App;
 use crate::mesher::{MeshPool, create_pool};
 use crate::streaming::Streaming;
 
