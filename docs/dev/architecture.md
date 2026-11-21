@@ -34,7 +34,15 @@ src/
 │   ├── persist.rs          # replay, repair prompt, recovered journal
 │   └── content.rs          # material table, collision table, texture layers
 ├── v0/                     # frozen legacy stack
-├── renderer.rs, camera.rs, player.rs, raycast.rs, sky.rs, overlay.rs, frustum.rs
+├── renderer.rs             # Renderer, RendererError, re-exports, draw passes
+├── renderer/
+│   ├── chunk.rs            # legacy per-chunk LOD/water meshes and origins
+│   ├── frame.rs            # frame uniform, camera bind group, depth, stats
+│   ├── origin.rs           # absolute origin uniforms, camera-relative bookkeeping
+│   ├── pipeline.rs         # shader modules, bind group layouts, pipelines
+│   ├── terrain.rs          # packed-quad sections, quad decode, upload plan
+│   └── texture.rs          # procedural block texture array
+├── camera.rs, player.rs, raycast.rs, sky.rs, overlay.rs, frustum.rs
 ├── block.rs, config.rs, headless.rs, metrics.rs
 └── *.wgsl                  # shaders stay with the renderer
 ```
@@ -75,7 +83,7 @@ src/
 | `crates/terrain-core/src/save.rs`, `crates/terrain-core/src/world_save.rs` | Section files, backup rotation, journal file, replay/trimming, `WorldSave`, save worker, repair, migration/report. See [Terrain v1 runtime](terrain-v1.md) and [Save format](save-format.md). |
 | `crates/terrain-core/src/light2.rs`, `crates/terrain-core/src/mesher2.rs`, `crates/terrain-core/src/lod.rs`, `crates/terrain-core/src/section.rs`, `src/terrain_draw.wgsl` | v1 column light, greedy mesher, coarse LOD, section storage, packed-quad shader. The shader stays with the renderer. |
 | `src/sky.rs` | Day/night cycle, sun direction, sky/ambient/sun colours, and the CPU fog formula. |
-| `src/renderer.rs` | `wgpu` device/surface setup, pipelines, block texture array, buffers, depth texture, resizing, and draw submission. |
+| `src/renderer.rs`, `src/renderer/` | `renderer.rs`: `wgpu` device/surface setup, `Renderer` and its methods, re-exports, and draw submission. `renderer/chunk.rs`: legacy chunk LOD/water buffers and origin uniforms. `renderer/frame.rs`: frame uniform, camera bind group, depth texture, present mode, and stats. `renderer/origin.rs`: absolute origin uniforms and camera-relative bookkeeping. `renderer/pipeline.rs`: shader modules, bind group layouts, and pipelines. `renderer/terrain.rs`: packed-quad sections, quad decode, and the upload plan. `renderer/texture.rs`: the procedural block texture array. |
 | `src/shader.wgsl` | Chunk vertex transform, lit/fogged opaque shading, and the animated water fragment. See [Shader authoring](shaders.md). |
 | `src/highlight.wgsl` | Line-list block outline. |
 | `src/overlay.wgsl` | Screen-space overlay quads. |

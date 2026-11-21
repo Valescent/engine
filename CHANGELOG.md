@@ -49,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The demo module is split further: `demo/build.rs` owns the incremental rebuild (3x3 light scope, 26-neighbour remesh) and `demo/content.rs` owns the material/light/texture-layer tables, leaving `demo/mod.rs` as the `DemoRuntime` seam. All 32 demo tests are preserved.
 - `mesher2` and `light2` are split into submodules behind unchanged parent paths: `mesher2/{record,material,lod,greedy,cross,skirt,tests}` and `light2/{table,column,bfs,repair,tests}`. Both add a pinned output hash (mesh records and column light) taken before the split and unchanged after it.
 - `pipeline` and `volume` are split the same way: `pipeline/{terrain,stages,hydro,tests}` and `volume/{detail,caves,spans,tests}`, with a pinned column/section digest added for pipeline and the existing golden columns covering volume. Files over 1,000 lines are down from 22 to 17.
+- `features` is split into `discover`/`apply`/`masks` behind an unchanged parent, and `renderer` into `chunk`/`frame`/`origin`/`pipeline`/`terrain`/`texture` with the shader `include` paths adjusted and every `renderer::` item re-exported; all 19 renderer tests moved with their subjects. The size checker now excludes the frozen `src/v0/**` from its warnings, leaving 14 files over 1,000 lines.
 - A non-blocking CI size-budget check reports Rust files over 1,000 lines (currently 21) instead of failing; it tightens into a gate once the tree is under budget.
 
 ### Fixed
