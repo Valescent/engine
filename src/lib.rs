@@ -1299,10 +1299,10 @@ impl App {
 
     /// Selects, generates, and uploads hierarchy sections, one per frame.
     ///
-    /// The parent-retained target is rebuilt when the player crosses a 64 m
-    /// cell or a readiness change can swap a parent for its children. Uploads
-    /// outside the target (plus a margin) are evicted, except for ancestor
-    /// fallbacks and parents whose children are still building.
+    /// The recursive parent-retained target is rebuilt when the player crosses
+    /// a 64 m cell or a readiness change can swap a node for its in-world
+    /// children. Uploads outside the target (plus a margin) are evicted, except
+    /// for ancestor fallbacks and parents whose children are still building.
     #[allow(clippy::cast_possible_truncation)]
     fn ensure_hierarchy(&mut self) {
         if !self.hierarchy {

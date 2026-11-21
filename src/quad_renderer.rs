@@ -46,7 +46,7 @@ impl NodeKey {
 /// Pool budget: 3.2M quads at 12 bytes each, 38.4 MB.
 pub(crate) const CAPACITY_QUADS: u32 = 3_200_000;
 /// Larger pool for the section hierarchy, which covers 8 km.
-pub(crate) const HIERARCHY_CAPACITY_QUADS: u32 = 6_000_000;
+pub(crate) const HIERARCHY_CAPACITY_QUADS: u32 = 8_000_000;
 
 /// Bytes reserved for `capacity_quads` quad records.
 pub(crate) fn pool_bytes(capacity_quads: u32) -> u64 {

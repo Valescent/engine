@@ -131,13 +131,11 @@ Landed on the `lod-hierarchy` branch:
 
 Still blocking the visual gate:
 
-- Far-level projected refinement and parent retention for levels 3-4. The 8 km rings are direct
-  bands in this slice; they are visually coherent but not screen-error driven.
-- Manual acceptance and the release decision. The 2 km and 8 km gates are measured and the capture
-  controls are in place.
+- Manual acceptance and the release decision. The 2 km and 8 km gates are measured, far-level
+  projected refinement/parent retention are implemented, and the capture controls are in place.
 
 The earlier blockers are resolved: the hierarchy renderer/streaming path, the L0 detail radius and
-water seam, coarse BFS light, the 2 km selection/memory table, and edit invalidation. The 8 km gate
-holds at 0.600 ms frame / 0.368 ms GPU, 2 draws, 50.24 MB allocated quads, and 71.35 MB reservation;
-L0 detail 16 is 85.9 MB resident.
+water seam, coarse BFS light, the 2 km selection/memory table, edit invalidation, and far-level
+projected refinement/parent retention. The 8 km gate holds at 0.908 ms frame / 0.780 ms GPU, 2 draws,
+74.62 MB allocated quads, and 94.24 MB reservation; L0 detail 16 is 85.9 MB resident.
 

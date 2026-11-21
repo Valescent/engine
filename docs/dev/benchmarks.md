@@ -789,23 +789,27 @@ children stay in the pool but hidden until the swap; one target rebuild runs per
 
 #### Levels 3-4 and the 8 km gate
 
-Level-3 sections (256 m) cover 2,048-4,096 m and level-4 sections (512 m) cover 4,096-8,192 m as
-direct `y = 0` rings. Far-level projected refinement is deferred. The hierarchy pool is 6M quads
-(72 MB) when `ENGINE_HIERARCHY=1`; the distance-32 path keeps 3.2M (38.4 MB).
+Level-3 roots (256 m) cover 2,048-4,096 m and level-4 roots (512 m) cover 4,096-8,192 m. Both use
+the same recursive projected refinement and parent retention as level 2; children above the
+128-block world are filtered and count as ready. The hierarchy pool is 8M quads (96 MB) when
+`ENGINE_HIERARCHY=1`; the distance-32 path keeps 3.2M (38.4 MB).
 
 | Settled 8 km view (west, spawn) | Value |
 |---|---:|
-| Visible nodes | 1,380 |
-| Visible vertices | 5.89 M |
+| Cold target / settled target | 2,836 / 4,990 |
+| Nodes with geometry | 7,023 |
+| Visible nodes | 1,908 |
+| Visible vertices | 9.40 M |
 | Draw calls | 2 |
-| Frame | 0.600 ms |
-| GPU scene | 0.368 ms |
-| Allocated quads | 50.24 MB |
-| Geometry reservation | 71.35 MB |
+| Frame | 0.908 ms |
+| GPU scene | 0.780 ms |
+| Allocated quads | 74.62 MB |
+| Geometry reservation | 94.24 MB |
 | L0 resident (detail 16) | 85.9 MB |
 
-- The 8 km gate holds with a large margin: 60 FPS, under 500 MB working set, and 2 draws.
-- Two section uploads were deferred during startup; the far rings then fit the 6M pool. No stall.
+- Far refinement adds about 1,900 settled sections; the 8M pool holds them with ~20 MB of headroom.
+  Two uploads were deferred during startup and none after.
+- The 8 km gate holds: 60 FPS, under 500 MB working set, and 2 draws.
 - The far view extends the water and land to the horizon; the hierarchy 2 km and L0 controls agree on
   the visible island and cave patches.
 

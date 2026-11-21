@@ -5,18 +5,23 @@
 //! sections (128 m) cover 768-2,048 m, level-3 sections (256 m) cover
 //! 2,048-4,096 m, and level-4 sections (512 m) cover 4,096-8,192 m.
 //!
-//! Level-2 parents are selected from the far ring and stay drawable as soon as
-//! they are requested. A parent whose projected size exceeds [`REFINE_PIXELS`]
-//! is refined into its eight level-1 children, but the swap only happens when
-//! all eight children are ready (uploaded or empty). Until then the parent is
-//! drawn and the children build underneath it. Once a parent is refined, it
-//! stays refined until its projected size drops below [`COLLAPSE_PIXELS`]; the
-//! band between the two thresholds is the hysteresis that stops a boundary from
-//! thrashing. A selection never contains a parent and its children together.
+//! Selection is recursive. Level-2 parents, level-3 parents (the 2-4 km band),
+//! and level-4 parents (the 4-8 km band) are resolved by the same rule: a node
+//! whose projected size exceeds [`REFINE_PIXELS`] is replaced by its in-world
+//! children as soon as every one of those children is ready. Until then the
+//! parent stays drawn and the children build underneath it. Once a node is
+//! refined it stays refined until its projected size drops below
+//! [`COLLAPSE_PIXELS`]; the band between the two thresholds is the hysteresis
+//! that stops a boundary from thrashing. A selection never contains a parent
+//! and any of its descendants together.
 //!
-//! Levels 3 and 4 are direct, surface-only rings at `y = 0`. Projected
-//! parent/child refinement for those far levels is deferred: this slice selects
-//! them as leaves, and only level-2 parents refine into level-1 children.
+//! Level 2 keeps the committed near-field rule and projects its 64 m children.
+//! The far roots project their own 256 m or 512 m footprint, so the far leaves
+//! are screen-error driven and, at the shipped thresholds, each band gains one
+//! level of detail in its inner half. Children whose origin is at or above
+//! [`WORLD_HEIGHT`] are empty: they are never requested or built and count as
+//! ready for the parent swap. A collapse keeps the drawn descendants until the
+//! parent is uploaded, then swaps atomically.
 //!
 //! Ring boundaries are aligned on the grid of the coarser neighbouring level,
 //! so adjacent levels meet exactly instead of overlapping or leaving a seam as
@@ -34,6 +39,7 @@ use std::collections::{HashMap, HashSet};
 
 use glam::{IVec2, IVec3, Vec2, Vec3};
 
+use crate::generation::WORLD_HEIGHT;
 use crate::section::{MAX_LEVEL, SECTION_SIZE, SectionKey};
 
 /// Default L0 detail radius in chunks.
@@ -53,14 +59,16 @@ const LEVEL2_EXTENT: i32 = SECTION_SIZE * 4;
 const LEVEL3_EXTENT: i32 = SECTION_SIZE * 8;
 const LEVEL4_EXTENT: i32 = SECTION_SIZE * 16;
 
-/// Projected child size, in pixels, above which a level-2 parent refines.
+/// Projected refinement size, in pixels, above which a node refines.
 ///
-/// With the default projection this refines parents whose nearest point is
-/// closer than about 800 m, so the innermost far ring gains detail.
+/// Level-2 parents project their 64 m children, so the default projection
+/// refines parents whose nearest point is closer than about 800 m. Far roots
+/// project their own footprint, so the 2 km and 4 km bands each gain a level of
+/// detail in their inner half.
 pub(crate) const REFINE_PIXELS: f32 = 72.0;
 
-/// Projected child size, in pixels, below which refined children collapse back
-/// into their parent. The band between this and [`REFINE_PIXELS`] is the
+/// Projected refinement size, in pixels, below which refined children collapse
+/// back into their parent. The band between this and [`REFINE_PIXELS`] is the
 /// hysteresis that keeps a section on one side of the boundary from thrashing.
 pub(crate) const COLLAPSE_PIXELS: f32 = 62.0;
 
@@ -114,11 +122,25 @@ fn farthest_xz_distance(player: Vec3, key: SectionKey) -> f32 {
     offset.length()
 }
 
-/// Projected size of one level-1 child at a parent's distance.
-fn parent_pixels(player: Vec3, parent: SectionKey, pixels_per_radian: f32) -> f32 {
+/// Extent whose projection decides whether `node` refines.
+///
+/// Level-2 parents keep the slice-1 rule and project their 64 m children. The
+/// far roots project their own footprint: their children belong to the next
+/// finer level, so this keeps each 2 km band to one refinement step at the
+/// shipped thresholds instead of recursively refining down to level 1.
+fn refine_extent(node: SectionKey) -> i32 {
+    if node.level >= 3 {
+        node.extent()
+    } else {
+        node.extent() / 2
+    }
+}
+
+/// Projected refinement size of one node at the camera's nearest distance.
+fn refine_pixels(player: Vec3, node: SectionKey, pixels_per_radian: f32) -> f32 {
     projected_pixels(
-        LEVEL1_EXTENT,
-        nearest_xz_distance(player, parent),
+        refine_extent(node),
+        nearest_xz_distance(player, node),
         pixels_per_radian,
     )
 }
@@ -132,18 +154,21 @@ fn refined_for_pixels(refined: bool, pixels: f32) -> bool {
     }
 }
 
-/// Whether one coarse parent should draw its children at this projected size.
-fn refine_state(refined: bool, parent: SectionKey, player: Vec3, pixels_per_radian: f32) -> bool {
-    refined_for_pixels(refined, parent_pixels(player, parent, pixels_per_radian))
+/// Whether one coarse node should draw its children at this projected size.
+fn refine_state(refined: bool, node: SectionKey, player: Vec3, pixels_per_radian: f32) -> bool {
+    refined_for_pixels(refined, refine_pixels(player, node, pixels_per_radian))
 }
 
-/// The eight level-1 children of a level-2 parent.
-fn children_of(parent: SectionKey) -> [SectionKey; 8] {
-    std::array::from_fn(|index| {
-        parent
-            .child(index)
-            .expect("only level-2 parents are refined")
-    })
+/// The children of `node` that overlap the world's vertical extent.
+///
+/// A section whose origin is at or above [`WORLD_HEIGHT`] is entirely empty. It
+/// is never selected or built and counts as ready for its parent's swap.
+fn in_world_children(node: SectionKey) -> Vec<SectionKey> {
+    debug_assert!(node.level >= 2, "only section parents refine");
+    (0..8)
+        .filter_map(|index| node.child(index))
+        .filter(|child| child.origin().y < WORLD_HEIGHT)
+        .collect()
 }
 
 /// World metres covered by the L0 detail radius.
@@ -272,13 +297,17 @@ fn coord_order(key: SectionKey) -> (i32, i32, i32) {
     (key.coord.x, key.coord.y, key.coord.z)
 }
 
-/// Whether a parent is fully covered by eight drawn children.
+/// Whether a parent is fully covered by drawn descendants.
+///
+/// A child counts when it is drawn itself or when its own in-world children
+/// cover it. This releases a far root after a multi-level refinement even
+/// though its leaves are grandchildren.
 fn covered_by_children(key: SectionKey, target: &HashSet<SectionKey>) -> bool {
     !target.contains(&key)
-        && (0..8).all(|index| {
-            key.child(index)
-                .is_some_and(|child| target.contains(&child))
-        })
+        && key.level >= 2
+        && in_world_children(key)
+            .iter()
+            .all(|child| target.contains(child) || covered_by_children(*child, target))
 }
 
 /// Whether an upload is outside the target region plus the outer margin.
@@ -295,8 +324,8 @@ fn outside_target_region(key: SectionKey, player: Vec3, detail_meters: i32) -> b
 /// Sections that stay resident for a draw list and its fallback parents.
 ///
 /// This is the target, every ancestor of a target, and every parent whose
-/// children are still pending. The margin and the double-draw rules are applied
-/// by [`evictions`].
+/// in-world children are still pending. The margin and the double-draw rules
+/// are applied by [`evictions`].
 fn retained_keys(
     target: &[SectionKey],
     fallbacks: &HashMap<SectionKey, Vec<SectionKey>>,
@@ -317,10 +346,9 @@ fn retained_keys(
 /// The target and its fallback parents are always kept. A one-ring margin
 /// beyond the outer target keeps just-evicted far parents resident so crossing
 /// a section cell does not rebuild the same ring. Three rules override the
-/// margin so the renderer, which draws every upload, never draws a parent and
-/// its children: a parent covered by eight drawn children is evicted, a child
-/// of a drawn parent is evicted, and an upload that has fallen into the L0 hole
-/// is evicted.
+/// margin so the renderer never holds a stale parent over its replacement
+/// leaves: a parent covered by drawn descendants is evicted, a child of a drawn
+/// parent is evicted, and an upload that has fallen into the L0 hole is evicted.
 pub(crate) fn evictions(
     uploaded: &HashSet<SectionKey>,
     target: &[SectionKey],
@@ -348,6 +376,14 @@ pub(crate) fn evictions(
     stale
 }
 
+/// One rebuild's exclusive draw set, retained fallbacks, and queued units.
+#[derive(Debug, Default)]
+struct Selection {
+    target: HashSet<SectionKey>,
+    fallbacks: HashMap<SectionKey, Vec<SectionKey>>,
+    units: Vec<(SectionKey, Vec<SectionKey>)>,
+}
+
 /// Draw list, build queue, and readiness for hierarchy sections.
 #[derive(Debug, Default)]
 pub(crate) struct Hierarchy {
@@ -358,7 +394,7 @@ pub(crate) struct Hierarchy {
     /// children building under a drawn parent, or a parent rebuilding under
     /// drawn children about to be replaced.
     fallbacks: HashMap<SectionKey, Vec<SectionKey>>,
-    /// Exclusive draw list: never a parent and one of its children.
+    /// Exclusive draw list: never a parent and one of its descendants.
     target: Vec<SectionKey>,
     /// Desired sections that are not ready, parents before their children.
     queue: Vec<SectionKey>,
@@ -483,16 +519,17 @@ impl Hierarchy {
         )
     }
 
-    /// Selects parents and direct level-1 sections, resolves refinement, and
-    /// orders the build queue. The target is exclusive: a parent that is
-    /// refined and ready contributes only its children.
+    /// Selects the level-2/3/4 roots, resolves each recursively, adds the
+    /// direct level-1 ring, and orders the build queue. The target is
+    /// exclusive: a parent that is refined and ready contributes only its
+    /// descendants.
     fn rebuild(&mut self, player: Vec3, detail_chunks: i32, pixels_per_radian: f32) {
         let detail = detail_meters(detail_chunks);
         let l2_inner = LEVEL1_OUTER_METERS.max(detail);
 
-        let mut parents = Vec::new();
+        let mut roots = Vec::new();
         ring(
-            &mut parents,
+            &mut roots,
             player,
             2,
             LEVEL2_EXTENT,
@@ -500,20 +537,29 @@ impl Hierarchy {
             LEVEL2_OUTER_METERS,
             1,
         );
-        let parent_set: HashSet<SectionKey> = parents.iter().copied().collect();
-        self.refined.retain(|key| parent_set.contains(key));
-
-        let mut target = HashSet::new();
-        let mut fallbacks = HashMap::new();
-        let mut units = Vec::new();
-        self.resolve_parents(
-            &parents,
+        ring(
+            &mut roots,
             player,
-            pixels_per_radian,
-            &mut target,
-            &mut fallbacks,
-            &mut units,
+            3,
+            LEVEL3_EXTENT,
+            LEVEL2_OUTER_METERS,
+            LEVEL3_OUTER_METERS,
+            1,
         );
+        ring(
+            &mut roots,
+            player,
+            4,
+            LEVEL4_EXTENT,
+            LEVEL3_OUTER_METERS,
+            LEVEL4_OUTER_METERS,
+            1,
+        );
+
+        let mut selection = Selection::default();
+        for root in &roots {
+            self.resolve_node(*root, player, pixels_per_radian, &mut selection);
+        }
 
         let mut direct = Vec::new();
         ring(
@@ -525,31 +571,13 @@ impl Hierarchy {
             LEVEL1_OUTER_METERS,
             2,
         );
-        // Surface-only far rings. Projected refinement of these levels is
-        // deferred, so they are always selected as direct leaves.
-        ring(
-            &mut direct,
-            player,
-            3,
-            LEVEL3_EXTENT,
-            LEVEL2_OUTER_METERS,
-            LEVEL3_OUTER_METERS,
-            1,
-        );
-        ring(
-            &mut direct,
-            player,
-            4,
-            LEVEL4_EXTENT,
-            LEVEL3_OUTER_METERS,
-            LEVEL4_OUTER_METERS,
-            1,
-        );
-        add_direct_sections(&direct, &mut target);
+        add_direct_sections(&direct, &mut selection.target);
 
-        let queue = self.finish_queue(&target, &mut units, player);
-        let target = sorted_target(target, player);
+        let queue = self.finish_queue(&selection.target, &mut selection.units, player);
+        let target = sorted_target(selection.target, player);
+        let fallbacks = selection.fallbacks;
         self.prune_states(&target, &fallbacks);
+        self.retain_refined(&target, &fallbacks);
         for key in &queue {
             self.mark_requested(*key);
         }
@@ -559,67 +587,82 @@ impl Hierarchy {
         self.fallbacks = fallbacks;
     }
 
-    /// Resolves every far parent: refined parents hand over to eight ready
-    /// children, otherwise the parent stays selected as the fallback.
-    fn resolve_parents(
+    /// Resolves one node and, when it refines, its in-world children.
+    ///
+    /// A ready refined node contributes only its descendants. While any child
+    /// is still missing the node stays drawn and the children build underneath
+    /// it. A collapsed node likewise waits for its own upload before replacing
+    /// the drawn descendants, so a frame never holds both sides of the swap.
+    fn resolve_node(
         &mut self,
-        parents: &[SectionKey],
+        node: SectionKey,
         player: Vec3,
         pixels_per_radian: f32,
-        target: &mut HashSet<SectionKey>,
-        fallbacks: &mut HashMap<SectionKey, Vec<SectionKey>>,
-        units: &mut Vec<(SectionKey, Vec<SectionKey>)>,
+        selection: &mut Selection,
     ) {
-        for &parent in parents {
-            let refined = refine_state(
-                self.refined.contains(&parent),
-                parent,
-                player,
-                pixels_per_radian,
-            );
-            if refined {
-                self.refined.insert(parent);
-            } else {
-                self.refined.remove(&parent);
-            }
-            let children = children_of(parent);
-            if refined && children.iter().all(|child| self.is_ready(*child)) {
-                target.extend(children);
-                continue;
-            }
+        if node.level <= 1 {
+            selection.target.insert(node);
+            return;
+        }
 
-            if !refined
-                && !self.is_ready(parent)
-                && children.iter().all(|child| self.is_ready(*child))
-            {
-                // Collapsing back to a parent that was released while its
-                // children were drawn. Keep the children until the parent is
-                // uploaded, then swap atomically instead of showing a hole.
-                target.extend(children);
-                fallbacks.insert(parent, children.to_vec());
-                units.push((parent, vec![parent]));
-                continue;
-            }
+        let refined = refine_state(
+            self.refined.contains(&node),
+            node,
+            player,
+            pixels_per_radian,
+        );
+        if refined {
+            self.refined.insert(node);
+        } else {
+            self.refined.remove(&node);
+        }
+        let children = in_world_children(node);
 
-            // Until all children are ready the parent is the fallback. It is
-            // also the only section selected while it builds.
-            target.insert(parent);
-            if refined {
-                let open: Vec<SectionKey> = children
-                    .iter()
-                    .copied()
-                    .filter(|child| !self.is_ready(*child))
-                    .collect();
-                let mut keys = Vec::new();
-                if !self.is_ready(parent) {
-                    keys.push(parent);
+        if refined {
+            if children.iter().all(|child| self.is_ready(*child)) {
+                for child in children {
+                    self.resolve_node(child, player, pixels_per_radian, selection);
                 }
-                keys.extend(open.iter().copied());
-                units.push((parent, keys));
-                fallbacks.insert(parent, open);
-            } else if !self.is_ready(parent) {
-                units.push((parent, vec![parent]));
+                return;
             }
+
+            // Until all in-world children are ready the parent is the only
+            // drawn section. Ready children stay uploaded and hidden.
+            selection.target.insert(node);
+            let open: Vec<SectionKey> = children
+                .iter()
+                .copied()
+                .filter(|child| !self.is_ready(*child))
+                .collect();
+            let mut keys = Vec::with_capacity(1 + open.len());
+            if !self.is_ready(node) {
+                keys.push(node);
+            }
+            keys.extend(open);
+            if !keys.is_empty() {
+                selection.units.push((node, keys));
+            }
+            selection.fallbacks.insert(node, children);
+            return;
+        }
+
+        if !self.is_ready(node) && children.iter().all(|child| self.is_ready(*child)) {
+            // Collapsing back to a parent that was released while its
+            // descendants were drawn. Keep covering with them until the parent
+            // is uploaded, then swap atomically instead of showing a hole.
+            for child in &children {
+                self.resolve_node(*child, player, pixels_per_radian, selection);
+            }
+            selection.fallbacks.insert(node, children);
+            selection.units.push((node, vec![node]));
+            return;
+        }
+
+        // The node is the leaf: it is ready, or nothing below it fully covers
+        // the footprint while it builds.
+        selection.target.insert(node);
+        if !self.is_ready(node) {
+            selection.units.push((node, vec![node]));
         }
     }
 
@@ -659,15 +702,37 @@ impl Hierarchy {
         target: &[SectionKey],
         fallbacks: &HashMap<SectionKey, Vec<SectionKey>>,
     ) {
-        let desired: HashSet<SectionKey> = target
-            .iter()
-            .copied()
-            .chain(fallbacks.keys().copied())
-            .chain(fallbacks.values().flatten().copied())
-            .collect();
+        let desired = desired_keys(target, fallbacks);
         self.states
             .retain(|key, state| *state == Readiness::Ready || desired.contains(key));
     }
+
+    /// Drops hysteresis memory for nodes that are no longer selected.
+    ///
+    /// Refined nodes whose children are drawn are ancestors of target leaves,
+    /// so [`retained_keys`] keeps their memory across the swap. A pending
+    /// fallback retains its own subtree in the same set.
+    fn retain_refined(
+        &mut self,
+        target: &[SectionKey],
+        fallbacks: &HashMap<SectionKey, Vec<SectionKey>>,
+    ) {
+        let desired = retained_keys(target, fallbacks);
+        self.refined.retain(|key| desired.contains(key));
+    }
+}
+
+/// Keys the current selection draws or keeps resident for a pending swap.
+fn desired_keys(
+    target: &[SectionKey],
+    fallbacks: &HashMap<SectionKey, Vec<SectionKey>>,
+) -> HashSet<SectionKey> {
+    target
+        .iter()
+        .copied()
+        .chain(fallbacks.keys().copied())
+        .chain(fallbacks.values().flatten().copied())
+        .collect()
 }
 
 /// Adds the near level-1 ring, skipping a section whose parent is drawn.
@@ -700,14 +765,22 @@ mod tests {
     const PP_RAD: f32 = DEFAULT_PIXELS_PER_RADIAN;
 
     fn selected(player: Vec3) -> Hierarchy {
+        selected_at(player, PP_RAD)
+    }
+
+    fn selected_at(player: Vec3, pixels_per_radian: f32) -> Hierarchy {
         let mut hierarchy = Hierarchy::default();
-        assert!(hierarchy.update(player, DEFAULT_DETAIL_CHUNKS, PP_RAD));
+        assert!(hierarchy.update(player, DEFAULT_DETAIL_CHUNKS, pixels_per_radian));
         hierarchy
     }
 
     /// Level-2 key at a cell offset from the player's `(0, 0)` far cell.
     fn parent_at(offset: IVec2) -> SectionKey {
         SectionKey::new(2, IVec3::new(offset.x, 0, offset.y))
+    }
+
+    fn children_of(parent: SectionKey) -> Vec<SectionKey> {
+        in_world_children(parent)
     }
 
     fn ground_keys(hierarchy: &Hierarchy, level: u8) -> Vec<SectionKey> {
@@ -795,10 +868,10 @@ mod tests {
     fn assert_no_double_draw(hierarchy: &Hierarchy) {
         let target: HashSet<SectionKey> = hierarchy.target().iter().copied().collect();
         for key in hierarchy.target() {
-            if let Some(parent) = key.parent() {
+            for ancestor in ancestors(*key) {
                 assert!(
-                    !target.contains(&parent),
-                    "{parent:?} and its child {key:?} are both selected"
+                    !target.contains(&ancestor),
+                    "{ancestor:?} and its descendant {key:?} are both selected"
                 );
             }
         }
@@ -852,7 +925,7 @@ mod tests {
         let band = (-8..=8)
             .flat_map(|x| (-8..=8).map(move |z| parent_at(IVec2::new(x, z))))
             .find(|key| {
-                let pixels = parent_pixels(PLAYER, *key, PP_RAD);
+                let pixels = refine_pixels(PLAYER, *key, PP_RAD);
                 pixels > COLLAPSE_PIXELS && pixels < REFINE_PIXELS
             })
             .expect("a parent inside the hysteresis band");
@@ -912,8 +985,8 @@ mod tests {
         let mut hierarchy = selected(PLAYER);
         let parent = parent_at(IVec2::new(6, 0));
         let children = children_of(parent);
-        for child in children {
-            hierarchy.mark_ready(child);
+        for child in &children {
+            hierarchy.mark_ready(*child);
         }
         assert!(hierarchy.update(PLAYER, DEFAULT_DETAIL_CHUNKS, PP_RAD));
         assert!(!hierarchy.target().contains(&parent));
@@ -1126,45 +1199,36 @@ mod tests {
     }
 
     #[test]
-    fn level3_and_level4_rings_cover_the_far_annuli() {
+    fn far_levels_cover_the_annuli_with_recursive_refinement() {
         let hierarchy = selected(PLAYER);
+        let l1 = ground_keys(&hierarchy, 1);
         let l2 = ground_keys(&hierarchy, 2);
         let l3 = ground_keys(&hierarchy, 3);
         let l4 = ground_keys(&hierarchy, 4);
 
+        assert_ne!(l1.len(), 0);
+        assert_ne!(l2.len(), 0);
         assert_ne!(l3.len(), 0);
         assert_ne!(l4.len(), 0);
-        assert_eq!(
-            l3.iter().copied().collect::<HashSet<_>>(),
-            ring_keys(
-                PLAYER,
-                3,
-                LEVEL3_EXTENT,
-                LEVEL2_OUTER_METERS,
-                LEVEL3_OUTER_METERS,
-                1,
-            )
-            .into_iter()
-            .collect::<HashSet<_>>()
-        );
-        assert_eq!(
-            l4.iter().copied().collect::<HashSet<_>>(),
-            ring_keys(
-                PLAYER,
-                4,
-                LEVEL4_EXTENT,
-                LEVEL3_OUTER_METERS,
-                LEVEL4_OUTER_METERS,
-                1,
-            )
-            .into_iter()
-            .collect::<HashSet<_>>()
+        assert!(
+            hierarchy.refined.iter().any(|key| key.level == 3),
+            "no level-3 root refined"
         );
         assert!(
-            l4.iter().all(|key| key.coord.y == 0),
-            "level-4 sections are selected only at y = 0"
+            hierarchy.refined.iter().any(|key| key.level == 4),
+            "no level-4 root refined"
+        );
+        assert!(
+            hierarchy
+                .target()
+                .iter()
+                .all(|key| key.origin().y < WORLD_HEIGHT),
+            "an above-world child was selected"
         );
 
+        assert_disjoint(&l1, &l2);
+        assert_disjoint(&l1, &l3);
+        assert_disjoint(&l1, &l4);
         assert_disjoint(&l2, &l3);
         assert_disjoint(&l2, &l4);
         assert_disjoint(&l3, &l4);
@@ -1172,14 +1236,43 @@ mod tests {
             &hierarchy,
             PLAYER,
             &[
-                2_049.0, 3_000.0, 4_000.0, 4_097.0, 6_000.0, 8_000.0, 8_191.0,
+                1_793.0, 2_049.0, 3_000.0, 3_584.0, 4_000.0, 4_097.0, 5_000.0, 6_390.0, 6_400.0,
+                7_000.0, 8_000.0, 8_191.0,
             ],
         );
         assert_no_double_draw(&hierarchy);
     }
 
     #[test]
-    fn far_rings_follow_negative_player_coordinates() {
+    fn a_boosted_projection_refines_far_levels_recursively() {
+        // A 2,000 px/rad viewport refines the 4 km roots into level-3 children
+        // and those children into level-2 leaves.
+        const BOOSTED_PP_RAD: f32 = 2_000.0;
+        let hierarchy = selected_at(PLAYER, BOOSTED_PP_RAD);
+        let nested_level2 = hierarchy.target().iter().any(|key| {
+            key.level == 2 && nearest_xz_distance(PLAYER, *key) > LEVEL2_OUTER_METERS as f32
+        });
+
+        assert!(nested_level2, "the level-4 band did not recurse to level 2");
+        assert!(
+            hierarchy
+                .target()
+                .iter()
+                .all(|key| key.origin().y < WORLD_HEIGHT),
+            "a far target key was above the world"
+        );
+        assert_unique_ground_coverage(
+            &hierarchy,
+            PLAYER,
+            &[
+                1_793.0, 2_049.0, 3_000.0, 3_584.0, 4_097.0, 5_000.0, 6_400.0, 7_000.0, 8_191.0,
+            ],
+        );
+        assert_no_double_draw(&hierarchy);
+    }
+
+    #[test]
+    fn far_levels_follow_negative_player_coordinates() {
         let player = Vec3::new(-5_700.0, 40.0, -3_300.0);
         let hierarchy = selected(player);
         let l2 = ground_keys(&hierarchy, 2);
@@ -1195,13 +1288,179 @@ mod tests {
         assert_unique_ground_coverage(
             &hierarchy,
             player,
-            &[2_049.0, 3_000.0, 4_097.0, 6_000.0, 8_191.0],
+            &[
+                1_793.0, 2_049.0, 3_000.0, 3_584.0, 4_097.0, 5_000.0, 6_390.0, 8_000.0, 8_191.0,
+            ],
         );
         assert!(
             l4.iter().all(|key| key.coord.y == 0),
             "level-4 sections are selected only at y = 0"
         );
         assert_no_double_draw(&hierarchy);
+    }
+
+    /// The refined parent at `level` in a fresh selection.
+    fn refined_parent(hierarchy: &Hierarchy, level: u8) -> SectionKey {
+        *hierarchy
+            .refined
+            .iter()
+            .find(|key| key.level == level)
+            .unwrap_or_else(|| panic!("no refined level-{level} parent"))
+    }
+
+    #[test]
+    fn every_far_level_refines_only_into_in_world_children() {
+        for level in 2..=4 {
+            let hierarchy = selected(PLAYER);
+            let parent = refined_parent(&hierarchy, level);
+            let children = in_world_children(parent);
+            let empty: Vec<SectionKey> = (0..8)
+                .filter_map(|index| parent.child(index))
+                .filter(|child| child.origin().y >= WORLD_HEIGHT)
+                .collect();
+
+            assert_eq!(children.len(), if level == 2 { 8 } else { 4 });
+            assert_eq!(children.len() + empty.len(), 8);
+            assert!(
+                children.iter().all(|child| child.origin().y < WORLD_HEIGHT),
+                "{parent:?}"
+            );
+            assert!(
+                empty.iter().all(|child| child.origin().y >= WORLD_HEIGHT),
+                "{parent:?}"
+            );
+            assert!(
+                hierarchy.fallbacks[&parent] == children,
+                "the fallback list must contain exactly the in-world children"
+            );
+            for child in &empty {
+                assert_eq!(hierarchy.state(*child), Readiness::Missing);
+                assert!(!hierarchy.target().contains(child));
+                assert!(!hierarchy.queue().contains(child));
+            }
+        }
+    }
+
+    #[test]
+    fn far_parent_waits_for_every_in_world_child_before_the_swap() {
+        for level in 2..=4 {
+            let mut hierarchy = selected(PLAYER);
+            let parent = refined_parent(&hierarchy, level);
+            let children = in_world_children(parent);
+
+            assert!(hierarchy.target().contains(&parent));
+            for child in &children[..children.len() - 1] {
+                hierarchy.mark_ready(*child);
+            }
+            assert!(hierarchy.update(PLAYER, DEFAULT_DETAIL_CHUNKS, PP_RAD));
+            assert!(
+                hierarchy.target().contains(&parent),
+                "level-{level} parent must stay while a child is missing"
+            );
+            assert!(
+                children
+                    .iter()
+                    .all(|child| !hierarchy.target().contains(child)),
+                "a partial level-{level} child set must not draw"
+            );
+
+            hierarchy.mark_ready(children[children.len() - 1]);
+            assert!(hierarchy.update(PLAYER, DEFAULT_DETAIL_CHUNKS, PP_RAD));
+            assert!(!hierarchy.target().contains(&parent));
+            assert!(
+                children
+                    .iter()
+                    .all(|child| hierarchy.target().contains(child)),
+                "the level-{level} in-world children must swap in together"
+            );
+            assert!(
+                hierarchy.refined.contains(&parent),
+                "the level-{level} hysteresis memory must survive the swap"
+            );
+            assert_no_double_draw(&hierarchy);
+        }
+    }
+
+    #[test]
+    fn far_collapse_keeps_the_children_until_the_parent_is_ready() {
+        // Low projection collapses every far root without moving the rings.
+        const COLLAPSING_PP_RAD: f32 = 400.0;
+
+        for level in [3, 4] {
+            let mut hierarchy = selected(PLAYER);
+            let parent = refined_parent(&hierarchy, level);
+            let children = in_world_children(parent);
+            for child in &children {
+                hierarchy.mark_ready(*child);
+            }
+            assert!(hierarchy.update(PLAYER, DEFAULT_DETAIL_CHUNKS, PP_RAD));
+            assert!(!hierarchy.target().contains(&parent));
+
+            // The projection is fixed at the shipped value in production;
+            // force the rebuild here because only the threshold input changed.
+            hierarchy.dirty = true;
+            assert!(hierarchy.update(PLAYER, DEFAULT_DETAIL_CHUNKS, COLLAPSING_PP_RAD));
+            assert!(
+                !hierarchy.refined.contains(&parent),
+                "level-{level} parent stayed refined below the collapse threshold"
+            );
+            assert!(
+                children
+                    .iter()
+                    .all(|child| hierarchy.target().contains(child)),
+                "level-{level} children keep covering the parent until it is ready"
+            );
+            assert!(!hierarchy.target().contains(&parent));
+            assert!(hierarchy.queue().contains(&parent));
+            assert_no_double_draw(&hierarchy);
+
+            hierarchy.mark_ready(parent);
+            assert!(hierarchy.update(PLAYER, DEFAULT_DETAIL_CHUNKS, COLLAPSING_PP_RAD));
+            assert!(hierarchy.target().contains(&parent));
+            assert!(
+                children
+                    .iter()
+                    .all(|child| !hierarchy.target().contains(child)),
+                "level-{level} children must leave when the parent is drawn"
+            );
+            assert_no_double_draw(&hierarchy);
+        }
+    }
+
+    #[test]
+    fn far_nodes_honor_hysteresis_at_both_thresholds() {
+        for level in [3, 4] {
+            let (extent, inner, outer) = match level {
+                3 => (LEVEL3_EXTENT, LEVEL2_OUTER_METERS, LEVEL3_OUTER_METERS),
+                _ => (LEVEL4_EXTENT, LEVEL3_OUTER_METERS, LEVEL4_OUTER_METERS),
+            };
+            let candidates = ring_keys(PLAYER, level, extent, inner, outer, 1);
+            let pixels = |key| refine_pixels(PLAYER, key, PP_RAD);
+
+            let band = candidates
+                .iter()
+                .copied()
+                .find(|key| {
+                    let value = pixels(*key);
+                    value > COLLAPSE_PIXELS && value < REFINE_PIXELS
+                })
+                .unwrap_or_else(|| panic!("no level-{level} node in the hysteresis band"));
+            let near = candidates
+                .iter()
+                .copied()
+                .find(|key| pixels(*key) > REFINE_PIXELS)
+                .unwrap_or_else(|| panic!("no level-{level} node above the refine threshold"));
+            let far = candidates
+                .iter()
+                .copied()
+                .find(|key| pixels(*key) < COLLAPSE_PIXELS)
+                .unwrap_or_else(|| panic!("no level-{level} node below the collapse threshold"));
+
+            assert!(!refine_state(false, band, PLAYER, PP_RAD));
+            assert!(refine_state(true, band, PLAYER, PP_RAD));
+            assert!(refine_state(false, near, PLAYER, PP_RAD));
+            assert!(!refine_state(true, far, PLAYER, PP_RAD));
+        }
     }
 
     #[test]
@@ -1216,7 +1475,7 @@ mod tests {
         assert!(keep.contains(&grandparent));
 
         let parent = parent_at(IVec2::new(6, 0));
-        let children = children_of(parent).to_vec();
+        let children = children_of(parent);
         let mut fallbacks = HashMap::new();
         fallbacks.insert(parent, children.clone());
         let keep = retained_keys(&target, &fallbacks);
@@ -1257,7 +1516,7 @@ mod tests {
     fn eviction_drops_a_parent_covered_by_its_children() {
         let detail = detail_meters(DEFAULT_DETAIL_CHUNKS);
         let parent = parent_at(IVec2::new(6, 0));
-        let target: Vec<SectionKey> = children_of(parent).to_vec();
+        let target: Vec<SectionKey> = children_of(parent);
         let uploaded: HashSet<SectionKey> = [parent].into_iter().collect();
 
         let stale = evictions(&uploaded, &target, &HashMap::new(), PLAYER, detail);
@@ -1276,6 +1535,56 @@ mod tests {
         let stale = evictions(&uploaded, &target, &HashMap::new(), PLAYER, detail);
 
         assert!(stale.contains(&child));
+    }
+
+    #[test]
+    fn eviction_drops_a_far_parent_covered_by_in_world_children() {
+        let detail = detail_meters(DEFAULT_DETAIL_CHUNKS);
+        let parent = SectionKey::new(4, IVec3::new(-8, 0, -8));
+        let target = in_world_children(parent);
+        let uploaded: HashSet<SectionKey> = [parent].into_iter().collect();
+
+        let stale = evictions(&uploaded, &target, &HashMap::new(), PLAYER, detail);
+
+        assert_eq!(stale, vec![parent]);
+    }
+
+    #[test]
+    fn eviction_drops_a_far_parent_covered_by_grandchildren() {
+        let detail = detail_meters(DEFAULT_DETAIL_CHUNKS);
+        let parent = SectionKey::new(4, IVec3::new(-8, 0, -8));
+        let mut target = Vec::new();
+        for child in in_world_children(parent) {
+            target.extend(in_world_children(child));
+        }
+        let uploaded: HashSet<SectionKey> = [parent].into_iter().collect();
+
+        let stale = evictions(&uploaded, &target, &HashMap::new(), PLAYER, detail);
+
+        assert_eq!(
+            stale,
+            vec![parent],
+            "a far root is released once its descendants cover it"
+        );
+    }
+
+    #[test]
+    fn eviction_keeps_a_fallback_parent_and_its_ready_children() {
+        let detail = detail_meters(DEFAULT_DETAIL_CHUNKS);
+        let parent = SectionKey::new(4, IVec3::new(-8, 0, -8));
+        let children = in_world_children(parent);
+        let mut fallbacks = HashMap::new();
+        fallbacks.insert(parent, children.clone());
+        let target = vec![parent];
+        let uploaded: HashSet<SectionKey> = children
+            .iter()
+            .copied()
+            .chain(std::iter::once(parent))
+            .collect();
+
+        let stale = evictions(&uploaded, &target, &fallbacks, PLAYER, detail);
+
+        assert!(stale.is_empty(), "the pending swap must stay resident");
     }
 
     #[test]
