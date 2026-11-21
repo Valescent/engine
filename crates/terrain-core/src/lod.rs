@@ -6,7 +6,10 @@
 //! never authority (`N1.3`).
 //!
 //! The rule is most-frequent-solid, not any-solid: any-solid inflates distant
-//! terrain and duplicates the water rule badly (`N3.1`).
+//! terrain and duplicates the water rule badly (`N3.1`). Water is all-or-nothing
+//! for the same reason: a coarse cell's top face lies on its group's top plane,
+//! so a group containing any air must not become water or the distant surface
+//! rises above the real one.
 
 use crate::description::SECTION_VOLUME;
 use crate::error::{ErrorKind, Stage, TerrainError};
@@ -32,9 +35,15 @@ pub type Fine64<'a> = [&'a Section; 64];
 /// Derives one coarse section from its eight fine octants.
 ///
 /// Per `2x2x2` group: if any cell is solid, take the most frequent solid id and
-/// break ties by the lowest id; otherwise water if any cell is water; otherwise
-/// air. Scatter ids are dropped before the vote, so a flower never wins a coarse
-/// cell. Logs and leaves are ordinary solids and are kept.
+/// break ties by the lowest id; otherwise water only when **every** cell is
+/// water; otherwise air. Scatter ids are dropped before the vote, so a flower
+/// never wins a coarse cell. Logs and leaves are ordinary solids and are kept.
+///
+/// Water is deliberately conservative. A coarse cell's `+Y` face sits on its
+/// group's top plane, so a group with any air would render water one or more
+/// blocks above the fine surface in that air column. All-water keeps the coarse
+/// top at or below the fine top; the trade-off is a dropped top cell at a band
+/// edge, at most `scale - 1` blocks below the fine surface.
 ///
 /// # Errors
 ///
@@ -90,8 +99,8 @@ pub fn downsample(
 ///
 /// Each output cell covers a `4x4x4` group of fine blocks. The vote is the
 /// same as [`downsample`]'s: if any cell is solid, take the most frequent solid
-/// id and break ties by the lowest id; otherwise water if any cell is water;
-/// otherwise air. Scatter ids are dropped before the vote.
+/// id and break ties by the lowest id; otherwise water only when every cell is
+/// water; otherwise air. Scatter ids are dropped before the vote.
 ///
 /// # Errors
 ///
@@ -199,7 +208,12 @@ fn choose(group: &[BlockId], water: BlockId, scatter: &[BlockId]) -> BlockId {
     if best_count > 0 {
         return best;
     }
-    if group.contains(&water) {
+    // Water is all-or-nothing, not any-water. A coarse cell that contains any
+    // air would put its top face on the group's top plane, above the fine
+    // surface in that column. Requiring every cell to be water keeps the
+    // coarse top at or below the fine top, at the cost of one dropped cell at
+    // a surface that does not land on a group boundary. An empty group is air.
+    if !group.is_empty() && group.iter().all(|&id| id == water) {
         return water;
     }
     AIR
@@ -442,9 +456,35 @@ mod tests {
         // Fewer than 64 cells are legal for a group clipped by the edge.
         assert_eq!(choose(&[DIRT, DIRT, STONE], WATER, &[]), DIRT);
         assert_eq!(choose(&[STONE], WATER, &[]), STONE);
-        assert_eq!(choose(&[WATER, AIR], WATER, &[]), WATER);
+        assert_eq!(choose(&[WATER, WATER], WATER, &[]), WATER);
+        assert_eq!(choose(&[WATER, AIR], WATER, &[]), AIR);
         assert_eq!(choose(&[], WATER, &[]), AIR);
         assert_eq!(choose(&[GRASS, GRASS, STONE], WATER, &[GRASS]), STONE);
+    }
+
+    #[test]
+    fn water_is_all_or_nothing_so_the_top_never_rises() {
+        // Seven eighths water with the missing cell at the top of the group.
+        // The old any-water rule made this cell water, whose `+Y` face sat one
+        // block above the fine surface. The conservative rule must drop it.
+        assert_eq!(
+            choose(
+                &[WATER, WATER, WATER, WATER, WATER, WATER, WATER, AIR],
+                WATER,
+                &[]
+            ),
+            AIR
+        );
+        // A bare majority is not enough: the air cell may be the top one.
+        assert_eq!(
+            choose(
+                &[WATER, WATER, AIR, WATER, WATER, AIR, WATER, AIR],
+                WATER,
+                &[]
+            ),
+            AIR
+        );
+        assert_eq!(choose(&[WATER; 8], WATER, &[]), WATER);
     }
 
     #[test]
@@ -463,5 +503,123 @@ mod tests {
         let second = downsample4(&sections, WATER, &[]).unwrap();
         assert_eq!(first, second);
         assert_eq!(first.content_hash(), second.content_hash());
+    }
+
+    /// Fills one fine 32³ column's lower section with stone up to `seabed`,
+    /// water to `sea`, and air above.
+    fn water_column(dx: i32, dz: i32, sea: i32, seabed: impl Fn(i32, i32) -> i32) -> Section {
+        let mut section = uniform(AIR);
+        for z in 0..32_i32 {
+            for x in 0..32_i32 {
+                let top = seabed(dx * 32 + x, dz * 32 + z);
+                for y in 0..32_i32 {
+                    let id = if y <= top {
+                        STONE
+                    } else if y <= sea {
+                        WATER
+                    } else {
+                        AIR
+                    };
+                    section.set(x.cast_unsigned(), y.cast_unsigned(), z.cast_unsigned(), id);
+                }
+            }
+        }
+        section
+    }
+
+    /// Coarse top face of the highest water cell in one output column, in
+    /// world blocks. `scale` is 2 for LOD1 and 4 for LOD2.
+    fn coarse_water_top(section: &Section, cx: u32, cz: u32, scale: u32) -> Option<i32> {
+        (0..32_u32).rev().find_map(|cy| {
+            (section.get(cx, cy, cz) == WATER).then(|| i32::try_from((cy + 1) * scale).unwrap_or(0))
+        })
+    }
+
+    #[test]
+    fn coarse_water_top_stays_at_or_below_the_fine_surface_lod1() {
+        // Sea levels cover every remainder modulo the LOD1 cell size, so the
+        // surface crosses the 2x2x2 group boundary at least once each way.
+        for sea in 8..=15_i32 {
+            // Every column is wet and at least four groups deep, so at least
+            // one fully-water group exists below the surface transition.
+            let seabed = |_gx: i32, _gz: i32| sea - 8;
+            let mut pool: [Section; 8] = std::array::from_fn(|_| uniform(AIR));
+            for (slot, section) in pool.iter_mut().enumerate() {
+                if slot >> 2 != 0 {
+                    continue;
+                }
+                let dx = i32::try_from(slot & 1).unwrap_or(0);
+                let dz = i32::try_from((slot >> 1) & 1).unwrap_or(0);
+                *section = water_column(dx, dz, sea, seabed);
+            }
+            let octants: [&Section; 8] = std::array::from_fn(|slot| &pool[slot]);
+            let coarse = downsample(&octants, WATER, &[]).unwrap();
+
+            let mut checked = 0;
+            for cz in 0..32_u32 {
+                for cx in 0..32_u32 {
+                    let Some(coarse_top) = coarse_water_top(&coarse, cx, cz, 2) else {
+                        continue;
+                    };
+                    let wet = (0..2_u32).all(|dz| {
+                        (0..2_u32).all(|dx| {
+                            let gx = i32::try_from(cx * 2 + dx).unwrap_or(0);
+                            let gz = i32::try_from(cz * 2 + dz).unwrap_or(0);
+                            seabed(gx, gz) < sea
+                        })
+                    });
+                    assert!(wet, "coarse water over a group with a dry column");
+                    assert!(
+                        coarse_top <= sea + 1,
+                        "sea {sea}: coarse top {coarse_top} rose above fine top {}",
+                        sea + 1
+                    );
+                    checked += 1;
+                }
+            }
+            assert!(checked > 0, "sea {sea} produced no water");
+        }
+    }
+
+    #[test]
+    fn coarse_water_top_stays_at_or_below_the_fine_surface_lod2() {
+        // Sea levels cover every remainder modulo the LOD2 cell size.
+        for sea in 8..=19_i32 {
+            let seabed = |_gx: i32, _gz: i32| sea - 8;
+            let mut pool: [Section; 64] = std::array::from_fn(|_| uniform(AIR));
+            for (slot, section) in pool.iter_mut().enumerate() {
+                if slot >> 4 != 0 {
+                    continue;
+                }
+                let dx = i32::try_from(slot & 3).unwrap_or(0);
+                let dz = i32::try_from((slot >> 2) & 3).unwrap_or(0);
+                *section = water_column(dx, dz, sea, seabed);
+            }
+            let coarse = downsample4(&fine64(&pool), WATER, &[]).unwrap();
+
+            let mut checked = 0;
+            for cz in 0..32_u32 {
+                for cx in 0..32_u32 {
+                    let Some(coarse_top) = coarse_water_top(&coarse, cx, cz, 4) else {
+                        continue;
+                    };
+                    let wet = (0..4_u32).all(|dz| {
+                        (0..4_u32).all(|dx| {
+                            let gx = i32::try_from(cx * 4 + dx).unwrap_or(0);
+                            let gz = i32::try_from(cz * 4 + dz).unwrap_or(0);
+                            seabed(gx, gz) < sea
+                        })
+                    });
+                    assert!(wet, "coarse water over a group with a dry column");
+                    assert!(
+                        coarse_top <= sea + 1,
+                        "sea {sea}: coarse top {coarse_top} rose above fine top {}",
+                        sea + 1
+                    );
+                    checked += 1;
+                }
+            }
+            assert!(checked > 0, "sea {sea} produced no water");
+        }
     }
 }

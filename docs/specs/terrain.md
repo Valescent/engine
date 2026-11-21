@@ -1032,8 +1032,12 @@ Budget: ≤25,000 quads per emitting section, ≤2.5 MB per worst-case mesh, ≤
 
 Coarse sections use the same `Section` layout and index order. Downsample per 2×2×2 group, applied
 level to level: if any cell is solid, take the **most frequent solid id** (ties: lowest id); else if
-any is water, water; else air. Cross-quads are dropped; ores are dropped; logs and leaves use the
-same rule.
+**every** cell is water, water; else air. Water is deliberately conservative rather than any-water:
+a coarse cell's `+Y` face lies on its group's top plane, so a group with any air would raise the
+distant water surface above the fine one. The dropped top cell leaves a step down of at most
+`scale - 1` blocks (1 at LOD1, 3 at LOD2) at a band edge, never an open hole: the coarse region
+still fills the water volume below and the fine band keeps its opaque boundary skirt. Cross-quads
+are dropped; ores are dropped; logs and leaves use the same rule.
 
 LOD is derived, never saved, never hashed, never authority. Radii are clipped to the world:
 `min(config radius, distance to boundary)`.
@@ -1068,7 +1072,10 @@ ring prioritises a dirty column's LOD as class 3.
 1. Opaque: depth write on, front-face culling.
 2. Cutout: alpha test with discard, depth write on, culling off.
 3. Depth copy after cutout (skipped when no water section is near).
-4. Water: blended, depth test on, depth write off, culling off, far to near by column distance.
+4. Water: blended, depth test on, depth write off, culling off, far to near by section-centre
+   distance (ties by origin). Opaque and cutout keep submission order. Depth writes stay off
+   because quads inside one section are unsorted and the later highlight pass must read through
+   the surface.
 5. Particles and block-break effects: blended, depth test on, depth write off.
 6. Overlay: block highlight and debug lines, depth tested, drawn after water so the highlight reads
    through the surface.
@@ -1453,6 +1460,11 @@ contradict a MUST elsewhere in this document.
   so a world pinned to an older version is refused rather than regenerated with different
   hydrology or biome blending.
 - **Snow is a full cube** (§10.5); `snow_layer` step geometry is deferred (§22).
+- **Coarse water is conservative** (§13.1): a LOD1/LOD2 water cell requires its whole group to be
+  water, so at a band edge the distant surface can sit up to 1 block (LOD1) or 3 blocks (LOD2)
+  below the fine surface. This is deliberate: any-water groups raised translucent sheets above the
+  true sea level. The step is a surface step, not an open hole; the coarse water volume and the
+  fine band's boundary skirt keep the seam closed.
 - **Cold beach uses sand** for both temperature variants (§8.5).
 - **Persistence** (16): section files, one-generation backup rotation, the journal file, replay,
   prefix trimming, repair, and header migration are implemented in `src/save.rs` and

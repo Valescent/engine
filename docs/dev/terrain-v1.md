@@ -135,6 +135,22 @@ at 12 or ~46 s at 16 after the narrow border relight (`ENGINE_NO_VSYNC=1`).
   `demo_far_regions` does the same for complete `4x4` column squares with `lod::downsample4` (64
   fine sections, the same most-frequent-solid vote), `mesh_coarse` at Lod2, and Lod2 skirts (two
   cells = eight blocks).
+- **LOD water is all-or-nothing.** After the solid vote, a coarse cell is water only when every
+  cell in its 2x2x2 or 4x4x4 group is water; any air makes it air. A coarse cell's `+Y` face sits
+  on its group's top plane, so an any-water group whose missing cells were at the top rendered a
+  translucent sheet above the fine surface (one block at Lod1, up to three at Lod2). The
+  conservative rule can instead drop the top coarse cell at a band edge: the coarse water top is
+  then at most `2` (Lod1) or `3` (Lod2) blocks below the fine top. That step is a small step down,
+  not a hole: the coarse region still fills the water volume below, and the fine band keeps its
+  own opaque boundary skirt over the terrain. `coarse_water_top_stays_at_or_below_the_fine_surface_lod1`
+  and `_lod2` pin the invariant across every surface remainder; `water_is_all_or_nothing_so_the_top_never_rises`
+  fails on the old any-water rule.
+- **Water draws far to near.** `TerrainDraw::draw_water` sorts the visible water sections by
+  squared distance from the frame camera origin to the section centre (ties by world origin)
+  before binding anything. Opaque and cutout keep submission order. Water depth writes stay off:
+  quads inside one section are not sorted, a written depth could reject a farther fragment of the
+  same draw, and the highlight pass after water must read through the surface. Sorting alone makes
+  the blend deterministic now that no coarse sheet rises above another surface.
 - A region is active only when all of its drawn columns are outside the fine buffer, and an LOD1
   region is suppressed when an active LOD2 square covers it, so the three bands never overlap.
   Coarse LOD is rebuilt whole in the background and is disposable. The LOD2 half shares the same
