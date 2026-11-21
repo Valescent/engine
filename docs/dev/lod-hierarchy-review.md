@@ -131,8 +131,14 @@ Landed on the `lod-hierarchy` branch:
 
 Still blocking the visual gate:
 
-- Renderer and streaming integration (section keys in the draw path, one section on screen).
-- The L0 detail radius and the L0/L1 seam rule.
-- Coarse BFS light for the boundary (per-column light still has a hard seam).
-- The 2 km/8 km selection, section-count table, and memory measurement.
+- Coarse BFS light. Per-column light leaves coarse cliff faces dark next to L0 BFS light; the west
+  capture and the L0 control agree on the visible island and caves, so the remaining difference is
+  lighting rather than missing geometry.
+- Levels 3-4 and the 8 km gate. The 2 km gate is met: 0.466 ms frame, 0.235 ms GPU, 3.58 M vertices,
+  2 draws, 30.94 MB of allocated quads, and 85.9 MB of L0 resident at detail 16.
+
+The first-slice selection is now projected-size with 72/62 px hysteresis, parent retention with
+ready children kept hidden until the swap, a 250 ms target cadence, and edit invalidation from the
+modified/saved chunk overlay. The earlier fixed bands, missing parent retention, and the dark
+coarse-water seam are resolved.
 

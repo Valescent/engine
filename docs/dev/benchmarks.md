@@ -756,35 +756,35 @@ The horizon A/B at the spawn view:
 - Horizon is now **on by default**; `ENGINE_HORIZON_CULL=0` disables it. `ENGINE_AUTO_STRAFE=1` is
   the dev hook used for the moving capture.
 
-### Hierarchy selection (first slice)
+### Hierarchy selection and the 2 km gate
 
-`ENGINE_HIERARCHY=1` stops L0 at `ENGINE_DETAIL_CHUNKS` (default 16, 512 m) and selects level-1
-sections (64 m) from 512-768 m and level-2 sections (128 m) from 768-2,048 m. Targets are sorted by
-distance; one section is generated, lit, meshed, and uploaded per frame. Sections use
-`NodeKey::{Chunk, Section}` in the same quad pool, and water samples get the same coarse treatment.
+`ENGINE_HIERARCHY=1` stops L0 at `ENGINE_DETAIL_CHUNKS` (default 16, 512 m). Level-2 parents cover
+768-2,048 m and refine to their eight level-1 children when a projected-size threshold is met and all
+children are ready; otherwise the parent stays drawn. Level-1 sections also fill the near ring.
+Refine/collapse use 72/62 px at 900 px/rad, with the parent retained until the child swap. Uploaded
+children stay in the pool but hidden until the swap; one target rebuild runs per 250 ms.
 
-| Settled spawn view | Value |
+| Settled 2 km view (west, spawn) | Value |
 |---|---:|
-| L0 detail | 16 chunks (512 m) |
-| Section targets | 1,592 (672 level-1, 920 level-2) |
-| Nodes with geometry | 3,871 |
-| Visible nodes | 767 |
-| Visible vertices | 3,982,428 |
+| Target sections | 1,486 |
+| Visible nodes | 1,045 |
+| Visible vertices | 3.58 M |
 | Draw calls | 2 |
-| GPU scene | 0.264-0.268 ms |
-| Allocated quads | 31.49 MB |
-| Frame | 0.56-1.99 ms, with occasional 47 ms window/surface stalls |
+| Frame | 0.466 ms |
+| GPU scene | 0.235 ms |
+| Allocated quads | 30.94 MB |
+| Geometry reservation | 39.31 MB |
 
-- Section geometry and coarse water are drawn; the census and allocation grow as expected.
-- The spawn camera still looks into the near ridge, so the far sections are largely depth-occluded
-  and the screenshot is not a conclusive seam check. The next visual gate needs a view over open
-  water/horizon.
-- Fixed distance bands replace projected-size selection for now. There is no parent retention,
-  section eviction budget, or edit invalidation yet; the target set is rebuilt when the player
-  crosses a 64 m cell and stale uploads are removed.
-- The 47 ms frame outliers occurred with `render_ms` reported, not section generation; suspect the
-  window/surface state rather than the hierarchy loop. Measure on the reference setup before
-  claiming the 2 km frame gate.
+- Headless L0 at detail 16: 2,383 chunks, 85.9 MB resident, 4.3 s settle. With the pool reservation
+  the 2 km working set is roughly 125 MB, well inside 400 MB.
+- The west capture matches the L0-only control for the visible island and caves; the hierarchy fills
+  the ring beyond the 1,024 m L0 edge. The earlier dark coarse-water seam was fixed by using the
+  highest solid sample as the coarse sky top, so water cells above the seabed stay lit.
+- Coarse cliffs still use per-column sky light (0 below the top), so unlit side faces read dark next
+  to L0 BFS light. That is the design's first-slice lighting; coarse BFS is the next lighting step.
+- Caves and trees above L0 are intentionally absent; the far terrain is blockier and smoother.
+- Edit invalidation marks the overlapping level-1/2 sections dirty, removes the stale upload, and
+  rebuilds from the modified/saved chunk overlay before the normal queue.
 
 ### Section foundation (level 1)
 

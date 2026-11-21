@@ -53,14 +53,14 @@ use camera::Camera;
 use config::{Config, ConfigError};
 use frustum::Frustum;
 use generation::Generator;
-use hierarchy::{DEFAULT_DETAIL_CHUNKS, select_sections};
+use hierarchy::{DEFAULT_DETAIL_CHUNKS, DEFAULT_PIXELS_PER_RADIAN, Hierarchy};
 use mesh::Lod;
 use mesher::{MeshKind, MeshPool, MeshQueue, Priority, collect_finished, create_pool};
 use player::{Player, PlayerInput};
 use raycast::{RaycastHit, raycast};
 pub use renderer::RendererError;
 use renderer::{FrameStats, Renderer};
-use section::{SectionEdits, SectionKey, generate_section};
+use section::{SectionKey, generate_section, overlapping_sections_for_chunk};
 use sky::Sky;
 use streaming::Streaming;
 use voxel::build_highlight_mesh;
@@ -451,10 +451,12 @@ struct App {
     hierarchy: bool,
     detail_chunks: i32,
     hierarchy_generator: Option<Generator>,
-    hierarchy_center: Option<IVec2>,
-    section_targets: Vec<SectionKey>,
+    /// Parent-retained target, readiness, and build queue.
+    sections: Hierarchy,
     section_cursor: usize,
     sections_uploaded: HashSet<SectionKey>,
+    hierarchy_at: Instant,
+    hierarchy_cell: Option<IVec2>,
     horizon: horizon::Horizon,
     horizon_at: Instant,
     overlay_fps: f64,
@@ -507,6 +509,12 @@ impl App {
         let player = Player::new(spawn);
         let mut camera = Camera::new(1.0);
         camera.set_position(player.eye_position());
+        if let Some(yaw) = std::env::var("ENGINE_YAW")
+            .ok()
+            .and_then(|value| value.trim().parse::<f32>().ok())
+        {
+            camera.set_yaw(yaw.to_radians());
+        }
         if stress {
             camera.set_yaw(std::f32::consts::FRAC_PI_4);
         }
@@ -558,10 +566,11 @@ impl App {
             hierarchy: std::env::var("ENGINE_HIERARCHY").is_ok_and(|value| value == "1"),
             detail_chunks: DEFAULT_DETAIL_CHUNKS,
             hierarchy_generator: None,
-            hierarchy_center: None,
-            section_targets: Vec::new(),
+            sections: Hierarchy::default(),
             section_cursor: 0,
             sections_uploaded: HashSet::new(),
+            hierarchy_at: Instant::now(),
+            hierarchy_cell: None,
             horizon: horizon::Horizon::disabled(),
             horizon_at: Instant::now(),
             overlay_fps: 0.0,
@@ -595,6 +604,7 @@ impl App {
                     .request_light(&*pool, &self.world, *chunk, Priority::Urgent);
             }
         }
+        self.invalidate_sections(dirty);
         for chunk in dirty {
             if self.world.chunk(*chunk).is_none() {
                 self.queue.remove(*chunk);
@@ -622,6 +632,35 @@ impl App {
             rebuild_ms = started.elapsed().as_secs_f64() * 1000.0,
             "rebuilt chunks"
         );
+    }
+
+    /// Marks the coarse sections overlapping an edit for a rebuild.
+    ///
+    /// The renderer keeps no section state after [`Renderer::remove_section`],
+    /// so the next upload replaces the stale geometry instead of doubling it.
+    /// Sections outside the current target stay marked but are not built until
+    /// selection reaches them, so a far edit is harmless.
+    fn invalidate_sections(&mut self, dirty: &DirtyChunks) {
+        let mut keys = Vec::new();
+        for chunk in dirty {
+            for key in overlapping_sections_for_chunk(*chunk) {
+                if !keys.contains(&key) {
+                    keys.push(key);
+                }
+            }
+        }
+        if keys.is_empty() {
+            return;
+        }
+        if let Some(renderer) = &mut self.renderer {
+            for key in &keys {
+                renderer.remove_section(*key);
+            }
+        }
+        for key in &keys {
+            self.sections_uploaded.remove(key);
+        }
+        self.sections.mark_dirty(keys);
     }
 
     /// Invalidates the light and meshes of the eight columns around `column`.
@@ -1258,9 +1297,13 @@ impl App {
         }
     }
 
-    /// Generates and uploads one far-level section for the first-slice demo.
-    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-    /// Selects and uploads coarse sections around the player, one per frame.
+    /// Selects, generates, and uploads hierarchy sections, one per frame.
+    ///
+    /// The parent-retained target is rebuilt when the player crosses a 64 m
+    /// cell or a readiness change can swap a parent for its children. Uploads
+    /// outside the target (plus a margin) are evicted, except for ancestor
+    /// fallbacks and parents whose children are still building.
+    #[allow(clippy::cast_possible_truncation)]
     fn ensure_hierarchy(&mut self) {
         if !self.hierarchy {
             return;
@@ -1268,70 +1311,85 @@ impl App {
         let Some(seed) = self.seed else {
             return;
         };
-        let player_section = IVec2::new(
+
+        let cell = IVec2::new(
             (self.player.position.x.floor() as i32).div_euclid(64),
             (self.player.position.z.floor() as i32).div_euclid(64),
         );
-        if self.hierarchy_center != Some(player_section) {
-            self.hierarchy_center = Some(player_section);
-            self.section_targets = select_sections(self.player.position, self.detail_chunks);
-            self.section_cursor = 0;
-            let targets: HashSet<SectionKey> = self.section_targets.iter().copied().collect();
-            let stale: Vec<SectionKey> = self
-                .sections_uploaded
-                .difference(&targets)
-                .copied()
-                .collect();
-            if let Some(renderer) = &mut self.renderer {
-                for key in stale {
-                    renderer.remove_section(key);
+        let due = self.hierarchy_cell != Some(cell)
+            || self.hierarchy_at.elapsed() >= Duration::from_millis(250);
+        if due {
+            self.hierarchy_cell = Some(cell);
+            self.hierarchy_at = Instant::now();
+            if self.sections.update(
+                self.player.position,
+                self.detail_chunks,
+                DEFAULT_PIXELS_PER_RADIAN,
+            ) {
+                self.section_cursor = 0;
+                self.evict_sections();
+                if let Some(renderer) = &mut self.renderer {
+                    renderer.set_section_visibility(self.sections.target());
                 }
+                debug!(
+                    target = self.sections.target().len(),
+                    queue = self.sections.queue().len(),
+                    detail = self.detail_chunks,
+                    "hierarchy target"
+                );
             }
-            self.sections_uploaded.retain(|key| targets.contains(key));
-            info!(
-                sections = self.section_targets.len(),
-                detail = self.detail_chunks,
-                "hierarchy targets"
-            );
         }
 
-        let Some(renderer) = &mut self.renderer else {
+        if self.renderer.is_none() {
             return;
-        };
-        let generator = self
-            .hierarchy_generator
-            .get_or_insert_with(|| Generator::new(seed));
-        let edits = SectionEdits::new();
+        }
         let mut built = 0;
-        while built < MAX_SECTION_BUILDS_PER_FRAME
-            && self.section_cursor < self.section_targets.len()
-        {
-            let key = self.section_targets[self.section_cursor];
-            self.section_cursor += 1;
-            if self.sections_uploaded.contains(&key) {
-                continue;
-            }
-            let section = generate_section(generator, key, &edits);
-            if section.is_empty() {
-                self.sections_uploaded.insert(key);
-                continue;
-            }
-            let light = section.light();
-            let opaque = section.mesh(Some(&light));
-            let water = section.water_mesh(Some(&light));
-            if opaque.quads.is_empty() && water.quads.is_empty() {
-                self.sections_uploaded.insert(key);
-                continue;
-            }
-            let mut uploaded = true;
-            if !opaque.quads.is_empty() {
-                uploaded = renderer.upload_section(key, &opaque);
-            }
-            if uploaded && !water.quads.is_empty() {
-                uploaded = renderer.upload_section_water(key, &water);
-            }
-            if uploaded {
-                self.sections_uploaded.insert(key);
+        while built < MAX_SECTION_BUILDS_PER_FRAME {
+            let Some(key) = self.sections.next_build(&mut self.section_cursor) else {
+                break;
+            };
+            self.sections.mark_building(key);
+
+            // Build the overlay, the light, and the meshes before borrowing
+            // the renderer, so the world and renderer are never borrowed
+            // mutably at the same time.
+            let edits =
+                self.world
+                    .section_edits(key, self.save_directory.as_deref(), &self.saved_chunks);
+            let section = {
+                let generator = self
+                    .hierarchy_generator
+                    .get_or_insert_with(|| Generator::new(seed));
+                generate_section(generator, key, &edits)
+            };
+            let ready = if section.is_empty() {
+                true
+            } else {
+                let light = section.light();
+                let opaque = section.mesh(Some(&light));
+                let water = section.water_mesh(Some(&light));
+                if opaque.quads.is_empty() && water.quads.is_empty() {
+                    true
+                } else {
+                    let renderer = self
+                        .renderer
+                        .as_mut()
+                        .expect("the renderer was checked before the build loop");
+                    let mut uploaded = true;
+                    if !opaque.quads.is_empty() {
+                        uploaded = renderer.upload_section(key, &opaque);
+                    }
+                    if uploaded && !water.quads.is_empty() {
+                        uploaded = renderer.upload_section_water(key, &water);
+                    }
+                    if uploaded {
+                        self.sections_uploaded.insert(key);
+                    }
+                    uploaded
+                }
+            };
+            if ready {
+                self.sections.mark_ready(key);
                 built += 1;
                 if self.sections_uploaded.len().is_multiple_of(100) {
                     debug!(
@@ -1341,9 +1399,34 @@ impl App {
                     );
                 }
             } else {
-                self.section_cursor -= 1;
+                // The renderer ran out of quad pages; retry this section next
+                // frame instead of skipping it. A dirty section never touched
+                // the queue cursor, so re-marking is the only safe retry.
+                self.sections_uploaded.remove(&key);
+                self.sections.mark_dirty([key]);
                 break;
             }
+        }
+    }
+
+    /// Removes uploaded sections that the current target no longer needs.
+    fn evict_sections(&mut self) {
+        let stale = self.sections.evictions(
+            &self.sections_uploaded,
+            self.player.position,
+            self.detail_chunks,
+        );
+        if stale.is_empty() {
+            return;
+        }
+        if let Some(renderer) = &mut self.renderer {
+            for key in &stale {
+                renderer.remove_section(*key);
+            }
+        }
+        for key in &stale {
+            self.sections_uploaded.remove(key);
+            self.sections.forget(*key);
         }
     }
 
@@ -1891,6 +1974,34 @@ mod tests {
 
         assert_eq!(app.world.block(target), Block::Air);
         assert!(!app.queue.light_is_current(chunk));
+    }
+
+    #[test]
+    fn invalidating_a_block_marks_the_overlapping_sections_dirty() {
+        let mut app = App::with_world(World::default(), false);
+        let world_position = IVec3::new(1, 127, 1);
+        let chunk = ChunkCoord::from_world(world_position).0;
+        let keys = overlapping_sections_for_chunk(chunk);
+        for key in &keys {
+            app.sections.mark_ready(*key);
+            app.sections_uploaded.insert(*key);
+        }
+
+        let dirty = app.world.set_block(world_position, Block::Stone);
+        app.invalidate_chunks(&dirty);
+
+        assert!(dirty.contains(&chunk));
+        for key in &keys {
+            assert_eq!(
+                app.sections.state(*key),
+                hierarchy::Readiness::Requested,
+                "{key:?} stayed ready"
+            );
+            assert!(
+                !app.sections_uploaded.contains(key),
+                "{key:?} is still drawable"
+            );
+        }
     }
 
     #[test]

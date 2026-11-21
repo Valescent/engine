@@ -757,6 +757,12 @@ impl Renderer {
     }
 
     #[allow(dead_code)] // Streaming uses this when section eviction lands.
+    pub(crate) fn set_section_visibility(&mut self, target: &[SectionKey]) {
+        if let Some(quad) = self.quad.as_mut() {
+            quad.set_section_visibility(target);
+        }
+    }
+
     pub(crate) fn remove_section(&mut self, section: SectionKey) {
         if let Some(quad) = self.quad.as_mut() {
             quad.remove_section(section, self.frame_index);

@@ -40,6 +40,7 @@ environment variables.
 | `ENGINE_CAPTURE` | Renderer (`Renderer::new`) | Writes one 24-bit BMP of the presented surface after the delay. |
 | `ENGINE_CAPTURE_DELAY` | Renderer (`Capture::new`) | Seconds before the capture, default `20`. |
 | `ENGINE_AUTO_WALK` / `ENGINE_AUTO_STRAFE` | Engine (`App::move_axes`) | Dev hooks that hold forward/strafe for repeatable moving captures. |
+| `ENGINE_YAW` | Engine (`App::with_world`) | Dev hook that sets the initial camera yaw in degrees, for repeatable viewpoint captures. |
 | `WGPU_BACKEND` | `wgpu` | Forces a backend such as `dx12`, `vulkan`, or `metal`, depending on the platform. Unset lets `wgpu` choose. The engine does not parse it. |
 
 See [Testing](testing.md) for manual-run examples, [Setup](setup.md) for backend selection, and

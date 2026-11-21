@@ -16,6 +16,7 @@ use thiserror::Error;
 
 use crate::block::Block;
 use crate::light::{self, LightField};
+use crate::section::{SectionEdits, SectionKey};
 
 /// Edge length of a chunk on every axis.
 pub(crate) const CHUNK_SIZE: i32 = 32;
@@ -696,6 +697,55 @@ impl World {
         self.modified.iter().copied()
     }
 
+    /// Coarse-section overlay for the modified chunks overlapping `key`.
+    ///
+    /// Only chunks with an edit marker are included: an unmodified resident
+    /// chunk must stay seed-derived so caves and trees do not leak into the
+    /// coarse mesh. A modified chunk that is no longer resident is read from
+    /// `directory`. With no directory, or when the read fails, that chunk is
+    /// omitted and the coarse section keeps the seed sample for that volume;
+    /// this is conservative because a missing edit only leaves the far mesh
+    /// stale, never wrong blocks.
+    pub(crate) fn section_edits(
+        &self,
+        key: SectionKey,
+        directory: Option<&Path>,
+        saved: &HashSet<ChunkCoord>,
+    ) -> SectionEdits {
+        let mut edits = SectionEdits::new();
+        let section_origin = key.origin();
+        let section_max = section_origin + IVec3::splat(key.extent() - 1);
+        for chunk in self.modified.union(saved) {
+            let origin = chunk.world_origin();
+            let max = origin + IVec3::splat(CHUNK_SIZE - 1);
+            if !origin.cmple(section_max).all() || !section_origin.cmple(max).all() {
+                continue;
+            }
+            if let Some(data) = self.chunks.get(chunk) {
+                edits.insert(*chunk, data.clone());
+                continue;
+            }
+            let Some(directory) = directory else {
+                continue;
+            };
+            match Self::load_saved_chunk(directory, *chunk) {
+                Ok(Some(data)) => {
+                    edits.insert(*chunk, data);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        ?chunk,
+                        ?key,
+                        "failed to load an edited chunk for a coarse section"
+                    );
+                }
+            }
+        }
+        edits
+    }
+
     /// Reads one saved chunk, if a file exists.
     pub(crate) fn load_saved_chunk(
         directory: &Path,
@@ -1015,6 +1065,8 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use super::*;
+    use crate::generation::{Generator, WORLD_HEIGHT};
+    use crate::section::generate_section;
 
     fn chunk_at(world: IVec3) -> ChunkCoord {
         ChunkCoord::from_world(world).0
@@ -1034,6 +1086,10 @@ mod tests {
         let _ = fs::remove_dir_all(&directory);
         fs::create_dir_all(&directory).unwrap();
         directory
+    }
+
+    fn sample_of(key: SectionKey, world: IVec3) -> IVec3 {
+        (world - key.origin()).div_euclid(IVec3::splat(key.scale()))
     }
 
     fn write_raw(directory: &Path, name: &str, bytes: &[u8]) {
@@ -1649,6 +1705,94 @@ mod tests {
         assert!(world.chunk(chunk).is_none());
         assert_eq!(world.block(IVec3::new(5, 0, 5)), Block::Air);
         assert!(world.is_modified(chunk));
+    }
+
+    #[test]
+    fn section_edits_apply_a_modified_resident_chunk() {
+        let generator = Generator::new(42);
+        let world_position = IVec3::new(1, WORLD_HEIGHT, 1);
+        let key = SectionKey::from_world(1, world_position);
+        let mut world = World::default();
+        world.set_block(world_position, Block::Stone);
+        let chunk = chunk_at(world_position);
+
+        let edits = world.section_edits(key, None, &HashSet::new());
+
+        assert_eq!(edits.keys().copied().collect::<Vec<_>>(), vec![chunk]);
+        let sample = sample_of(key, world_position);
+        assert_eq!(
+            generate_section(&generator, key, &edits).sample(sample),
+            Block::Stone
+        );
+        assert_eq!(
+            generate_section(&generator, key, &SectionEdits::new()).sample(sample),
+            Block::Air,
+            "the seed above the world is air"
+        );
+    }
+
+    #[test]
+    fn section_edits_load_a_modified_chunk_that_left_memory() {
+        let directory = temp_dir("section-edits-saved");
+        let generator = Generator::new(42);
+        let world_position = IVec3::new(1, WORLD_HEIGHT, 1);
+        let key = SectionKey::from_world(1, world_position);
+        let mut world = World::default();
+        world.set_block(world_position, Block::Stone);
+        let chunk = chunk_at(world_position);
+        world.save_chunks(&directory).unwrap();
+        world.remove_chunk(chunk);
+        assert!(world.chunk(chunk).is_none());
+        assert!(world.is_modified(chunk));
+
+        let edits = world.section_edits(key, Some(&directory), &HashSet::new());
+
+        assert_eq!(edits.keys().copied().collect::<Vec<_>>(), vec![chunk]);
+        assert_eq!(
+            generate_section(&generator, key, &edits).sample(sample_of(key, world_position)),
+            Block::Stone
+        );
+        assert!(
+            world.section_edits(key, None, &HashSet::new()).is_empty(),
+            "an unloaded edit has no overlay without a save directory"
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn section_edits_include_only_modified_chunks_inside_the_section() {
+        let key = SectionKey::new(1, IVec3::ZERO);
+        let mut world = World::default();
+        let mut resident = Chunk::default();
+        resident.set_block(IVec3::ZERO, Block::Stone);
+        world.insert_chunk(ChunkCoord::new(0, 0, 0), resident);
+        assert!(world.section_edits(key, None, &HashSet::new()).is_empty());
+
+        let inside = IVec3::new(1, 0, 1);
+        let outside = IVec3::new(1, 0, 200);
+        world.set_block(inside, Block::Stone);
+        world.set_block(outside, Block::Stone);
+
+        let edits = world.section_edits(key, None, &HashSet::new());
+        assert_eq!(
+            edits.keys().copied().collect::<Vec<_>>(),
+            vec![chunk_at(inside)]
+        );
+    }
+
+    #[test]
+    fn section_edits_include_a_saved_resident_chunk_without_a_modified_marker() {
+        let key = SectionKey::new(1, IVec3::ZERO);
+        let chunk = ChunkCoord::new(0, 0, 0);
+        let mut world = World::default();
+        let mut data = Chunk::default();
+        data.set_block(IVec3::ZERO, Block::Stone);
+        world.insert_chunk(chunk, data);
+        assert!(!world.is_modified(chunk));
+
+        let edits = world.section_edits(key, None, &HashSet::from([chunk]));
+
+        assert!(edits.contains_key(&chunk));
     }
 
     #[test]

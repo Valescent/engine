@@ -49,6 +49,15 @@ impl SectionKey {
         SECTION_SIZE * self.scale()
     }
 
+    /// Section at `level` that contains `world`.
+    pub(crate) fn from_world(level: u8, world: IVec3) -> Self {
+        let extent = Self::new(level, IVec3::ZERO).extent();
+        Self {
+            level,
+            coord: world.div_euclid(IVec3::splat(extent)),
+        }
+    }
+
     /// Minimum-corner world coordinate.
     pub(crate) fn origin(self) -> IVec3 {
         self.coord * self.extent()
@@ -82,6 +91,38 @@ impl SectionKey {
     pub(crate) fn sample_origin(self, local: IVec3) -> IVec3 {
         self.origin() + local * self.scale()
     }
+}
+
+/// Levels whose sections can receive an L0 edit in the first slice.
+const EDIT_LEVELS: std::ops::RangeInclusive<u8> = 1..=2;
+
+/// Section keys at [`EDIT_LEVELS`] whose volume overlaps the inclusive bounds.
+///
+/// An arbitrary box can overlap up to 2 sections per axis per level; the
+/// section extents are multiples of the chunk size, so a chunk-aligned box
+/// maps to exactly one section per level.
+pub(crate) fn overlapping_sections(min: IVec3, max: IVec3) -> Vec<SectionKey> {
+    let mut keys = Vec::new();
+    for level in EDIT_LEVELS {
+        let extent = IVec3::splat(SectionKey::new(level, IVec3::ZERO).extent());
+        let min_coord = min.div_euclid(extent);
+        let max_coord = max.div_euclid(extent);
+        for x in min_coord.x..=max_coord.x {
+            for y in min_coord.y..=max_coord.y {
+                for z in min_coord.z..=max_coord.z {
+                    keys.push(SectionKey::new(level, IVec3::new(x, y, z)));
+                }
+            }
+        }
+    }
+    keys
+}
+
+/// Section keys at [`EDIT_LEVELS`] whose volume overlaps one L0 chunk.
+pub(crate) fn overlapping_sections_for_chunk(chunk: ChunkCoord) -> Vec<SectionKey> {
+    let min = chunk.world_origin();
+    let max = min + IVec3::splat(CHUNK_SIZE - 1);
+    overlapping_sections(min, max)
 }
 
 /// One generated `32³` sample grid.
@@ -128,7 +169,7 @@ impl Section {
         for x in 0..SECTION_SIZE {
             for z in 0..SECTION_SIZE {
                 for y in (0..SECTION_SIZE).rev() {
-                    if self.samples.block(IVec3::new(x, y, z)) != Block::Air {
+                    if self.samples.block(IVec3::new(x, y, z)).is_solid() {
                         tops[usize::try_from(x * stride + z).expect("column fits")] = y;
                         break;
                     }
@@ -303,6 +344,61 @@ mod tests {
     }
 
     #[test]
+    fn from_world_uses_euclidean_division_for_negative_coordinates() {
+        let cases = [
+            (1, IVec3::new(-1, 0, -65), IVec3::new(-1, 0, -2)),
+            (1, IVec3::new(63, 63, 63), IVec3::ZERO),
+            (1, IVec3::new(64, 64, 64), IVec3::splat(1)),
+            (2, IVec3::new(-129, 127, -128), IVec3::new(-2, 0, -1)),
+            (2, IVec3::new(-1, -1, -1), IVec3::splat(-1)),
+        ];
+
+        for (level, world, coord) in cases {
+            let key = SectionKey::from_world(level, world);
+            assert_eq!(key.level, level);
+            assert_eq!(key.coord, coord, "{world}");
+            let origin = key.origin();
+            assert!(origin.cmple(world).all(), "{world} before {origin}");
+            assert!(
+                world.cmplt(origin + IVec3::splat(key.extent())).all(),
+                "{world} after the section at {origin}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_chunk_on_a_section_corner_maps_to_one_section_per_level() {
+        // Chunk (2, 0, 2) starts at world (64, 0, 64), the minimum corner of
+        // level-1 section (1, 0, 1) and level-2 section (0, 0, 0).
+        let keys = overlapping_sections_for_chunk(ChunkCoord::new(2, 0, 2));
+
+        assert_eq!(
+            keys,
+            vec![
+                SectionKey::new(1, IVec3::new(1, 0, 1)),
+                SectionKey::new(2, IVec3::new(0, 0, 0)),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_box_crossing_a_boundary_overlaps_two_sections_per_axis() {
+        let keys = overlapping_sections(IVec3::new(63, 0, 63), IVec3::new(64, 0, 64));
+        let level1: Vec<SectionKey> = keys.iter().copied().filter(|key| key.level == 1).collect();
+
+        assert_eq!(
+            level1,
+            vec![
+                SectionKey::new(1, IVec3::new(0, 0, 0)),
+                SectionKey::new(1, IVec3::new(0, 0, 1)),
+                SectionKey::new(1, IVec3::new(1, 0, 0)),
+                SectionKey::new(1, IVec3::new(1, 0, 1)),
+            ]
+        );
+        assert_eq!(keys.iter().filter(|key| key.level == 2).count(), 1);
+    }
+
+    #[test]
     fn level_math_round_trips_parent_and_children() {
         let root = SectionKey::new(2, IVec3::new(-3, 1, 5));
         assert_eq!(root.scale(), 4);
@@ -433,7 +529,7 @@ mod tests {
             for z in 0..SECTION_SIZE {
                 let top = (0..SECTION_SIZE)
                     .rev()
-                    .find(|&y| section.sample(IVec3::new(x, y, z)) != Block::Air);
+                    .find(|&y| section.sample(IVec3::new(x, y, z)).is_solid());
                 if let Some(top) = top
                     && top + 1 < SECTION_SIZE
                 {
@@ -444,6 +540,19 @@ mod tests {
             }
         }
         assert!(checked, "a column with a top");
+    }
+
+    #[test]
+    fn coarse_water_cells_are_open_sky() {
+        let mut section = Section::new(SectionKey::new(1, IVec3::ZERO));
+        section.set_sample(IVec3::new(1, 5, 1), Block::Water);
+        let light = section.light();
+        assert_eq!(light.sky(IVec3::new(1, 5, 1)), 15);
+
+        section.set_sample(IVec3::new(1, 4, 1), Block::Stone);
+        let light = section.light();
+        assert_eq!(light.sky(IVec3::new(1, 5, 1)), 15, "water stays open");
+        assert_eq!(light.sky(IVec3::new(1, 4, 1)), 0, "the seabed is solid");
     }
 
     #[test]

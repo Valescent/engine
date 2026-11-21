@@ -3,7 +3,7 @@
 //! The allocator is [`crate::pool::QuadPool`]; this module owns the storage
 //! buffers, the vertex-pulling pipelines, and the per-frame argument list.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::mem::size_of;
 
 use bytemuck::{Pod, Zeroable};
@@ -91,6 +91,8 @@ struct DrawArgs {
 struct Slot {
     index: u32,
     key: NodeKey,
+    /// Sections stay hidden while a retained parent is drawn.
+    visible: bool,
     info: ChunkInfo,
     opaque: [Option<QuadRange>; 3],
     opaque_indexed: [bool; 3],
@@ -556,6 +558,17 @@ impl QuadRenderer {
         true
     }
 
+    /// Sets which sections are drawn; chunks are always visible.
+    pub(crate) fn set_section_visibility(&mut self, target: &[SectionKey]) {
+        let visible: HashSet<SectionKey> = target.iter().copied().collect();
+        for slot in &mut self.slots {
+            slot.visible = match slot.key {
+                NodeKey::Chunk(_) => true,
+                NodeKey::Section(key) => visible.contains(&key),
+            };
+        }
+    }
+
     /// The LOD currently drawn for a chunk, if any.
     pub(crate) fn active_lod(&self, chunk: ChunkCoord) -> Option<Lod> {
         self.slot(NodeKey::Chunk(chunk))
@@ -639,6 +652,9 @@ impl QuadRenderer {
         let mut visible_chunks = 0_u32;
 
         for slot in &self.slots {
+            if !slot.visible {
+                continue;
+            }
             let key = slot.key;
             let min = key.origin();
             let extent = key.extent();
@@ -832,6 +848,7 @@ impl QuadRenderer {
         self.slots.push(Slot {
             index,
             key,
+            visible: matches!(key, NodeKey::Chunk(_)),
             info: ChunkInfo::default(),
             opaque: [None; 3],
             opaque_indexed: [false; 3],
@@ -1004,6 +1021,7 @@ mod tests {
         let empty = Slot {
             index: 0,
             key: NodeKey::Chunk(ChunkCoord::new(0, 0, 0)),
+            visible: true,
             info: ChunkInfo::default(),
             opaque: [None; 3],
             opaque_indexed: [false; 3],
