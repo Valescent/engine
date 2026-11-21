@@ -56,8 +56,8 @@ use generation::Generator;
 use hierarchy::{DEFAULT_DETAIL_CHUNKS, DEFAULT_PIXELS_PER_RADIAN, Hierarchy};
 use mesh::Lod;
 use mesher::{
-    Job, MeshKind, MeshPool, MeshQueue, Priority, SectionJob, SectionResult, build_section,
-    collect_finished, create_pool,
+    Job, MeshKind, MeshPool, MeshQueue, MeshResult, Priority, SectionJob, SectionResult,
+    build_section, collect_finished, create_pool,
 };
 use player::{Player, PlayerInput};
 use raycast::{RaycastHit, raycast};
@@ -86,8 +86,10 @@ const SPAWN_Z: i32 = 32;
 /// `64`, so above this value the cap stops limiting; `8` stays above the worker rate while keeping
 /// each frame's upload burst small.
 const MAX_UPLOADS_PER_FRAME: usize = 8;
-/// Consecutive upload failures tolerated for one chunk before it is left alone.
-const MAX_UPLOAD_RETRIES: u8 = 8;
+/// Consecutive upload failures after which the retry warning is logged once.
+///
+/// The chunk stays retryable regardless: pool and slot exhaustion are temporary.
+const UPLOAD_RETRY_WARNING_COUNT: u8 = 8;
 
 /// Main-thread budget for draining the chunk work set each frame.
 const LEVEL_WORK_BUDGET: Duration = Duration::from_millis(2);
@@ -892,6 +894,7 @@ impl App {
 
         let chunk_directory = save_directory(self.stress);
         let had_generations = !finished.generations.is_empty();
+        let mut loaded_columns = Vec::new();
         for generation in finished.generations {
             self.stats.generated_columns += 1;
             self.stats.generation_ms += generation.elapsed.as_secs_f64() * 1000.0;
@@ -914,7 +917,7 @@ impl App {
                     streaming.mark_loaded(generation.column);
                 }
                 self.invalidate_neighbour_columns(generation.column);
-                self.mark_column_ready(generation.column);
+                loaded_columns.push(generation.column);
             } else {
                 // Retry this column from a rebuilt candidate list next frame.
                 self.wanted_player = None;
@@ -923,14 +926,23 @@ impl App {
         if had_generations {
             self.admit_deferred_light();
         }
-        for result in &finished.meshes {
-            self.mark_column_ready(chunk_column(result.chunk));
-        }
 
         let Some(renderer) = &mut self.renderer else {
+            // Nothing draws without a renderer, so upload success is not a
+            // precondition for movement readiness here; blocking streaming would
+            // only stall a headless run forever.
+            for column in loaded_columns.into_iter().chain(
+                finished
+                    .meshes
+                    .iter()
+                    .map(|result| chunk_column(result.chunk)),
+            ) {
+                self.mark_column_ready(column);
+            }
             return;
         };
         let mut upload_ms = 0.0;
+        let mut outcomes = Vec::with_capacity(finished.meshes.len());
         for result in &finished.meshes {
             let started = Instant::now();
             let desired = self.queue.desired(result.chunk);
@@ -957,32 +969,56 @@ impl App {
                     renderer.upload_water_chunk(result.chunk, result.revision, &result.mesh)
                 }
             };
-            if uploaded {
-                self.upload_failures.remove(&result.chunk);
-                self.level_work.insert(result.chunk);
-            } else {
-                self.queue
-                    .forget_built(result.chunk, result.lod, result.kind);
-                let count = self.upload_failures.entry(result.chunk).or_insert(0);
-                *count = count.saturating_add(1);
-                let count = *count;
-                if count <= MAX_UPLOAD_RETRIES {
-                    self.level_work.insert(result.chunk);
-                } else if count == MAX_UPLOAD_RETRIES + 1 {
-                    warn!(
-                        chunk = ?result.chunk,
-                        count,
-                        "mesh upload failed repeatedly; no longer retrying"
-                    );
-                }
-            }
+            outcomes.push(uploaded);
             upload_ms += started.elapsed().as_secs_f64() * 1000.0;
         }
         self.stats.upload_ms += upload_ms;
         self.stats.last_upload_ms = upload_ms;
+        // The renderer borrow ends above; the queue, retry, and readiness state
+        // changes below need the whole app.
+        let mut uploaded_columns = Vec::new();
+        for (result, uploaded) in finished.meshes.iter().zip(outcomes) {
+            if self.record_mesh_upload(result, uploaded) {
+                uploaded_columns.push(chunk_column(result.chunk));
+            }
+        }
+        // Readiness gates player movement, so only columns whose mesh left the
+        // queue for good may become ready: a failed upload forgot the built entry
+        // and stays unready until a later retry succeeds.
+        for column in loaded_columns.into_iter().chain(uploaded_columns) {
+            self.mark_column_ready(column);
+        }
         for result in &finished.sections {
             self.upload_section_result(result);
         }
+    }
+
+    /// Updates the per-chunk retry state for one mesh upload attempt.
+    ///
+    /// Returns whether the mesh reached the renderer. A failed upload forgets the
+    /// built entry so the level pass requests the chunk again. Pool and slot
+    /// exhaustion are temporary: later evictions free capacity, so the chunk
+    /// stays in the level work set instead of being dropped permanently.
+    fn record_mesh_upload(&mut self, result: &MeshResult, uploaded: bool) -> bool {
+        if uploaded {
+            self.upload_failures.remove(&result.chunk);
+            self.level_work.insert(result.chunk);
+            return true;
+        }
+        self.queue
+            .forget_built(result.chunk, result.lod, result.kind);
+        let count = self.upload_failures.entry(result.chunk).or_insert(0);
+        *count = count.saturating_add(1);
+        let count = *count;
+        if count == UPLOAD_RETRY_WARNING_COUNT {
+            warn!(
+                chunk = ?result.chunk,
+                count,
+                "mesh upload keeps failing; retrying when pool or slot space frees"
+            );
+        }
+        self.level_work.insert(result.chunk);
+        false
     }
 
     fn target_hit(&self) -> Option<RaycastHit> {
@@ -1357,7 +1393,8 @@ impl App {
     /// Uploads one finished section and advances its hierarchy state.
     ///
     /// Returns whether the section became drawable. An upload that cannot get
-    /// pool or slot space is marked dirty so it is rebuilt later.
+    /// pool or slot space has its renderer entry, horizon bounds, and upload
+    /// marker cleared and is marked dirty so it is rebuilt later.
     fn upload_section_result(&mut self, result: &SectionResult) -> bool {
         let key = result.key;
         if self.section_jobs.get(&key) != Some(&result.job) {
@@ -1368,27 +1405,32 @@ impl App {
         if let Some(bounds) = result.bounds {
             self.section_bounds.insert(key, bounds);
         }
+        let mut newly_uploaded = false;
         let ready = if result.opaque.quads.is_empty() && result.water.quads.is_empty() {
             true
         } else {
-            let Some(renderer) = &mut self.renderer else {
+            let uploaded = self.renderer.as_mut().map(|renderer| {
+                let mut uploaded = true;
+                if !result.opaque.quads.is_empty() {
+                    uploaded = renderer.upload_section(key, &result.opaque);
+                }
+                if uploaded && !result.water.quads.is_empty() {
+                    uploaded = renderer.upload_section_water(key, &result.water);
+                }
+                uploaded
+            });
+            let Some(uploaded) = uploaded else {
+                self.reset_failed_section(key);
                 return false;
             };
-            let mut uploaded = true;
-            if !result.opaque.quads.is_empty() {
-                uploaded = renderer.upload_section(key, &result.opaque);
-            }
-            if uploaded && !result.water.quads.is_empty() {
-                uploaded = renderer.upload_section_water(key, &result.water);
-            }
             if uploaded {
-                self.sections_uploaded.insert(key);
+                newly_uploaded = self.sections_uploaded.insert(key);
             }
             uploaded
         };
         if ready {
             self.sections.mark_ready(key);
-            if self.sections_uploaded.len().is_multiple_of(100) {
+            if newly_uploaded && self.sections_uploaded.len().is_multiple_of(100) {
                 debug!(
                     sections = self.sections_uploaded.len(),
                     "hierarchy progress"
@@ -1400,10 +1442,23 @@ impl App {
                 uploaded = self.sections_uploaded.len(),
                 "section upload deferred: pool or slot limit"
             );
-            self.sections_uploaded.remove(&key);
-            self.sections.mark_dirty([key]);
+            self.reset_failed_section(key);
         }
         ready
+    }
+
+    /// Drops any partial section upload and re-queues the section.
+    ///
+    /// The opaque mesh can land before the water upload fails, so the renderer
+    /// entry must go too: otherwise the section draws without a horizon bound,
+    /// or keeps occluding terrain while it is not tracked as uploaded.
+    fn reset_failed_section(&mut self, key: SectionKey) {
+        if let Some(renderer) = &mut self.renderer {
+            renderer.remove_section(key);
+        }
+        self.section_bounds.remove(&key);
+        self.sections_uploaded.remove(&key);
+        self.sections.mark_dirty([key]);
     }
 
     /// Selects, generates, and uploads hierarchy sections.
@@ -2145,6 +2200,95 @@ mod tests {
         assert!(app.upload_section_result(&fresh));
         assert_eq!(app.sections.state(key), hierarchy::Readiness::Ready);
         assert!(!app.sections_in_flight.contains(&key));
+    }
+
+    #[test]
+    fn a_failed_section_upload_clears_partial_state_and_rebuilds() {
+        let mut app = App::with_world(World::default(), false);
+        let key = SectionKey::new(1, IVec3::ZERO);
+        app.section_jobs.insert(key, 3);
+        app.sections_in_flight.insert(key);
+        app.sections.mark_building(key);
+        app.section_bounds.insert(
+            key,
+            SectionBounds {
+                min_top: 1.0,
+                max_top: 2.0,
+            },
+        );
+        app.sections_uploaded.insert(key);
+
+        let generator = Generator::new(42);
+        let section = generate_section(&generator, key, &HashMap::new());
+        assert!(
+            !section.is_empty(),
+            "the fixture section must have geometry"
+        );
+        let result = SectionResult {
+            key,
+            job: 3,
+            opaque: section.mesh(None),
+            water: section.water_mesh(None),
+            bounds: section.bounds(),
+            elapsed: Duration::ZERO,
+        };
+
+        // Without a renderer the mesh cannot land, which is the same failure
+        // path as an exhausted pool or slot table.
+        assert!(!app.upload_section_result(&result));
+
+        assert!(
+            app.section_bounds.is_empty(),
+            "a failed section must not keep occluding the horizon"
+        );
+        assert!(!app.sections_uploaded.contains(&key));
+        assert!(app.section_jobs.is_empty());
+        assert!(app.sections_in_flight.is_empty());
+        assert_eq!(app.sections.state(key), hierarchy::Readiness::Requested);
+    }
+
+    #[test]
+    fn a_deferred_mesh_upload_stays_retryable_and_not_ready() {
+        let mut app = App::with_world(World::default(), false);
+        let chunk = ChunkCoord::new(0, 0, 0);
+        app.world.set_block(IVec3::new(0, 0, 0), Block::Stone);
+        app.queue.mark_light_built(chunk);
+        let pool = InlinePool::default();
+        app.queue.request(
+            &pool,
+            &app.world,
+            chunk,
+            Lod::Lod0,
+            MeshKind::Opaque,
+            Priority::Urgent,
+        );
+        let result = MeshResult {
+            chunk,
+            lod: Lod::Lod0,
+            kind: MeshKind::Opaque,
+            revision: app.queue.revision(chunk),
+            mesh: MeshData::default(),
+            elapsed: Duration::ZERO,
+        };
+        assert!(app.queue.accept(&result));
+
+        for _ in 0..=UPLOAD_RETRY_WARNING_COUNT {
+            app.level_work.remove(&chunk);
+            assert!(!app.record_mesh_upload(&result, false));
+            assert!(
+                app.level_work.contains(&chunk),
+                "temporary pool or slot exhaustion must stay retryable"
+            );
+            assert!(
+                !app.column_ready(IVec2::ZERO),
+                "a column must not become ready before its mesh uploads"
+            );
+        }
+        assert!(
+            app.upload_failures
+                .get(&chunk)
+                .is_some_and(|count| *count > UPLOAD_RETRY_WARNING_COUNT)
+        );
     }
 
     #[test]

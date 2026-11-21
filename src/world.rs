@@ -725,8 +725,9 @@ impl World {
     /// Coordinates with saved chunk files in `directory`.
     ///
     /// Listing the directory once replaces a failed `fs::read` for every
-    /// generated chunk. Files whose names do not parse are ignored here; the
-    /// per-chunk loader still reports them if they are requested.
+    /// generated chunk. Files whose names do not parse, or whose coordinate
+    /// would overflow a world origin, are ignored here; the per-chunk loader
+    /// still reports them if they are requested.
     pub(crate) fn saved_chunk_index(directory: &Path) -> Result<HashSet<ChunkCoord>, SaveError> {
         let entries = match fs::read_dir(directory) {
             Ok(entries) => entries,
@@ -744,7 +745,9 @@ impl World {
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            if let Some(chunk) = parse_chunk_file_name(&name) {
+            if let Some(chunk) = parse_chunk_file_name(&name)
+                && chunk_origin_checked(chunk).is_some()
+            {
                 chunks.insert(chunk);
             }
         }
@@ -775,7 +778,12 @@ impl World {
         let section_origin = key.origin();
         let section_max = section_origin + IVec3::splat(key.extent() - 1);
         for chunk in self.modified.union(saved) {
-            let origin = chunk.world_origin();
+            // Saved-file coordinates are filtered by `saved_chunk_index`, but a
+            // caller-supplied set can still hold a coordinate whose origin
+            // overflows; skip it instead of panicking in `world_origin`.
+            let Some(origin) = chunk_origin_checked(*chunk) else {
+                continue;
+            };
             let max = origin + IVec3::splat(CHUNK_SIZE - 1);
             if !origin.cmple(section_max).all() || !section_origin.cmple(max).all() {
                 continue;
@@ -1795,6 +1803,28 @@ mod tests {
         let index = World::saved_chunk_index(&directory).unwrap();
 
         assert_eq!(index, HashSet::from([chunk_at(IVec3::new(5, 0, 5))]));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn saved_chunk_index_ignores_coordinates_that_overflow_the_origin() {
+        let directory = temp_dir("saved-index-extreme");
+        let mut world = World::default();
+        world.set_block(IVec3::new(5, 0, 5), Block::Stone);
+        world.save_chunks(&directory).unwrap();
+        fs::write(directory.join("chunk_2147483647_0_0.vchk"), []).unwrap();
+        fs::write(directory.join("chunk_0_-2147483648_0.vchk"), []).unwrap();
+
+        let index = World::saved_chunk_index(&directory).unwrap();
+
+        assert_eq!(index, HashSet::from([chunk_at(IVec3::new(5, 0, 5))]));
+        for name in ["chunk_2147483647_0_0.vchk", "chunk_0_-2147483648_0.vchk"] {
+            let chunk = parse_chunk_file_name(name).unwrap();
+            assert!(
+                chunk_origin_checked(chunk).is_none(),
+                "{name} must be filtered before its world origin can overflow"
+            );
+        }
         fs::remove_dir_all(directory).unwrap();
     }
 

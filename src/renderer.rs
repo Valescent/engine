@@ -242,6 +242,29 @@ pub(crate) struct Renderer {
     capture: Option<Capture>,
 }
 
+/// Default delay before the armed capture is read back.
+const DEFAULT_CAPTURE_DELAY_SECS: f64 = 20.0;
+
+/// Largest accepted capture delay, in seconds.
+///
+/// A day is far beyond any benchmark delay, and the bound keeps
+/// [`Duration::from_secs_f64`] well inside its panic-free range.
+const MAX_CAPTURE_DELAY_SECS: f64 = 86_400.0;
+
+/// Parses `ENGINE_CAPTURE_DELAY` seconds, falling back to a safe default.
+///
+/// `Duration::from_secs_f64` panics on non-finite and out-of-range values, so
+/// `inf`, `NaN`, and absurdly large inputs fall back to the default delay.
+/// Finite negative values still capture immediately, matching the previous
+/// `.max(0.0)` clamp.
+fn capture_delay(value: Option<&str>) -> Duration {
+    let delay = value
+        .and_then(|value| value.trim().parse::<f64>().ok())
+        .filter(|delay| delay.is_finite() && *delay <= MAX_CAPTURE_DELAY_SECS)
+        .map_or(DEFAULT_CAPTURE_DELAY_SECS, |delay| delay.max(0.0));
+    Duration::from_secs_f64(delay)
+}
+
 /// One pending frame readback, armed by `ENGINE_CAPTURE`.
 struct Capture {
     path: PathBuf,
@@ -272,21 +295,17 @@ impl Capture {
             );
             return None;
         }
-        let delay = std::env::var("ENGINE_CAPTURE_DELAY")
-            .ok()
-            .and_then(|value| value.parse::<f64>().ok())
-            .unwrap_or(20.0)
-            .max(0.0);
+        let delay = capture_delay(std::env::var("ENGINE_CAPTURE_DELAY").ok().as_deref());
         let bytes_per_row = capture_bytes_per_row(config.width);
         let buffer = create_capture_buffer(device, bytes_per_row, config.height);
         info!(
             path = %path.display(),
-            delay_secs = delay,
+            delay_secs = delay.as_secs_f64(),
             "frame capture armed"
         );
         Some(Self {
             path,
-            delay: Duration::from_secs_f64(delay),
+            delay,
             started: Instant::now(),
             buffer,
             bytes_per_row,
@@ -1927,6 +1946,19 @@ mod tests {
             horizon.occludes(chunk),
             "the fallback path must skip a chunk its frustum keeps but the horizon hides"
         );
+    }
+
+    #[test]
+    fn capture_delay_rejects_non_finite_and_oversized_values() {
+        assert_eq!(capture_delay(None), Duration::from_secs_f64(20.0));
+        assert_eq!(capture_delay(Some("0.5")), Duration::from_secs_f64(0.5));
+        assert_eq!(capture_delay(Some(" 3 ")), Duration::from_secs(3));
+        assert_eq!(capture_delay(Some("-4")), Duration::ZERO);
+        assert_eq!(capture_delay(Some("nonsense")), Duration::from_secs(20));
+        assert_eq!(capture_delay(Some("inf")), Duration::from_secs(20));
+        assert_eq!(capture_delay(Some("-inf")), Duration::from_secs(20));
+        assert_eq!(capture_delay(Some("NaN")), Duration::from_secs(20));
+        assert_eq!(capture_delay(Some("1e300")), Duration::from_secs(20));
     }
 
     #[test]

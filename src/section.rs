@@ -98,9 +98,11 @@ const EDIT_LEVELS: std::ops::RangeInclusive<u8> = 1..=MAX_LEVEL;
 
 /// Section keys at [`EDIT_LEVELS`] whose volume overlaps the inclusive bounds.
 ///
-/// An arbitrary box can overlap up to 2 sections per axis per level; the
-/// section extents are multiples of the chunk size, so a chunk-aligned box
-/// maps to exactly one section per level.
+/// Every section whose extent intersects the box is returned, so an arbitrarily
+/// large box may overlap any number of sections per axis. Only a box no larger
+/// than one chunk (see [`overlapping_sections_for_chunk`]) can rely on the
+/// tighter bound of at most two sections per axis per level, because section
+/// extents are multiples of the chunk size.
 pub(crate) fn overlapping_sections(min: IVec3, max: IVec3) -> Vec<SectionKey> {
     let mut keys = Vec::new();
     for level in EDIT_LEVELS {

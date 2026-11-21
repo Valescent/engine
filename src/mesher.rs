@@ -573,14 +573,19 @@ pub(crate) struct FinishedWork {
     pub(crate) worker_time: Duration,
 }
 
-/// Accepts up to `budget` current meshes and sections.
+/// Accepts up to `budget` current meshes and sections in total.
 pub(crate) fn collect_finished(
     queue: &mut MeshQueue,
     pool: &dyn MeshPool,
     budget: usize,
 ) -> FinishedWork {
     let mut finished = FinishedWork::default();
-    while finished.meshes.len() < budget && finished.sections.len() < budget {
+    while finished
+        .meshes
+        .len()
+        .saturating_add(finished.sections.len())
+        < budget
+    {
         let Some(result) = pool.try_recv() else {
             break;
         };
@@ -908,6 +913,51 @@ mod tests {
 
         assert_eq!(finished.sections.len(), 1);
         assert_eq!(finished.sections[0].key, key);
+    }
+
+    #[test]
+    fn meshes_and_sections_share_one_collection_budget() {
+        let pool = FakePool::default();
+        let mut queue = MeshQueue::default();
+        {
+            let mut results = pool.results.lock().unwrap();
+            for x in 0..2 {
+                results.push(JobResult::Section(SectionResult {
+                    key: SectionKey::new(1, glam::IVec3::new(x, 0, 0)),
+                    job: 0,
+                    opaque: MeshData::default(),
+                    water: MeshData::default(),
+                    bounds: None,
+                    elapsed: Duration::from_millis(1),
+                }));
+            }
+            for x in 0..2 {
+                results.push(JobResult::Mesh(result(chunk(x), Lod::Lod0, 0)));
+            }
+        }
+        for x in 0..2 {
+            queue.request(
+                &pool,
+                &World::default(),
+                chunk(x),
+                Lod::Lod0,
+                MeshKind::Opaque,
+                Priority::Urgent,
+            );
+        }
+
+        // `try_recv` pops from the back, so both meshes are collected before the
+        // first section and the shared budget stops the loop at three results.
+        let finished = collect_finished(&mut queue, &pool, 3);
+
+        assert_eq!(finished.meshes.len(), 2);
+        assert_eq!(finished.sections.len(), 1);
+        assert_eq!(
+            finished.meshes.len() + finished.sections.len(),
+            3,
+            "one frame must not collect more than the shared upload budget"
+        );
+        assert_eq!(finished.worker_time, Duration::from_millis(3));
     }
 
     #[test]
