@@ -20,7 +20,10 @@ src/
 ├── main.rs                 # thin binary shell
 ├── lib.rs                  # crate docs, mod declarations, pub use
 ├── startup.rs              # run, config, seed, world choice, demo open
-├── app.rs                  # App, ApplicationHandler, frame, input, overlay
+├── app/
+│   ├── mod.rs              # App, ApplicationHandler, lifecycle, RunError
+│   ├── input.rs            # key/mouse mapping, capture, hotbar, edit actions
+│   └── frame.rs            # tick/redraw order, timing, overlay, streaming
 ├── demo/
 │   ├── mod.rs              # DemoRuntime seam, constants, re-exports, tests
 │   ├── patch.rs            # TerrainDemo, block access, LOD apply, materials
@@ -39,7 +42,9 @@ src/
 | `src/main.rs` | Thin binary entry point; calls `engine::run()`. |
 | `src/lib.rs` | Crate table of contents: crate docs, `mod` declarations, the `pub(crate)` terrain re-exports, and the public surface (`run`, `RunError`, `RendererError`, `ChunkCoord`, `SaveError`, `v0`, and the `terrain` facade). No logic. See [Public API](public-api.md). |
 | `src/startup.rs` | `run`, tracing setup, configuration and seed loading, world choice (saved, generated, or stress), the `DemoRuntime::open` hand-off, and the headless hand-off. |
-| `src/app.rs` | `App`, the `winit` application handler, window/renderer lifecycle, frame and redraw order, input mapping, overlay and stats, and the demo-to-renderer upload adapter. |
+| `src/app/mod.rs` | `App` (fields and construction), the `winit` application handler and window-event dispatch, window/renderer lifecycle, `RunError`, and the module declarations. |
+| `src/app/input.rs` | Key mapping, cursor capture/release, focus and mouse-look handling, hotbar selection, movement-key helpers, repair-key mapping, and the break/place/demo-edit actions. |
+| `src/app/frame.rs` | Per-frame work: tick and redraw order, frame delta and timing accumulation, `FrameAccumulator`, overlay text and stats, resize, mesh request/upload and column streaming, and the demo-to-renderer upload adapter. |
 | `src/demo/mod.rs` | `DemoRuntime`, the demo's one app-facing seam: it owns the patch, ring, save worker, repair prompt, pending rebuild, and edit queue, and exposes `open`, `tick`, `edit`, `shutdown`, `repair`, `stats`, and the read-only overlay/upload accessors. Also shared constants and the test fixtures. |
 | `src/demo/patch.rs` | `TerrainDemo` state, resident columns, block access and collision, light/mesh installation, LOD selection, and the material/light tables. |
 | `src/demo/lod.rs` | LOD0/1/2 band selection, complete and clipped LOD1 regions, and LOD2 derivation. |
@@ -77,7 +82,7 @@ and `engine::world` resolve exactly as before. v0 is still the default run path 
 is unset; it receives fixes only, and the whole directory is removed when the terrain demo becomes
 the default. The move is behaviour-preserving and does not change the save format.
 
-`src/startup.rs`, `src/app.rs`, and `src/demo/` split the old crate-root logic by responsibility.
+`src/startup.rs`, `src/app/`, and `src/demo/` split the old crate-root logic by responsibility.
 `lib.rs` is now a table of contents; `startup` owns environment switches and world choice, `app`
 owns `winit`/`wgpu` and the frame loop, and `demo` owns the v1 patch, ring, LOD, edits, and saves.
 `demo` does not name `winit`, `wgpu`, or `renderer`; `app` translates its state into renderer
