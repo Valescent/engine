@@ -18,7 +18,7 @@ One file per decision. Each record states the context, the decision, the alterna
 | [0012](0012-fastnoise-lite-and-opensimplex2.md) | fastnoise-lite with OpenSimplex2 | Accepted |
 | [0013](0013-player-centred-chunk-streaming.md) | Finite player-centred chunk streaming | Accepted |
 | [0014](0014-seed-native-lod-hierarchy.md) | Seed-native multi-level LOD sections | Accepted |
-| [0015](0015-quad-pool-and-indirect-draws.md) | Quad pool with vertex pulling and indirect draws | Accepted; implementation gated by v0.0.9 slice 4 |
+| [0015](0015-quad-pool-and-indirect-draws.md) | Quad pool with vertex pulling and indirect draws | Accepted; implemented in v0.0.9 slice 4 |
 
 ## Conventions
 

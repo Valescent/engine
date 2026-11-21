@@ -73,11 +73,13 @@ Three `u32` words per quad:
   until mods need more than eight bits.
 - Corners pack exactly like `pack_light_ao`: 4-bit sky, 4-bit block, 2-bit AO, in the mesher's corner
   order.
-- Six vertex invocations per quad, corner ids `[0, 1, 2, 0, 2, 3]`, no index buffer.
+- Four vertex invocations per quad through the shared `[0, 1, 2, 0, 2, 3]` `u16` index pattern. A
+  mesh above 16,383 quads exceeds what one shared `u16` pattern can address and keeps the six-vertex,
+  non-indexed path instead; real chunks are around two thousand quads.
 
-The mesher emits the record alongside the vertex mesh as of v0.0.9; the renderer still draws the
-vertices until the pool lands. `src/quad.rs` owns the pack/unpack and the CPU mirror of the corner
-rule that the shader will use.
+The mesher emits the record alongside the vertex mesh as of v0.0.9, and the quad renderer uploads it
+to the pool. `src/quad.rs` owns the pack/unpack and the CPU mirror of the corner rule that the shader
+uses; the per-chunk fallback still draws the vertex mesh.
 
 The 8-byte variant in the GPU-driven spec is deferred: it requires flat per-quad light or a second
 light buffer, and it saves 8 MB against a 40 MB target that 12 bytes already meets.
@@ -86,8 +88,9 @@ light buffer, and it saves 8 MB against a 40 MB target that 12 bytes already mee
 
 - One flat array of 12-byte records, divided into pages of 64 quads (768 bytes).
 - A chunk reserves a contiguous run of pages sized to its quad count; a surface chunk of about 2,000
-  quads takes eight pages. The run is first-fit from a coalescing free list keyed by first page, so a
-  chunk address is just `first_quad + vertex_index / 6`.
+  quads takes 32 pages. The run is first-fit from a coalescing free list keyed by first page. A
+  draw-relative vertex maps to `first_quad + vertex_index / 4` on the indexed path and
+  `first_quad + vertex_index / 6` on the non-indexed path.
 - Freed runs wait two frames in a deferred list, then coalesce into the free list. A remesh allocates
   the new run before freeing the old one, so a transition cannot read freed data.
 - Water uses the same pool with a separate range in the chunk record.
@@ -99,25 +102,31 @@ light buffer, and it saves 8 MB against a 40 MB target that 12 bytes already mee
 
 A storage buffer of 48-byte records: `origin: [f32; 4]` (chunk minimum corner plus LOD scale),
 `water_origin: [f32; 4]`, `opaque_first`, `opaque_quads`, `water_first`, and `water_quads`. The
-vertex shader indexes it by the draw's `first_instance` (or by `@builtin(instance_index)` when
-`first_instance` is unavailable). The range fields index the flat quad array; a chunk's range is
+vertex shader indexes it by the draw's `first_instance`; the pool path is disabled when the adapter
+lacks that feature. The range fields index the flat quad array; a chunk's range is
 contiguous and page-aligned. Origins are absolute chunk coordinates today; the camera does not
 subtract its position. Camera-relative origins remain a possible future change and are not
 implemented in this slice.
 
 ### 2.4 Submission
 
-- The CPU frustum-culls visible chunks and writes one non-indexed indirect record per chunk:
-  `vertex_count = 6 * quads`, `instance_count = 1`, `first_vertex = 0`, `first_instance = slot`.
-- One `multi_draw_indirect` for opaque and one for water. Indirect arguments are 16 bytes each;
-  offsets need 4-byte alignment.
-- `INDIRECT_FIRST_INSTANCE` is requested. Without it, the fallback draws each chunk from the pool
-  with the same vertex shader and a per-draw slot uniform, which still removes the per-chunk vertex
-  and index buffers.
+- The CPU frustum-culls visible nodes and writes one indexed indirect record per chunk:
+  `index_count = 6 * quads`, `instance_count = 1`, `first_index = 0`,
+  `base_vertex = first_quad * 4`, and `first_instance = slot`. The draw uses the shared `u16` index
+  buffer, whose `[0, 1, 2, 0, 2, 3]` groups repeat once per quad.
+- A mesh above 16,383 quads cannot use the shared `u16` pattern; that chunk writes a non-indexed
+  record instead: `vertex_count = 6 * quads`, `instance_count = 1`, `first_vertex = 0`, and
+  `first_instance = slot`.
+- One `multi_draw_indexed_indirect` for opaque and one for water cover the normal case. A pass that
+  contains a large mesh also records one `multi_draw_indirect` for those chunks, so it costs one
+  extra draw. Indirect arguments are 20 bytes each for the indexed path and 16 bytes for the
+  non-indexed path; offsets need 4-byte alignment.
+- `INDIRECT_FIRST_INSTANCE` is required by the pool path. Without it, `Renderer::new` disables the
+  pool and uses the existing per-chunk vertex/index path; there is no per-draw slot-uniform variant.
 - `MULTI_DRAW_INDIRECT_COUNT` is not required for this slice. It is Vulkan/DX12 only (Metal's entry
   points are stubs) and is deferred to GPU culling.
-- `multi_draw_indirect` is gated by `DownlevelFlags::INDIRECT_EXECUTION`, present on the desktop
-  backends.
+- `multi_draw_indirect` requires `DownlevelFlags::INDIRECT_EXECUTION`; some Metal adapters do not
+  expose it, so those adapters use the per-chunk fallback.
 
 ### 2.5 Limits and fallback
 
@@ -153,9 +162,10 @@ the budget.
 
 ### 3.4 It unifies water and removes index formats
 
-Water becomes a range in the same pool, not a second set of buffers. With no index buffers there is
-no 16/32-bit split and no per-chunk index allocation; the one shared u16 pattern remains only for the
-fallback path until it is retired.
+Water becomes a range in the same pool, not a second set of buffers. There is no per-chunk index
+allocation: the primary path shares one `u16` pattern for meshes up to 16,383 quads and takes the
+six-vertex non-indexed path above that. The per-chunk fallback keeps its own index buffers until it is
+retired.
 
 ### 3.5 It is the substrate for later work
 
@@ -188,7 +198,7 @@ Compute culling needs the pool and chunk table first.
 | Dynamic uniform offsets for origins | 64 KiB binding, 256-byte alignment, 256 chunks per bind group | Rejected |
 | Compute mesher with resident voxel pool | Adds 170-255 MB VRAM, fixes a non-bottleneck | Deferred |
 | GPU compute culling now | Needs the pool first; `MULTI_DRAW_INDIRECT_COUNT` absent on Metal | Deferred |
-| Per-chunk draws from the pool | Keeps vertex pulling but not the batching win | Fallback |
+| Existing per-chunk vertex/index path | Keeps the pre-pool path; loses vertex pulling and batching | Fallback |
 
 ---
 
@@ -196,10 +206,10 @@ Compute culling needs the pool and chunk table first.
 
 | Counterargument | Disposition |
 |---|---|
-| **Vertex pulling re-reads each quad six times.** | Accepted. Each invocation reads 12 bytes; caches make it bandwidth-neutral against 48 bytes of vertices, and it removes the index fetch. The prototype and the slice A/B both measure it. |
-| **Pool lifetime bugs are the worst failure mode.** | Accepted with qualification. Fixed pages, a free list, and a two-frame age remove fragmentation and most lifetime bugs; the fallback path remains. |
+| **Vertex pulling re-reads each quad several times.** | Accepted. Each invocation reads 12 bytes; caches make it bandwidth-neutral against 48 bytes of vertices. The indexed path uses four invocations and one shared index fetch per quad, while meshes above 16,383 quads use six invocations. The prototype and the slice A/B both measure it. |
+| **Pool lifetime bugs are the worst failure mode.** | Accepted with qualification. Fixed pages and a coalescing free list reduce fragmentation but cannot remove it, because live allocations can leave separated free runs that cannot satisfy a larger contiguous request. A two-frame age protects in-flight reads; the fallback path remains. |
 | **12 bytes costs 8 MB over the 8-byte form.** | Accepted. The target is 40 MB; preserving smooth lighting is worth 8 MB. |
-| **`first_instance` is not universal.** | Accepted. The fallback keeps per-chunk draws from the same pool; only the batching is lost. |
+| **`first_instance` is not universal.** | Accepted. The existing per-chunk vertex/index path is used when it is unavailable; the pool and its batching are lost. |
 | **Page rounding wastes space.** | Accepted. Pages are 64 quads, so a chunk wastes at most 63 quads; the slice measures the total against the 40 MB gate. |
 | **Indirect draws add a CPU args upload.** | Accepted. About 50 KB per frame at 2,500 visible chunks; one write. |
 | **The 256 MiB buffer cap could bite later.** | Accepted with qualification. 38.4 MB now; slabs or a raised limit when the pool grows. |
@@ -220,7 +230,7 @@ Compute culling needs the pool and chunk table first.
 ### 6.2 Negative
 
 - The renderer gains a pool, a chunk table, and indirect argument building.
-- The vertex shader gains bit unpacking and six invocations per quad.
+- The vertex shader gains bit unpacking and either four indexed or six non-indexed invocations per quad.
 - Metal loses count draws; the fallback path must stay correct.
 - The existing per-chunk path remains until the fallback is retired.
 
@@ -254,7 +264,7 @@ ten-draw targets, it preserves per-corner lighting, it removes both the vertex a
 it is the substrate for the LOD and culling work that follows. I acknowledge the pool-complexity,
 vertex-pull bandwidth, and Metal feature gaps, and manage them with fixed pages, an A/B against the
 current path, and a permanent fallback. The exact bit layout, page size, and table record are fixed here; the
-implementation is accepted when v0.0.9 slice 4 passes its gate.
+implementation was accepted when v0.0.9 slice 4 passed its gate.
 
 ---
 

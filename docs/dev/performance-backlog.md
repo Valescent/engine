@@ -16,12 +16,15 @@ Baseline at `0b65acc`:
 | Gate | Value |
 |---|---:|
 | 8 km visible nodes | 1,259 |
-| 8 km horizon-culled sections | 652 of 1,911 in-frustum |
+| 8 km horizon-culled sections | 646 of 1,330 in-frustum (`bench_horizon_sections`) |
 | 8 km visible vertices | 5.15 M |
 | 8 km steady frame / GPU | 0.58-0.69 / 0.323 ms |
 | 8 km hierarchy settle | 6.4-6.9 s |
 | `section build` | ~6.2 ms/job under Tracy |
 | `chunk light` | ~8.7 ms/job under Tracy |
+
+The windowed frame log also prints a 652-of-1,911 horizon counter, but that sample covers a
+different in-frustum set; the benchmark's 646 of 1,330 is the baseline.
 
 ## Steady frame
 

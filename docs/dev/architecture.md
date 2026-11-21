@@ -43,7 +43,7 @@ The engine is a small `winit` and `wgpu` application. This page describes the cu
 - `Renderer` owns the `wgpu` instance, surface, device, queue, surface configuration, chunk and highlight pipelines, camera uniform, the quad-pool renderer, the per-chunk fallback buffers and origin uniforms, the block texture array, and depth attachment.
 - `Camera` owns only look state; it does not read the clock or input devices.
 - `Player` owns feet position, velocity, and ground state; it does not read input devices.
-- `World` owns the packed chunk map and the cached light fields; every stored chunk is non-empty. Generated chunks are inserted through `World::insert_chunk`, and chunk snapshots for meshing are a direct copy of the block array.
+- `World` owns the packed chunk map and the cached light fields; every stored chunk is non-empty. Generated chunks are inserted through `World::insert_chunk`, and chunk snapshots for meshing share the chunk's packed `Arc<Vec<u8>>`; a write copies the storage first (copy-on-write), so a snapshot stays immutable.
 - `hierarchy::Hierarchy` owns the section target, readiness, build queue, hysteresis memory, and eviction decisions. Coarse sections are derived from the seed plus the modified-chunk overlay; they live outside `World` and are never saved.
 - `mesh::build_mesh` is a pure function over a chunk snapshot and its border blocks; `section::generate_section` is a pure function of the seed, level, coordinate, and edit overlay.
 - `mesher::WorkerPool` owns the worker threads for chunk generation, light, mesh, and coarse section jobs; `MeshQueue` owns revisions, pending jobs, built state, and desired LODs.
@@ -116,10 +116,11 @@ See [Coordinates](coordinates.md) for the full conventions, including chunk and 
 - Right-handed, Y-up.
 - A voxel at `(x, y, z)` occupies `[x, x + 1] × [y, y + 1] × [z, z + 1]`.
 - The world stores 32³ chunks as four-bit packed block IDs (16 KiB per chunk, two cells per byte) with
-  a non-air counter and the highest solid local y for horizon culling; `VCHK` still stores one byte per
-  block. Light lives beside the chunk map in a padded `LightField`; the sky plane is always stored, and
-  the block-light plane only when a lamp is in range. Missing chunks are air, and stored chunks never
-  contain `Air`.
+  a non-air counter and cached terrain/water bounds (highest solid, highest water, and lowest column
+  top) for horizon culling; `VCHK` v3 stores sparse four-byte records (three local coordinates and
+  one block id), not one byte per voxel. Light lives beside the chunk map in a padded `LightField`;
+  the sky plane is always stored, and the block-light plane only when a lamp is in range. Missing
+  chunks are air, and stored chunks never contain `Air`.
 - Chunk meshes use chunk-local cells, 12-byte packed vertices (three cell bytes plus the face index, two UV bytes, the texture layer, and packed light/AO), and merge coplanar faces whose world-space neighbour is air, including across chunk borders. Quads emit four vertices and six indices, wound counter-clockwise around the outward normal, so the terrain and water pipelines cull back faces. The shader unpacks cells and normals.
 - LOD0 is the full-resolution greedy mesh; LOD1 and LOD2 are the same mesher over 2x2x2 and 4x4x4 downsamples. Both emit every chunk-boundary face so LOD transitions cannot crack. This per-chunk path is the fallback; its fixed distance bands apply only when the hierarchy is off.
 - Chunks at or within four chunk units of the player use LOD0, chunks at eight or more use LOD1, chunks at sixteen or more use LOD2, and the ranges between keep the current LOD.

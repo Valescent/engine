@@ -9,7 +9,7 @@ nearby options, and the order they are worth building.
 | Backface culling | Current (v0.0.8) |
 | Distance LOD (LOD0/1/2) | Current (v0.0.8) |
 | Hierarchical frustum culling | Proposed |
-| Horizon (heightmap) culling | Implemented behind a flag (v0.0.9) |
+| Horizon (heightmap) culling | Implemented and enabled by default (v0.0.9; `ENGINE_HORIZON_CULL=0` disables it) |
 | Software (raster-based) occlusion | Proposed |
 | Voxel visibility graph (cave flood fill) | Proposed |
 | GPU occlusion queries or a depth pyramid | Proposed |

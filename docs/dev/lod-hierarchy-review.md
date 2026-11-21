@@ -1,18 +1,26 @@
 # LOD hierarchy design review
 
-**Status:** Review of [Seed-native LOD hierarchy](../design/lod-hierarchy.md) and
-[ADR-0014](../decisions/0014-seed-native-lod-hierarchy.md). No hierarchy code yet.
+**Status:** Initial design review of [Seed-native LOD hierarchy](../design/lod-hierarchy.md) and
+[ADR-0014](../decisions/0014-seed-native-lod-hierarchy.md), written before implementation. This page
+is historical: the hierarchy landed in v0.0.9 slices 6-7. See [Post-slice status](#post-slice-status)
+for the current state.
 
-**Baseline:** the v0.0.9 storage/renderer increment is committed at `5c1c89e`. At distance 32
-(9,285 chunks, 1,024 m) the world uses 334.6 MB and the frame is 0.48 ms with 2 draw calls and
-39.31 MiB of geometry reservation.
+**Baseline at review time:** the v0.0.9 storage/renderer increment is committed at `5c1c89e`. At
+distance 32 (9,285 chunks, 1,024 m) the world uses 334.6 MB and the frame is 0.48 ms with 2 draw
+calls and 39.31 MiB of geometry reservation.
 
 ## Verdict
 
-The direction is sound and the first slice is worth building. The fixed `32³` sample budget,
-direct seed generation, and parent-first refinement are the right shape for long-range terrain.
-The design is not yet implementation-ready: five decisions block the first slice, and the memory
-budget does not currently reconcile with the 2 km/400 MB target.
+**Post-slice:** the hierarchy is implemented for levels 1-4 out to 8 km. The settled 2 km view is
+0.466 ms frame / 0.235 ms GPU with 3.58 M vertices and 2 draws; the settled 8 km view is
+0.55-0.56 ms / 0.327 ms GPU with 1,259 visible nodes and 2 draws, after the section horizon removes
+646 of 1,330 in-frustum sections. All five blockers below were resolved during implementation, and L0
+at detail 16 is 85.9 MB resident. Manual acceptance remains open.
+
+**Initial verdict (historical):** the direction is sound and the first slice is worth building. The
+fixed `32³` sample budget, direct seed generation, and parent-first refinement are the right shape
+for long-range terrain. At review time the design was not implementation-ready: five decisions
+blocked the first slice, and the memory budget did not reconcile with the 2 km/400 MB target.
 
 ## What is strong
 
@@ -29,7 +37,9 @@ budget does not currently reconcile with the 2 km/400 MB target.
 - **The risks are written down honestly**, including silhouette disagreement, missing caves/trees,
   approximate light, and the temporary duplication of two LOD systems.
 
-## Blocking decisions before slice 1
+## Blocking decisions before slice 1 (historical)
+
+All five were resolved in the landed implementation; the table records the review as written.
 
 | # | Decision | Why it blocks | Recommendation |
 |---|---|---|---|
@@ -107,7 +117,7 @@ config value from the start (`hierarchy.detail_chunks`). Keep the hierarchy behi
 gate should not start until one level-1 section is generated, meshed, drawn, and compared against
 the current LOD1 meshes without a seam.
 
-## Slice 1 progress
+## Post-slice status
 
 Landed on the `lod-hierarchy` branch:
 
@@ -119,14 +129,14 @@ Landed on the `lod-hierarchy` branch:
 - `light::LightField::coarse`: `15` above the column top, `0` below, no block plane.
 - Tests: coordinate round trips (including negative coordinates), level-1 vs exhaustive seed rule,
   sea-level water, edit raise/clear, coarse light, section mesh shape, and edit-overlap isolation.
-- `bench_section`: one level-1 section generates in 629 µs, meshes in 1,053 µs, and uses 32,768 B of
-  samples + 19,652 B of light for 2,193 quads; the eight LOD1 chunks covering the same volume mesh
-  in 2,360 µs for 3,613 quads and use 288 KiB of samples + light.
+- `bench_section`: one level-1 section generates in 629 µs, meshes in 1,053 µs, and uses 32 KiB of
+  samples + 19.2 KiB of light (19,652 B) for 2,193 quads; the eight LOD1 chunks covering the same
+  volume mesh in 2,360 µs for 3,613 quads and use 281.5 KiB of samples + light.
 - The quad pool keys slots by `NodeKey::{Chunk, Section}`. `ENGINE_HIERARCHY=1` stops L0 at
   `ENGINE_DETAIL_CHUNKS` (default 16), selects level-1 sections from 512-768 m and level-2 sections
   from 768-2,048 m, generates one per frame, and uploads opaque and coarse water geometry. The spawn
-  view settles at 3,871 nodes (767 visible), 3.98 M vertices, 2 draws, 0.264 ms GPU, and 31.49 MB
-  of allocated quads. The camera still looks into the near ridge, so the seam needs a view over
+  view settles at 3,871 nodes (767 visible), 3.98 M vertices, 2 draws, 0.264 ms GPU, and 31.49 MiB
+  of allocated geometry. The camera still looks into the near ridge, so the seam needs a view over
   open water/horizon.
 
 Still blocking the visual gate:
@@ -136,6 +146,7 @@ Still blocking the visual gate:
 
 The earlier blockers are resolved: the hierarchy renderer/streaming path, the L0 detail radius and
 water seam, coarse BFS light, the 2 km selection/memory table, edit invalidation, and far-level
-projected refinement/parent retention. The 8 km gate holds at 0.908 ms frame / 0.780 ms GPU, 2 draws,
-74.62 MB allocated quads, and 94.24 MB reservation; L0 detail 16 is 85.9 MB resident.
+projected refinement/parent retention. The 8 km gate holds at the benchmark's steady state
+(0.55-0.56 ms frame / 0.327 ms GPU, 2 draws, 74.62 MiB allocated geometry, and 94.24 MiB
+reservation); L0 detail 16 is 85.9 MB resident.
 

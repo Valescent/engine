@@ -772,8 +772,8 @@ children stay in the pool but hidden until the swap; one target rebuild runs per
 | Draw calls | 2 |
 | Frame | 0.466 ms |
 | GPU scene | 0.235 ms |
-| Allocated quads | 30.94 MB |
-| Geometry reservation | 39.31 MB |
+| Allocated geometry | 30.94 MiB |
+| Geometry reservation | 39.31 MiB |
 
 - Headless L0 at detail 16: 2,383 chunks, 85.9 MB resident, 4.3 s settle. With the pool reservation
   the 2 km working set is roughly 125 MB, well inside 400 MB.
@@ -805,9 +805,9 @@ the same recursive projected refinement and parent retention as level 2; childre
 | Draw calls | 2 |
 | Frame | 0.55-0.56 ms |
 | GPU scene | 0.327 ms |
-| Allocated quads | 74.62 MB |
-| Visible quads | 9.83 MB |
-| Geometry reservation | 94.24 MB |
+| Allocated geometry | 74.62 MiB |
+| Visible geometry | 9.83 MiB |
+| Geometry reservation | 94.24 MiB |
 | L0 resident (detail 16) | 85.9 MB |
 
 - Far refinement adds about 1,900 settled sections; the 8M pool holds them with ~20 MB of headroom.

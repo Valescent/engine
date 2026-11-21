@@ -38,6 +38,7 @@
 - [Terrain pipeline](design/terrain-pipeline.md)
 - [Terrain interview notes](design/terrain-interview.md)
 - [Seed-native LOD hierarchy](design/lod-hierarchy.md)
+  - [LOD hierarchy design review](dev/lod-hierarchy-review.md)
 - [Terrain reference notes](design/terrain-lessons.md)
 
 # Development

@@ -283,7 +283,7 @@ See [v0.0.8 scope](dev/v0.0.8-scope.md) for the deliverables and the
 
 ## v0.0.9: Far View
 
-**Status:** In progress - implementation and acceptance complete; release PR open.
+**Status:** In progress - implementation complete; the manual acceptance run and release remain.
 
 **Goal:** Hold resident memory, VRAM, and frame cost roughly flat while the visible distance grows to kilometres.
 
@@ -316,8 +316,8 @@ See [v0.0.9 scope](dev/v0.0.9-scope.md) for the deliverables and acceptance crit
 
 #### 4. Metrics
 - [x] Distance-32 target: settled frame around 0.6 ms, 39.31 MiB geometry reservation, 2 draws; geometry target met
-- [x] 2 km gate: 0.466 ms frame, 0.235 ms GPU, 3.58 M vertices, 2 draws, 30.94 MB allocated
-- [x] 8 km gate: 0.55-0.56 ms frame, 0.327 ms GPU, 5.15 M vertices, 1,259 visible nodes, 2 draws, 74.62 MB allocated, 94.24 MB reservation; the section horizon removes 646 of 1,330 in-frustum sections and the hierarchy settles in 5.69 s
+- [x] 2 km gate: 0.466 ms frame, 0.235 ms GPU, 3.58 M vertices, 2 draws, 30.94 MiB allocated geometry
+- [x] 8 km gate: 0.55-0.56 ms frame, 0.327 ms GPU, 5.15 M vertices, 1,259 visible nodes, 2 draws, 74.62 MiB allocated geometry, 94.24 MiB reservation; the section horizon removes 646 of 1,330 in-frustum sections and the hierarchy settles in 5.69 s
 - [x] 325 tests pass (ignored benchmarks run separately); fmt, clippy, doc, typos, and mdbook pass
 
 #### 5. Acceptance and release
