@@ -183,8 +183,12 @@ where an absolute `f32` subtraction would collapse a block to zero.
   (`ColumnView` + `relight_span_view`): skylight can descend losslessly below a border change,
   while lateral light climbs at most `RELIGHT_RADIUS`. A neighbour whose border light properties
   did not change is not relit at all. It then meshes only the new column plus neighbour sections
-  whose border light or border blocks changed. The result is applied only when its 5x5 column
-  snapshot is still `Arc`-identical, so a stale job is retried rather than installed.
+  whose border light or border blocks changed.
+- A build starts only when every column in its read window that the ring will generate is
+  resident, so the snapshot cannot change while the job runs. A mesh-only upgrade waits for and
+  validates the 3x3 it reads; a full light pass still uses the 5x5. The result is applied only
+  when that snapshot is still `Arc`-identical, so a genuinely stale job is retried rather than
+  installed, but a cold fill now reports zero discards.
 - Eviction happens beyond `radius + 2` (`residency::UNLOAD_MARGIN`), farthest first. A column with
   an edit whose section save has not been queued is protected, as is any in-flight column.
 - Saved sections and recovered journal frames are replayed at startup over the section records
@@ -195,6 +199,13 @@ where an absolute `f32` subtraction would collapse a block to zero.
   ~724,000-776,000 quads, ~476-491 MB peak); the 16 cap fills in ~46 s (1,089 columns, ~118 MB, ~863,000 quads,
   ~570-686 MB peak depending on the run). The per-second `terrain ring` info line reports
   resident/ready/fine/coarse counts and bytes.
+- A retry pass on 2026-11-20 waits for each build's in-ring dependency window instead of starting
+  it immediately. On a shared host the radius-12 ring issued 256-260 builds instead of 828-874 and
+  the radius-16 ring 385-409 instead of 1,386-1,441, with `discarded_stale` going from 25-31% to
+  zero. The least-contended fills fell from 35.7 to 27.8 s at radius 12 and from 65.4 to 45.6 s at
+  radius 16; medians over repeated runs were 62.5 -> 60.4 s and 82.4 -> 71.5 s. Steady quads and
+  bytes are unchanged within run-to-run LOD order (724,137 quads / 71.5 MB at 12, 863,440 /
+  118.0 MB at 16). Generation still dominates the fill.
 
 ## Persistence
 

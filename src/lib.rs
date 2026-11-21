@@ -2019,6 +2019,9 @@ struct BuildJob {
     full: bool,
     /// Mesh the centre column at LOD0.
     detailed: bool,
+    /// Half-width of the column window this job reads: `2` for a full light
+    /// pass (centre and neighbour repairs), `1` for a mesh-only upgrade.
+    margin: i32,
     /// Columns within the build window, borrowed by `Arc`.
     columns: ColumnMap,
     /// Light the caller already had, for the section-diff test.
@@ -2051,6 +2054,8 @@ struct GeneratedColumn {
 /// A finished light/mesh pass.
 struct BuiltColumn {
     centre: (i32, i32),
+    /// Half-width of the column window the job read, for the stale test.
+    margin: i32,
     snapshot: ColumnMap,
     light: BTreeMap<(i32, i32), light2::ColumnLight>,
     /// Whole-column replacements (the centre when it was meshed).
@@ -2313,6 +2318,7 @@ fn build_column(job: BuildJob) -> BuiltColumn {
 
     BuiltColumn {
         centre,
+        margin: job.margin,
         snapshot: job.columns,
         light,
         replace,
@@ -2482,6 +2488,41 @@ fn border_section_changed(
     false
 }
 
+/// Half-width of the column window a build job reads.
+///
+/// A full light pass reads the centre's 5x5: it also repairs the eight
+/// neighbours, whose light and meshes depend on the next ring out. A mesh-only
+/// upgrade reads just the centre's 3x3.
+fn build_margin(full: bool) -> i32 {
+    if full { 2 } else { 1 }
+}
+
+/// Whether every column a build reads that the ring will generate is resident.
+///
+/// Columns outside the visible ring are never generated at a still camera, so a
+/// missing one is the permanent world edge the mesher mirrors. Waiting for the
+/// in-ring columns means the snapshot cannot change while the job runs, so a
+/// column is not rebuilt repeatedly while its neighbourhood is still filling.
+fn build_window_ready(
+    columns: &ColumnMap,
+    centre: (i32, i32),
+    margin: i32,
+    player: (i32, i32),
+    radius: i32,
+) -> bool {
+    for dx in -margin..=margin {
+        for dz in -margin..=margin {
+            let key = (centre.0 + dx, centre.1 + dz);
+            if residency::in_ring([key.0, key.1], [player.0, player.1], radius)
+                && !columns.contains_key(&key)
+            {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 /// Copies the columns in `centre +- margin` for a background job.
 fn snapshot_around(columns: &ColumnMap, centre: (i32, i32), margin: i32) -> ColumnMap {
     let mut map = ColumnMap::new();
@@ -2496,10 +2537,15 @@ fn snapshot_around(columns: &ColumnMap, centre: (i32, i32), margin: i32) -> Colu
     map
 }
 
-/// Whether the 5x5 window around `centre` still matches a job's snapshot.
-fn neighbourhood_intact(columns: &ColumnMap, snapshot: &ColumnMap, centre: (i32, i32)) -> bool {
-    for dx in -2..=2 {
-        for dz in -2..=2 {
+/// Whether the `centre +- margin` window still matches a job's snapshot.
+fn neighbourhood_intact(
+    columns: &ColumnMap,
+    snapshot: &ColumnMap,
+    centre: (i32, i32),
+    margin: i32,
+) -> bool {
+    for dx in -margin..=margin {
+        for dz in -margin..=margin {
             let key = (centre.0 + dx, centre.1 + dz);
             match (columns.get(&key), snapshot.get(&key)) {
                 (Some(current), Some(snap)) if Arc::ptr_eq(current, snap) => {}
@@ -3543,8 +3589,18 @@ impl App {
                     .abs()
                     .max((column[1] - player_column.1).abs());
                 let key = (column[0], column[1]);
-                !demo.light.contains_key(&key)
-                    || (ring <= demo.fine_radius && !demo.fine.contains_key(&key))
+                let lit = demo.light.contains_key(&key);
+                // Wait until the columns this job reads are resident, so a
+                // build is not repeatedly discarded while its neighbourhood
+                // fills. A mesh-only upgrade reads one column less.
+                (!lit || (ring <= demo.fine_radius && !demo.fine.contains_key(&key)))
+                    && build_window_ready(
+                        &demo.columns,
+                        key,
+                        build_margin(!lit),
+                        player_column,
+                        demo.view_radius,
+                    )
             })
             .collect();
         let in_flight: BTreeSet<[i32; 2]> = ring.in_flight.iter().map(|&(x, z)| [x, z]).collect();
@@ -3578,6 +3634,7 @@ impl App {
                 .abs()
                 .max((column.1 - player_column.1).abs());
             let detailed = !full || ring_distance <= demo.fine_radius;
+            let margin = build_margin(full);
             let mut previous_light = BTreeMap::new();
             let mut fine_columns = BTreeSet::new();
             for (dx, dz) in COLUMN_NEIGHBOURS {
@@ -3601,7 +3658,8 @@ impl App {
                     centre: column,
                     full,
                     detailed,
-                    columns: snapshot_around(&demo.columns, column, 2),
+                    margin,
+                    columns: snapshot_around(&demo.columns, column, margin),
                     previous_light,
                     fine_columns,
                     materials: Arc::clone(&assets.materials),
@@ -3749,7 +3807,12 @@ impl App {
                 }
                 let mut spawn = None;
                 if let Some(demo) = &mut self.terrain_demo {
-                    if neighbourhood_intact(&demo.columns, &built.snapshot, built.centre) {
+                    if neighbourhood_intact(
+                        &demo.columns,
+                        &built.snapshot,
+                        built.centre,
+                        built.margin,
+                    ) {
                         demo.apply_light(built.light);
                         for (column, sections) in built.replace {
                             demo.fine.insert(column, sections);
@@ -5025,6 +5088,7 @@ mod tests {
             centre: (1, 0),
             full: true,
             detailed: true,
+            margin: 2,
             columns,
             previous_light: BTreeMap::new(),
             fine_columns: BTreeSet::from([(0, 0)]),
@@ -5130,6 +5194,112 @@ mod tests {
                     "neighbour {dx},{dz} section {sy} mesh matches"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn a_build_waits_for_its_in_ring_dependency_window() {
+        let air: Arc<[section::Section; COLUMN_SECTIONS]> =
+            Arc::new(std::array::from_fn(|_| section::Section::uniform(0)));
+        let mut columns = ColumnMap::new();
+        for dx in -2..=2 {
+            for dz in -2..=2 {
+                columns.insert((dx, dz), Arc::clone(&air));
+            }
+        }
+        assert!(build_window_ready(&columns, (0, 0), 2, (0, 0), 2));
+
+        columns.remove(&(2, 0));
+        assert!(
+            !build_window_ready(&columns, (0, 0), 2, (0, 0), 2),
+            "a missing in-ring column defers the build"
+        );
+        assert!(
+            build_window_ready(&columns, (0, 0), 2, (0, 0), 1),
+            "outside the visible ring the absence is the permanent edge"
+        );
+        assert!(
+            build_window_ready(&columns, (0, 0), 1, (0, 0), 2),
+            "a mesh-only upgrade does not read the outer ring"
+        );
+    }
+
+    #[test]
+    fn a_mesh_only_build_ignores_the_outer_ring() {
+        let air: Arc<[section::Section; COLUMN_SECTIONS]> =
+            Arc::new(std::array::from_fn(|_| section::Section::uniform(0)));
+        let mut snapshot = ColumnMap::new();
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                snapshot.insert((dx, dz), Arc::clone(&air));
+            }
+        }
+        let mut current = snapshot.clone();
+        current.insert((2, 0), Arc::clone(&air));
+
+        assert!(neighbourhood_intact(&current, &snapshot, (0, 0), 1));
+        assert!(!neighbourhood_intact(&current, &snapshot, (0, 0), 2));
+    }
+
+    #[test]
+    fn a_complete_window_build_matches_a_full_rebuild() {
+        let seed = 0x5EED;
+        let hydro = pipeline::Terrain::new(seed)
+            .expect("the v1 description compiles")
+            .solve_world_hydro()
+            .expect("the hydrology solves");
+        let columns: ColumnMap = demo_columns_extent(seed, -2, 2, -2, 2, &hydro)
+            .expect("the tile generates")
+            .into_iter()
+            .map(|(key, stack)| (key, Arc::new(stack)))
+            .collect();
+        let centre = (0, 0);
+        assert!(
+            build_window_ready(&columns, centre, 2, centre, 2),
+            "the accepted fixture has its whole dependency window"
+        );
+
+        let materials = Arc::new(demo_materials());
+        let light_table = Arc::new(demo_light_table());
+        let fine_columns = COLUMN_NEIGHBOURS
+            .into_iter()
+            .map(|(dx, dz)| (centre.0 + dx, centre.1 + dz))
+            .collect();
+        let built = build_column(BuildJob {
+            centre,
+            full: true,
+            detailed: true,
+            margin: 2,
+            columns: columns.clone(),
+            previous_light: BTreeMap::new(),
+            fine_columns,
+            materials: Arc::clone(&materials),
+            light_table,
+        });
+        let full_light = demo_column_light(&columns);
+
+        for (dx, dz) in std::iter::once((0, 0)).chain(COLUMN_NEIGHBOURS) {
+            let key = (centre.0 + dx, centre.1 + dz);
+            assert_eq!(
+                built.light[&key], full_light[&key],
+                "column {dx},{dz} light matches a full rebuild"
+            );
+        }
+
+        let expected = demo_fine_column(&columns, &full_light, &materials, centre.0, centre.1);
+        let actual = &built.replace[&centre];
+        assert_eq!(
+            actual.len(),
+            expected.len(),
+            "the centre mesh has the same sections"
+        );
+        for (actual, expected) in actual.iter().zip(&expected) {
+            assert_eq!(actual.origin, expected.origin);
+            assert_eq!(actual.scale, expected.scale);
+            assert_eq!(
+                actual.mesh, expected.mesh,
+                "the accepted centre mesh matches a full remesh"
+            );
         }
     }
 
