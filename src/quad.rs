@@ -1,9 +1,10 @@
 //! The 12-byte quad record from ADR-0015.
 //!
 //! Three `u32` words per merged quad, laid out so the vertex shader can pull
-//! one record per six vertices and reconstruct the corners. The CPU mesher will
-//! emit these once the quad pool lands; until then the packer is exercised by
-//! unit tests only.
+//! one record per six vertices and reconstruct the corners. The CPU mesher
+//! emits one record per merged quad in [`crate::mesh::MeshData::quads`], and
+//! the quad-pool renderer uploads those records and draws them indirectly
+//! through [`ChunkInfo`] ranges.
 //!
 //! Layout:
 //!
@@ -13,7 +14,7 @@
 //! | W1 | `layer:8 ao0:2 ao1:2 ao2:2 ao3:2 c0 sky:4 block:4 c1 sky:4 block:4` |
 //! | W2 | `c2 sky:4 block:4 c3 sky:4 block:4` and 16 spare bits |
 
-#![allow(dead_code)] // The quad-pool slice consumes these; tests pin the layout.
+#![allow(dead_code)] // Layout helpers are pinned by tests; the renderer uses the packed words.
 
 use bytemuck::{Pod, Zeroable};
 use glam::IVec3;

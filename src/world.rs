@@ -111,7 +111,11 @@ pub(crate) struct Chunk {
     water_top: i32,
     /// Highest non-tree solid block's local y, or `-1` when the chunk has none.
     terrain_top: i32,
-    /// Lowest column top of terrain/water, or `-1` when any column is open.
+    /// Lowest terrain column top, or `-1` when any column has no terrain.
+    ///
+    /// Water is deliberately excluded: [`crate::horizon::Horizon`] treats this
+    /// as a conservative occluder, and water-only ocean columns must not hide
+    /// land behind them. Visible-water bounds come from `water_top` instead.
     terrain_min: i32,
 }
 
@@ -160,7 +164,7 @@ impl Chunk {
         self.terrain_top
     }
 
-    /// Lowest column top of terrain/water, or `-1` when any column is open.
+    /// Lowest terrain column top, or `-1` when any column has no terrain.
     pub(crate) fn terrain_min(&self) -> i32 {
         if self.terrain_min == i32::MIN || self.terrain_min == i32::MAX {
             -1
@@ -174,10 +178,11 @@ impl Chunk {
         self.terrain_min == i32::MIN || self.terrain_min == i32::MAX
     }
 
-    /// Recomputes the lowest column top after a bulk fill or an edit.
+    /// Recomputes the lowest terrain column top after a bulk fill or an edit.
     ///
-    /// Every column contributes its highest terrain or water cell. A column with
-    /// neither makes the chunk unsuitable as a horizon occluder.
+    /// Every column contributes its highest terrain cell. Water alone does not
+    /// count, so a water-only column makes the chunk unsuitable as a horizon
+    /// occluder rather than contributing the water surface.
     pub(crate) fn recompute_terrain_min(&mut self) {
         let mut minimum = i32::MAX;
         for x in 0..CHUNK_SIZE {
@@ -186,7 +191,7 @@ impl Chunk {
                 for y in (0..CHUNK_SIZE).rev() {
                     let index = local_index(IVec3::new(x, y, z)).expect("in-chunk cell");
                     let block = packed_block(&self.cells, index);
-                    if block.is_terrain() || block == Block::Water {
+                    if block.is_terrain() {
                         top = y;
                         break;
                     }
@@ -201,7 +206,7 @@ impl Chunk {
         self.terrain_min = if minimum == i32::MAX { -1 } else { minimum };
     }
 
-    /// Stores a minimum computed by the generator's column pass.
+    /// Stores a terrain-only minimum computed by the generator's column pass.
     pub(crate) fn set_terrain_min(&mut self, minimum: i32) {
         self.terrain_min = if minimum < 0 { -1 } else { minimum };
     }
@@ -1525,6 +1530,53 @@ mod tests {
 
         chunk.set_block(IVec3::new(1, 5, 1), Block::Air);
         assert_eq!(chunk.terrain_top(), -1);
+    }
+
+    #[test]
+    fn terrain_min_ignores_water_only_columns() {
+        let mut column = Chunk::default();
+        column.set_block(IVec3::new(0, 5, 0), Block::Water);
+        column.recompute_terrain_min();
+        assert_eq!(
+            column.terrain_min(),
+            -1,
+            "a water-only column is not an occluder"
+        );
+
+        let mut ocean = Chunk::default();
+        for x in 0..CHUNK_SIZE {
+            for z in 0..CHUNK_SIZE {
+                ocean.set_block(IVec3::new(x, 0, z), Block::Water);
+            }
+        }
+        ocean.recompute_terrain_min();
+        assert_eq!(
+            ocean.terrain_min(),
+            -1,
+            "a water-only chunk is not an occluder"
+        );
+    }
+
+    #[test]
+    fn terrain_min_uses_the_lowest_terrain_top_with_water_present() {
+        let mut chunk = Chunk::default();
+        for x in 0..CHUNK_SIZE {
+            for z in 0..CHUNK_SIZE {
+                if x != 0 || z != 0 {
+                    chunk.set_block(IVec3::new(x, 9, z), Block::Stone);
+                }
+            }
+        }
+        chunk.set_block(IVec3::new(0, 5, 0), Block::Stone);
+        // Water sits above the terrain in several columns, including the
+        // lowest one, and must not raise the occluder.
+        chunk.set_block(IVec3::new(0, 6, 0), Block::Water);
+        chunk.set_block(IVec3::new(4, 12, 4), Block::Water);
+        chunk.set_block(IVec3::new(8, 15, 8), Block::Water);
+
+        chunk.recompute_terrain_min();
+        assert_eq!(chunk.terrain_min(), 5);
+        assert_eq!(chunk.water_top(), 15);
     }
 
     #[test]

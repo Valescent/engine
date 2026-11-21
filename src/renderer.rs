@@ -38,6 +38,31 @@ const CLEAR_COLOR: wgpu::Color = wgpu::Color {
 /// into the next warning.
 const POOL_WARNING_INTERVAL: Duration = Duration::from_secs(1);
 
+/// Adapter properties that decide whether the quad-pool section path can run.
+#[allow(clippy::struct_excessive_bools)] // One field per independent adapter gate.
+#[derive(Clone, Copy, Debug)]
+struct PoolCapabilities {
+    legacy_forced: bool,
+    indirect_first_instance: bool,
+    indirect_execution: bool,
+    vertex_storage: bool,
+    storage_buffers_per_stage: u32,
+    storage_buffer_binding_size: u64,
+    max_buffer_size: u64,
+    pool_bytes: u64,
+}
+
+/// Whether the adapter can host the quad pool and its section draws.
+fn pool_supported(capabilities: PoolCapabilities) -> bool {
+    !capabilities.legacy_forced
+        && capabilities.indirect_first_instance
+        && capabilities.indirect_execution
+        && capabilities.vertex_storage
+        && capabilities.storage_buffers_per_stage >= 2
+        && capabilities.storage_buffer_binding_size >= capabilities.pool_bytes
+        && capabilities.max_buffer_size >= capabilities.pool_bytes
+}
+
 /// Per-frame uniform: camera, sky colours, sun, and fog settings.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -237,19 +262,23 @@ impl Capture {
             warn!("surface cannot be copied; frame capture disabled");
             return None;
         }
+        if !matches!(
+            config.format,
+            wgpu::TextureFormat::Bgra8UnormSrgb | wgpu::TextureFormat::Rgba8UnormSrgb
+        ) {
+            warn!(
+                format = ?config.format,
+                "unsupported surface format for frame capture; frame capture disabled"
+            );
+            return None;
+        }
         let delay = std::env::var("ENGINE_CAPTURE_DELAY")
             .ok()
             .and_then(|value| value.parse::<f64>().ok())
             .unwrap_or(20.0)
             .max(0.0);
-        let bytes_per_row = (config.width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
-            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("frame capture"),
-            size: u64::from(bytes_per_row) * u64::from(config.height),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let bytes_per_row = capture_bytes_per_row(config.width);
+        let buffer = create_capture_buffer(device, bytes_per_row, config.height);
         info!(
             path = %path.display(),
             delay_secs = delay,
@@ -268,9 +297,37 @@ impl Capture {
         })
     }
 
+    /// Recreates the readback buffer when the surface extent changes.
+    ///
+    /// The pending deadline is kept, so a resize does not restart the delay and
+    /// the next due frame captures at the new size.
+    fn resize(&mut self, device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) {
+        if self.done || (self.width == config.width && self.height == config.height) {
+            return;
+        }
+        self.width = config.width;
+        self.height = config.height;
+        self.bytes_per_row = capture_bytes_per_row(config.width);
+        self.buffer = create_capture_buffer(device, self.bytes_per_row, self.height);
+    }
+
     fn due(&self) -> bool {
         !self.done && self.started.elapsed() >= self.delay
     }
+}
+
+/// Padded readback row size for a four-byte-per-pixel surface.
+fn capture_bytes_per_row(width: u32) -> u32 {
+    (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT
+}
+
+fn create_capture_buffer(device: &wgpu::Device, bytes_per_row: u32, height: u32) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("frame capture"),
+        size: u64::from(bytes_per_row) * u64::from(height),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    })
 }
 
 impl Renderer {
@@ -309,15 +366,18 @@ impl Renderer {
             CAPACITY_QUADS
         };
         let quad_pool_bytes = pool_bytes(capacity_quads);
-        let quad_supported = !legacy_forced
-            && adapter
+        let quad_supported = pool_supported(PoolCapabilities {
+            legacy_forced,
+            indirect_first_instance: adapter
                 .features()
-                .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
-            && downlevel.contains(wgpu::DownlevelFlags::INDIRECT_EXECUTION)
-            && downlevel.contains(wgpu::DownlevelFlags::VERTEX_STORAGE)
-            && adapter_limits.max_storage_buffers_per_shader_stage >= 2
-            && adapter_limits.max_storage_buffer_binding_size >= quad_pool_bytes
-            && adapter_limits.max_buffer_size >= quad_pool_bytes;
+                .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE),
+            indirect_execution: downlevel.contains(wgpu::DownlevelFlags::INDIRECT_EXECUTION),
+            vertex_storage: downlevel.contains(wgpu::DownlevelFlags::VERTEX_STORAGE),
+            storage_buffers_per_stage: adapter_limits.max_storage_buffers_per_shader_stage,
+            storage_buffer_binding_size: adapter_limits.max_storage_buffer_binding_size,
+            max_buffer_size: adapter_limits.max_buffer_size,
+            pool_bytes: quad_pool_bytes,
+        });
         if quad_supported {
             info!("quad pool render path enabled");
         } else {
@@ -509,6 +569,9 @@ impl Renderer {
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
+        if let Some(capture) = &mut self.capture {
+            capture.resize(&self.device, &self.config);
+        }
         let (depth_texture, depth_view) = create_depth_texture(&self.device, &self.config);
         self.depth_texture = depth_texture;
         self.depth_view = depth_view;
@@ -575,6 +638,14 @@ impl Renderer {
         self.chunks
             .get(&chunk)
             .and_then(|gpu_chunk| gpu_chunk.active)
+    }
+
+    /// Whether the quad-pool path can render hierarchy sections.
+    ///
+    /// When this is false, section uploads would fail forever and the fallback
+    /// chunk renderer does not draw sections, so the app disables hierarchy.
+    pub(crate) fn supports_sections(&self) -> bool {
+        self.quad.is_some()
     }
 
     /// Whether the renderer has the given LOD resident for a chunk.
@@ -1054,6 +1125,10 @@ impl Renderer {
             if !frustum.intersects_aabb(min, min + Vec3::splat(CHUNK_SIZE as f32)) {
                 continue;
             }
+            if horizon.occludes(*chunk) {
+                stats.horizon_culled += 1;
+                continue;
+            }
             if let Some(mesh) = gpu_chunk.active_mesh() {
                 opaque.push((gpu_chunk, mesh));
             }
@@ -1126,6 +1201,9 @@ impl Renderer {
             Ok(surface) => {
                 self.surface = surface;
                 self.surface.configure(&self.device, &self.config);
+                if let Some(capture) = &mut self.capture {
+                    capture.resize(&self.device, &self.config);
+                }
             }
             Err(error) => error!(%error, "failed to recreate the window surface"),
         }
@@ -1142,6 +1220,16 @@ fn write_bmp(
     format: wgpu::TextureFormat,
     data: &[u8],
 ) -> std::io::Result<()> {
+    let rgba = match format {
+        wgpu::TextureFormat::Rgba8UnormSrgb => true,
+        wgpu::TextureFormat::Bgra8UnormSrgb => false,
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("unsupported capture format: {format:?}"),
+            ));
+        }
+    };
     let row_bytes = width.saturating_mul(3);
     let padding = (4 - row_bytes % 4) % 4;
     let image_size = (row_bytes + padding).saturating_mul(height);
@@ -1166,11 +1254,10 @@ fn write_bmp(
         let row = &data[y as usize * bytes_per_row as usize..];
         for x in 0..width {
             let i = x as usize * 4;
-            let (blue, green, red) = match format {
-                wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb => {
-                    (row[i + 2], row[i + 1], row[i])
-                }
-                _ => (row[i], row[i + 1], row[i + 2]),
+            let (blue, green, red) = if rgba {
+                (row[i + 2], row[i + 1], row[i])
+            } else {
+                (row[i], row[i + 1], row[i + 2])
             };
             out.extend_from_slice(&[blue, green, red]);
         }
@@ -1736,6 +1823,111 @@ fn create_overlay_buffer(device: &wgpu::Device) -> (wgpu::Buffer, u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pool_support_requires_indirect_vertex_storage_and_limits() {
+        let supported = PoolCapabilities {
+            legacy_forced: false,
+            indirect_first_instance: true,
+            indirect_execution: true,
+            vertex_storage: true,
+            storage_buffers_per_stage: 2,
+            storage_buffer_binding_size: 1024,
+            max_buffer_size: 1024,
+            pool_bytes: 1024,
+        };
+        assert!(pool_supported(supported));
+        assert!(!pool_supported(PoolCapabilities {
+            legacy_forced: true,
+            ..supported
+        }));
+        assert!(!pool_supported(PoolCapabilities {
+            indirect_first_instance: false,
+            ..supported
+        }));
+        assert!(!pool_supported(PoolCapabilities {
+            indirect_execution: false,
+            ..supported
+        }));
+        assert!(!pool_supported(PoolCapabilities {
+            vertex_storage: false,
+            ..supported
+        }));
+        assert!(!pool_supported(PoolCapabilities {
+            storage_buffers_per_stage: 1,
+            ..supported
+        }));
+        assert!(!pool_supported(PoolCapabilities {
+            storage_buffer_binding_size: 512,
+            ..supported
+        }));
+        assert!(!pool_supported(PoolCapabilities {
+            max_buffer_size: 512,
+            ..supported
+        }));
+    }
+
+    #[test]
+    fn capture_rows_are_aligned_for_four_byte_pixels() {
+        assert_eq!(capture_bytes_per_row(1), 256);
+        assert_eq!(capture_bytes_per_row(64), 256);
+        assert_eq!(capture_bytes_per_row(65), 512);
+    }
+
+    #[test]
+    fn bmp_decodes_rgba_surfaces() {
+        let directory =
+            std::env::temp_dir().join(format!("engine-bmp-rgba-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("capture.bmp");
+        let data = [10, 20, 30, 255, 40, 50, 60, 255];
+        write_bmp(&path, 2, 1, 8, wgpu::TextureFormat::Rgba8UnormSrgb, &data).unwrap();
+
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(&bytes[54..60], &[30, 20, 10, 60, 50, 40]);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn bmp_rejects_formats_it_cannot_decode() {
+        let path = std::env::temp_dir().join(format!("engine-bmp-bad-{}", std::process::id()));
+        let error =
+            write_bmp(&path, 1, 1, 4, wgpu::TextureFormat::Rgba16Float, &[0; 8]).unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn fallback_render_path_honours_the_horizon() {
+        use crate::block::Block;
+        use crate::world::World;
+        use glam::IVec3;
+
+        let mut world = World::default();
+        for x in 64..96 {
+            for z in 0..32 {
+                world.set_block(IVec3::new(x, 10, z), Block::Stone);
+            }
+        }
+        world.set_block(IVec3::new(320, 2, 0), Block::Stone);
+
+        let mut camera = Camera::new(1.0);
+        camera.set_position(Vec3::new(0.0, 10.0, 0.0));
+        camera.set_yaw(std::f32::consts::FRAC_PI_2);
+        camera.set_far_plane(1024.0);
+        let frustum = Frustum::from_view_projection(camera.view_projection());
+        let horizon = Horizon::build(camera.position(), &mut world);
+
+        let chunk = ChunkCoord::new(10, 0, 0);
+        let min = chunk.origin();
+        assert!(frustum.intersects_aabb(min, min + Vec3::splat(CHUNK_SIZE as f32)));
+        assert!(
+            horizon.occludes(chunk),
+            "the fallback path must skip a chunk its frustum keeps but the horizon hides"
+        );
+    }
 
     #[test]
     fn bmp_rows_are_bottom_up_bgr_with_padding() {

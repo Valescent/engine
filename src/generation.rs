@@ -162,7 +162,7 @@ impl Generator {
                         Block::Air
                     };
 
-                    if block.is_terrain() || block == Block::Water {
+                    if block.is_terrain() {
                         let local_y = u8::try_from(world_y - origin.y).expect("local y fits in u8");
                         let index = usize::try_from(lx * CHUNK_SIZE + lz)
                             .expect("column index fits in usize");
@@ -547,6 +547,37 @@ mod tests {
             );
             assert_eq!(chunk_block(&generator, x, SEA_LEVEL, z), Some(Block::Water));
             assert_eq!(chunk_block(&generator, x, SEA_LEVEL + 1, z), None);
+            tested += 1;
+            if tested == 3 {
+                break;
+            }
+        }
+
+        assert!(tested > 0);
+    }
+
+    #[test]
+    fn water_only_generated_chunks_are_not_horizon_occluders() {
+        let generator = Generator::new(7);
+        let mut tested = 0;
+
+        for x in 0..2048 {
+            let z = 0;
+            if generator.height(x, z) >= SEA_LEVEL {
+                continue;
+            }
+            let chunk = ChunkCoord::new(
+                x.div_euclid(CHUNK_SIZE),
+                SEA_LEVEL.div_euclid(CHUNK_SIZE),
+                z.div_euclid(CHUNK_SIZE),
+            );
+            let blocks = generator.generate_chunk(chunk);
+            assert!(blocks.has_water(), "{chunk:?}");
+            assert_eq!(
+                blocks.terrain_min(),
+                -1,
+                "ocean chunk {chunk:?} must not occlude land"
+            );
             tested += 1;
             if tested == 3 {
                 break;

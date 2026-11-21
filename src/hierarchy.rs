@@ -409,11 +409,27 @@ pub(crate) struct Hierarchy {
 impl Hierarchy {
     /// Rebuilds the draw list when the player crosses a 64 m cell or readiness
     /// changed. Returns whether a rebuild happened.
+    ///
+    /// Ready sections are retained only while desired. Use
+    /// [`Self::update_with_resident`] when the renderer still holds uploaded
+    /// sections, so a resident section keeps its readiness across a rebuild.
+    #[cfg(test)]
     pub(crate) fn update(
         &mut self,
         player: Vec3,
         detail_chunks: i32,
         pixels_per_radian: f32,
+    ) -> bool {
+        self.update_with_resident(player, detail_chunks, pixels_per_radian, &HashSet::new())
+    }
+
+    /// Rebuilds the draw list, keeping readiness for desired or resident keys.
+    pub(crate) fn update_with_resident(
+        &mut self,
+        player: Vec3,
+        detail_chunks: i32,
+        pixels_per_radian: f32,
+        resident: &HashSet<SectionKey>,
     ) -> bool {
         let center = cell_at(player, LEVEL1_EXTENT);
         if self.center == Some(center) && !self.dirty {
@@ -421,7 +437,7 @@ impl Hierarchy {
         }
         self.center = Some(center);
         self.dirty = false;
-        self.rebuild(player, detail_chunks, pixels_per_radian);
+        self.rebuild(player, detail_chunks, pixels_per_radian, resident);
         true
     }
 
@@ -523,7 +539,13 @@ impl Hierarchy {
     /// direct level-1 ring, and orders the build queue. The target is
     /// exclusive: a parent that is refined and ready contributes only its
     /// descendants.
-    fn rebuild(&mut self, player: Vec3, detail_chunks: i32, pixels_per_radian: f32) {
+    fn rebuild(
+        &mut self,
+        player: Vec3,
+        detail_chunks: i32,
+        pixels_per_radian: f32,
+        resident: &HashSet<SectionKey>,
+    ) {
         let detail = detail_meters(detail_chunks);
         let l2_inner = LEVEL1_OUTER_METERS.max(detail);
 
@@ -576,7 +598,7 @@ impl Hierarchy {
         let queue = self.finish_queue(&selection.target, &mut selection.units, player);
         let target = sorted_target(selection.target, player);
         let fallbacks = selection.fallbacks;
-        self.prune_states(&target, &fallbacks);
+        self.prune_states(&target, &fallbacks, resident);
         self.retain_refined(&target, &fallbacks);
         for key in &queue {
             self.mark_requested(*key);
@@ -695,16 +717,22 @@ impl Hierarchy {
             .collect()
     }
 
-    /// Drops request/build state for sections that left the selection. Ready
-    /// state survives until eviction so a margin upload is not rebuilt.
+    /// Drops request/build state for sections that left the selection.
+    ///
+    /// Readiness survives only for desired sections and for uploaded sections
+    /// the renderer still holds. An empty section never enters the uploaded
+    /// set, so an off-target `Ready` entry here means the section was empty and
+    /// can be forgotten without a rebuild.
     fn prune_states(
         &mut self,
         target: &[SectionKey],
         fallbacks: &HashMap<SectionKey, Vec<SectionKey>>,
+        resident: &HashSet<SectionKey>,
     ) {
         let desired = desired_keys(target, fallbacks);
-        self.states
-            .retain(|key, state| *state == Readiness::Ready || desired.contains(key));
+        self.states.retain(|key, state| {
+            desired.contains(key) || (*state == Readiness::Ready && resident.contains(key))
+        });
     }
 
     /// Drops hysteresis memory for nodes that are no longer selected.
@@ -1046,6 +1074,36 @@ mod tests {
         assert_eq!(hierarchy.state(key), Readiness::Building);
         hierarchy.mark_ready(key);
         assert!(hierarchy.is_ready(key));
+    }
+
+    #[test]
+    fn off_target_ready_sections_are_forgotten_unless_resident() {
+        let mut hierarchy = selected(PLAYER);
+        let desired = hierarchy.target()[0];
+        let off_target = SectionKey::new(2, IVec3::new(100, 0, 100));
+        let resident_key = SectionKey::new(2, IVec3::new(200, 0, 200));
+        for key in [desired, off_target, resident_key] {
+            hierarchy.mark_ready(key);
+        }
+        let resident: HashSet<SectionKey> = HashSet::from([resident_key]);
+
+        assert!(hierarchy.update_with_resident(PLAYER, DEFAULT_DETAIL_CHUNKS, PP_RAD, &resident));
+
+        assert_eq!(
+            hierarchy.state(desired),
+            Readiness::Ready,
+            "a desired empty section keeps its readiness"
+        );
+        assert_eq!(
+            hierarchy.state(off_target),
+            Readiness::Missing,
+            "an off-target empty section must not accumulate state"
+        );
+        assert_eq!(
+            hierarchy.state(resident_key),
+            Readiness::Ready,
+            "a resident non-empty section keeps its readiness"
+        );
     }
 
     #[test]

@@ -89,6 +89,8 @@ impl Horizon {
     fn add_chunks(&mut self, world: &mut World) {
         world.refresh_terrain_min();
         for (chunk, data) in world.iter_chunks() {
+            // The candidate includes visible water, but the occluder is
+            // terrain-only so an ocean column cannot hide land behind it.
             let visible = data.terrain_top().max(data.water_top());
             if visible < 0 {
                 continue;
@@ -382,6 +384,26 @@ mod tests {
         let mut visible = hidden;
         visible.set_block(IVec3::new(320, 30, 0), Block::Water);
         assert!(!Horizon::build(camera, &mut visible).occludes(target));
+    }
+
+    #[test]
+    fn water_only_columns_do_not_hide_land() {
+        let camera = Vec3::new(0.0, 10.0, 0.0);
+        let target = ChunkCoord::new(10, 0, 0);
+        let mut world = World::default();
+        for x in 64..96 {
+            for z in 0..32 {
+                world.set_block(IVec3::new(x, 40, z), Block::Water);
+            }
+        }
+        world.set_block(IVec3::new(320, 2, 0), Block::Stone);
+
+        let horizon = Horizon::build(camera, &mut world);
+
+        assert!(
+            !horizon.occludes(target),
+            "an ocean wall must not occlude land behind it"
+        );
     }
 
     #[test]

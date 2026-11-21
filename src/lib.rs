@@ -599,6 +599,22 @@ impl App {
         event_loop.exit();
     }
 
+    /// Turns the section hierarchy off and drops its pending work.
+    ///
+    /// The fallback chunk renderer cannot draw sections, so a hierarchy that
+    /// cannot upload would mark every section dirty forever.
+    fn disable_hierarchy(&mut self, reason: &str) {
+        warn!(%reason, "hierarchy disabled; rendering chunks only");
+        self.hierarchy = false;
+        self.sections = Hierarchy::default();
+        self.section_cursor = 0;
+        self.sections_uploaded.clear();
+        self.sections_in_flight.clear();
+        self.section_jobs.clear();
+        self.section_bounds.clear();
+        self.hierarchy_cell = None;
+    }
+
     /// Invalidates the edited chunks and queues urgent light work.
     ///
     /// Meshes wait for the accepted light field, then rebuild through the
@@ -1417,10 +1433,11 @@ impl App {
         if due {
             self.hierarchy_cell = Some(cell);
             self.hierarchy_at = Instant::now();
-            if self.sections.update(
+            if self.sections.update_with_resident(
                 self.player.position,
                 self.detail_chunks,
                 DEFAULT_PIXELS_PER_RADIAN,
+                &self.sections_uploaded,
             ) {
                 self.section_cursor = 0;
                 self.evict_sections();
@@ -1717,6 +1734,9 @@ impl ApplicationHandler for App {
             };
 
         info!(width = size.width, height = size.height, "window ready");
+        if self.hierarchy && !renderer.supports_sections() {
+            self.disable_hierarchy("quad pool render path unavailable");
+        }
         self.window = Some(window.clone());
         self.renderer = Some(renderer);
         self.mesher = Some(create_pool());
@@ -2435,6 +2455,33 @@ mod tests {
         assert_eq!(app.camera.far_plane(), 9_216.0);
         assert_eq!(app.camera.fog_end(), 9_200.0);
         assert!(app.camera.fog_end() > 8_192.0);
+    }
+
+    #[test]
+    fn disabling_hierarchy_clears_pending_section_work() {
+        let mut app = App::new(demo_world());
+        app.hierarchy = true;
+        let key = SectionKey::new(1, IVec3::ZERO);
+        app.sections.mark_ready(key);
+        app.sections_uploaded.insert(key);
+        app.sections_in_flight.insert(key);
+        app.section_jobs.insert(key, 7);
+        app.section_bounds.insert(key, SectionBounds::default());
+        app.section_cursor = 3;
+        app.hierarchy_cell = Some(IVec2::ZERO);
+
+        app.disable_hierarchy("test adapter");
+
+        assert!(!app.hierarchy);
+        assert_eq!(app.sections.target().len(), 0);
+        assert_eq!(app.sections.queue().len(), 0);
+        assert_eq!(app.sections.state(key), hierarchy::Readiness::Missing);
+        assert!(app.sections_uploaded.is_empty());
+        assert!(app.sections_in_flight.is_empty());
+        assert!(app.section_jobs.is_empty());
+        assert!(app.section_bounds.is_empty());
+        assert_eq!(app.section_cursor, 0);
+        assert!(app.hierarchy_cell.is_none());
     }
 
     #[test]

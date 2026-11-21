@@ -386,7 +386,7 @@ const FACE_NORMALS: [IVec3; 6] = [
 pub(crate) struct MeshData {
     pub(crate) vertices: Vec<Vertex>,
     pub(crate) indices: Vec<u32>,
-    /// The ADR-0015 records for the same quads; unused by the current renderer.
+    /// The ADR-0015 records for the same quads, uploaded by the quad-pool renderer.
     pub(crate) quads: Vec<QuadRecord>,
 }
 

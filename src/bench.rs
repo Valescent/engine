@@ -21,9 +21,9 @@ use crate::block::Block;
 use crate::generation::Generator;
 use crate::light::{self, LightSnapshot};
 use crate::mesh::{BorderBlocks, ChunkSnapshot, Lod, MeshData, build_mesh, build_water_mesh};
-use crate::section::{SECTION_SIZE, SectionEdits, SectionKey, generate_section};
+use crate::section::{SectionEdits, SectionKey, generate_section};
 use crate::streaming::Streaming;
-use crate::world::{CHUNK_COLUMN, CHUNK_SIZE, Chunk, ChunkCoord, World};
+use crate::world::{CHUNK_COLUMN, CHUNK_SIZE, CHUNK_STORAGE_BYTES, Chunk, ChunkCoord, World};
 
 /// One timed fixture at one mesh pass.
 #[derive(Debug)]
@@ -221,9 +221,12 @@ fn chunk_for(fixture: Fixture) -> Chunk {
     for x in 0..CHUNK_SIZE {
         for z in 0..CHUNK_SIZE {
             let top = if fixture == Fixture::Flat { 12 } else { 18 };
+            // Restrict water to one half of the chunk so the 3x3 patch has a
+            // shoreline between water columns and dry shore.
+            let water_column = fixture == Fixture::Water && x < CHUNK_SIZE / 2;
             for y in 0..CHUNK_SIZE {
                 let block = if y > top {
-                    if fixture == Fixture::Water && y <= 24 {
+                    if water_column && y <= 24 {
                         Block::Water
                     } else {
                         Block::Air
@@ -275,6 +278,9 @@ mod tests {
 
         let section = generate_section(&generator, key, &edits);
         let light = section.light();
+        for _ in 0..2 {
+            std::hint::black_box(section.mesh(Some(&light)));
+        }
         let mut mesh_times = Vec::new();
         let mut mesh = MeshData::default();
         for _ in 0..10 {
@@ -331,7 +337,7 @@ mod tests {
             percentile(&mesh_times, 0.95),
             mesh.quads.len(),
             mesh.vertices.len(),
-            usize::try_from(SECTION_SIZE * SECTION_SIZE * SECTION_SIZE).unwrap(),
+            CHUNK_STORAGE_BYTES,
             light.resident_bytes(),
             lod1_quads,
             lod1_vertices,
@@ -375,6 +381,9 @@ mod tests {
 
         let section = generate_section(&generator, key, &edits);
         let light = section.light();
+        for _ in 0..2 {
+            std::hint::black_box(section.mesh(Some(&light)));
+        }
         let mut mesh_times = Vec::new();
         let mut mesh = MeshData::default();
         for _ in 0..10 {
@@ -384,6 +393,9 @@ mod tests {
         }
         mesh_times.sort_by(f64::total_cmp);
 
+        for _ in 0..2 {
+            std::hint::black_box(section.water_mesh(Some(&light)));
+        }
         let mut water_times = Vec::new();
         let mut water = MeshData::default();
         for _ in 0..10 {
@@ -578,6 +590,17 @@ mod tests {
             .find(|row| row.fixture == "water" && row.pass == "water")
             .expect("water fixture");
         assert!(water.quads > 0);
+        let water_chunk = chunk_for(Fixture::Water);
+        assert_eq!(
+            water_chunk.block(IVec3::new(0, 20, 0)),
+            Block::Water,
+            "the water fixture needs an ocean column"
+        );
+        assert_eq!(
+            water_chunk.block(IVec3::new(CHUNK_SIZE - 1, 20, 0)),
+            Block::Air,
+            "the water fixture needs a dry shore column"
+        );
         let surface = rows
             .iter()
             .find(|row| row.fixture == "surface" && row.lod == "lod0" && row.pass == "opaque")
