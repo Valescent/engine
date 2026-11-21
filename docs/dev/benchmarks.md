@@ -539,14 +539,54 @@ still take ~10 ms. Worker time per column is therefore roughly:
 - **Generation dominates.** `pipeline::Terrain::section` builds all 1,024 columns of one section,
   and `generate_column` asks for all 12 sections, so a column regenerates its base columns 12 times.
   That path is unchanged here (it is in `crates/terrain-core/src/pipeline.rs`).
-- **Stale builds still waste work.** About 30% of build results are discarded because a column in
-  their 5x5 neighbour snapshot arrived while the job ran; they are retried. Narrow relight makes
-  each discarded job much cheaper, but it is still the second-largest build cost.
+- **Stale builds used to waste work.** About 25-31% of build results were discarded because a
+  column in their 5x5 neighbour snapshot arrived while the job ran; they were retried. The retry
+  pass below removes that waste without changing the accepted result.
 - **Steady state is unchanged in kind.** `terrain ring`: wanted 1089, resident 1089, ready 1089,
   fine 25, coarse 197, lod2 96, in_flight 0. Both binaries vary by ~0.2% in quads/bytes between
   runs because LOD apply order differs (the baseline itself measured 863,160 and 863,188 quads);
   the relight path is pinned by `narrow_border_relight_matches_a_full_relight`, which compares every
   neighbour's light and every affected section mesh against a full relight on seed `0x5EED`.
+
+### 2026-11-20 retry elimination
+
+A build used to start as soon as its column was generated. It snapshotted the 5x5 column window
+and threw the whole result away if any column in that window arrived while it ran, so a cold fill
+discarded 25-31% of build results and repeated the light/mesh work. Builds now wait until every
+column in their read window that the ring will generate is resident (`build_window_ready`); a
+mesh-only upgrade waits for and validates the 3x3 it reads, while a full light pass still uses the
+5x5. The build result itself is unchanged, so an accepted result is still exactly what the old
+code would install.
+
+Measured with the same command and a fresh `world/`; fill is `column ring streaming starts` to
+`terrain ring complete`, and builds issued are `terrain column ready` plus
+`discarded stale terrain build`. The host was shared during these runs, so the fill ranges are
+wide; use the medians, not one sample.
+
+| Radius | Runs | Builds issued | `discarded_stale` | Stale rate | Fill median (range) |
+|---|---:|---:|---:|---:|---:|
+| 12, before | 3 | 828 / 842 / 874 | 238 / 239 / 268 | 28.4-30.7% | 62.5 s (35.7-83.3) |
+| 12, after | 4 | 256-260 | 0 | **0%** | 60.4 s (27.8-106.1) |
+| 16, before | 2 | 1,386 / 1,441 | 341 / 379 | 24.6-26.3% | 82.4 s (65.4-99.4) |
+| 16, after | 2 | 385 / 409 | 0 | **0%** | 71.5 s (45.6-97.5) |
+
+The least-contended samples fell from 35.7 to 27.8 s at radius 12 and from 65.4 to 45.6 s at
+radius 16. Fill is still generation-bound, so wall-clock gains are smaller than the retry count
+suggests and noisy on a shared host.
+
+Steady ring after the change matches the baseline (settled `terrain ring` line, after the
+throttled coarse rebuild):
+
+| Radius | Steady quads | Steady bytes |
+|---|---:|---:|
+| 12, before | 724,045-724,074 | 71,599,892-71,649,276 |
+| 12, after | 724,137 | 71,453,172-71,502,324 |
+| 16, before | 863,429 | 118,199,402 |
+| 16, after | 863,440 | 117,920,962-118,035,650 |
+
+The retry waste is gone: radius 12 issues about 70% fewer build jobs and radius 16 about 72%
+fewer. `a_complete_window_build_matches_a_full_rebuild` checks the accepted light and centre mesh
+against a full rebuild on seed `0x5EED`.
 
 | Date | Commit | Machine | Rust | Command | Workers | Result |
 |---|---|---|---|---|---|---|
@@ -556,6 +596,7 @@ still take ~10 ms. Worker time per column is therefore roughly:
 | 2026-11-17 | collision query fix | Ryzen 5 7600, 6C/12T, RTX 4060, Windows 11 | 1.99.1 | `ENGINE_NO_VSYNC=1 cargo run --release` | n/a | 4370 FPS mean, 0.229 ms frame; `player update` 0.9 us |
 | 2026-11-17 | `15ae656` | Ryzen 5 7600, 6C/12T, Windows 11 | 1.99.1 | `cargo bench --bench pool_sim -- both` (x2) | rayon 12, micropool 11 | `over = 0`; checksums identical; micropool saturated p99 4,249 / 4,397 vs rayon 4,309 / 8,581 |
 | 2026-11-17 | v0.0.5 + `rayon-pool` | Ryzen 5 7600, 6C/12T, RTX 4060, Windows 11 | 1.99.1 | `ENGINE_MESH_POOL=rayon` release captures | micropool 11 / rayon 12 | 72 startup jobs; per-job 887-970 us (micropool) vs 951-968 us (rayon); no frame difference |
+| 2026-11-20 | `dcab0ab` before / retry change after | Ryzen 5 7600, 6C/12T, RTX 4060, Windows 11 | 1.99.1 | `TERRAIN_DEMO=1 ENGINE_SEED=12345 ENGINE_NO_VSYNC=1` release | 12 | `discarded_stale` 25-31% -> 0; builds 874 -> 257 at 12 and 1,441 -> 385 at 16; steady quads/bytes unchanged |
 
 Add new runs below the latest row. Keep the raw output with the entry when possible.
 
