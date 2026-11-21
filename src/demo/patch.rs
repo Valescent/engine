@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use glam::{IVec2, IVec3, Vec3};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::content;
 use crate::description;
@@ -442,7 +442,7 @@ impl TerrainDemo {
         self.select_lod(self.lod_column);
     }
 
-    /// Rebuilds every coarse region whose 2x2 column group touches `columns`.
+    /// Rebuilds every coarse region whose `2x2` column group touches `columns`.
     pub(crate) fn refresh_coarse_around(&mut self, columns: &BTreeSet<(i32, i32)>) {
         let mut regions = BTreeSet::new();
         for &(cx, cz) in columns {
@@ -459,10 +459,12 @@ impl TerrainDemo {
         }
         // A rim or LOD0-boundary region is clipped, so use the mask the current
         // band selection assigns to each base rather than requiring all four.
+        // Clipped regions are keyed by their anchor column, so a group that
+        // touches a changed column but is anchored elsewhere is added too.
         let bands = coarse_bands(&self.columns, self.lod_column, self.view_radius);
         let mut masks: BTreeMap<(i32, i32), BTreeSet<(i32, i32)>> = BTreeMap::new();
         for &region in &regions {
-            let columns = bands.partial.get(&region).cloned().unwrap_or_else(|| {
+            let mask = bands.partial.get(&region).cloned().unwrap_or_else(|| {
                 BTreeSet::from([
                     region,
                     (region.0 + 1, region.1),
@@ -470,23 +472,34 @@ impl TerrainDemo {
                     (region.0 + 1, region.1 + 1),
                 ])
             });
-            masks.insert(region, columns);
+            masks.insert(region, mask);
+        }
+        let touched = |point: (i32, i32)| {
+            columns
+                .iter()
+                .any(|&(cx, cz)| (point.0 - cx).abs() <= 3 && (point.1 - cz).abs() <= 3)
+        };
+        for (&anchor, mask) in &bands.partial {
+            if touched(anchor) || mask.iter().any(|&column| touched(column)) {
+                masks.insert(anchor, mask.clone());
+            }
         }
         let rebuilt =
             demo_coarse_regions_masked(&self.columns, &self.materials, &self.pack, &masks);
-        self.coarse
-            .retain(|section| !regions.contains(&(section.origin[0] / 32, section.origin[2] / 32)));
-        for (&region, sections) in &rebuilt {
-            if regions.contains(&region) {
+        self.coarse.retain(|section| {
+            !masks.contains_key(&(section.origin[0] / 32, section.origin[2] / 32))
+        });
+        for (&origin, sections) in &rebuilt {
+            if masks.contains_key(&origin) {
                 self.coarse.extend(sections.iter().cloned());
             }
         }
         self.coarse.sort_by_key(|section| section.origin);
         self.partial_columns
-            .retain(|base, _| !regions.contains(base));
-        for (&base, columns) in &bands.partial {
-            if regions.contains(&base) {
-                self.partial_columns.insert(base, columns.clone());
+            .retain(|anchor, _| !masks.contains_key(anchor));
+        for (&anchor, mask) in &bands.partial {
+            if masks.contains_key(&anchor) {
+                self.partial_columns.insert(anchor, mask.clone());
             }
         }
     }
@@ -501,7 +514,9 @@ impl TerrainDemo {
     /// LOD1 regions in `coarse` cover the positive rim and the LOD0-boundary
     /// leftovers that no complete 2x2 square can own; they follow the same
     /// far/near rules as a complete region, so a clipped region never overlaps
-    /// an LOD2 square.
+    /// an LOD2 square. A clipped region whose aligned base stays inside the
+    /// LOD0 band is anchored at a drawn column instead, so its origin never
+    /// collides with a fine section.
     pub(crate) fn select_lod(&mut self, player_column: (i32, i32)) {
         self.lod_column = player_column;
         let cutoff = self.fine_radius + TERRAIN_DEMO_FINE_MARGIN;
@@ -552,6 +567,25 @@ impl TerrainDemo {
                 active.push(section.clone());
             }
         }
+        // The bands are built to be disjoint, but a throttled coarse set can be
+        // one or two ring layers stale. Resolve any residual claim on one
+        // origin deterministically: the finer scale wins, then the smaller
+        // origin. Fine is 1, LOD1 is 2, and LOD2 is 4, so this keeps the most
+        // detailed section and never drops a whole band from the upload.
+        active.sort_by_key(|section| (section.origin, section.scale));
+        active.dedup_by(|later, kept| {
+            if later.origin == kept.origin {
+                debug!(
+                    origin = ?kept.origin,
+                    kept_scale = kept.scale,
+                    dropped_scale = later.scale,
+                    "two LOD bands claimed one section origin; keeping the finer"
+                );
+                true
+            } else {
+                false
+            }
+        });
         active.sort_by_key(|section| section.origin);
         self.sections = active;
         // Drop fine meshes that fell out of the transition buffer. Added
@@ -867,106 +901,4 @@ pub(crate) fn demo_light_table() -> light2::LightTable {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::time::{Duration, Instant};
-
-    use glam::{IVec2, IVec3, Vec3};
-
-    use crate::description;
-    use crate::player::BlockSource;
-    use crate::raycast::raycast_where;
-    use crate::renderer;
-
-    use super::super::persist::build_terrain_demo;
-
-    #[test]
-    fn demo_raycast_hits_the_spawn_surface() {
-        let demo = build_terrain_demo(0x5EED, IVec2::new(2, -3), 0).expect("the v1 terrain builds");
-        let origin = demo.spawn + Vec3::Y * 20.0;
-        let hit = raycast_where(|cell| demo.is_solid(cell), origin, -Vec3::Y, 64.0)
-            .expect("a downward ray hits the patch");
-        #[allow(clippy::cast_possible_truncation)]
-        let expected = demo.spawn.y.round() as i32 - 1;
-        assert_eq!(hit.block.y, expected);
-        assert_eq!(hit.normal, IVec3::Y);
-    }
-
-    #[test]
-    #[allow(clippy::cast_possible_truncation)]
-    fn demo_edit_breaks_a_block_and_relights() {
-        let mut demo =
-            build_terrain_demo(0x5EED, IVec2::new(2, -3), 0).expect("the v1 terrain builds");
-        let cell = IVec3::new(
-            demo.spawn.x.floor() as i32,
-            demo.spawn.y.round() as i32 - 1,
-            demo.spawn.z.floor() as i32,
-        );
-        let air = demo.air;
-        assert_ne!(demo.block_at(cell), Some(air), "the spawn block is solid");
-        assert!(demo.edit(cell, air), "the break changes the patch");
-        assert_eq!(demo.block_at(cell), Some(air));
-        assert!(!demo.edit(cell, air), "a no-op edit reports no change");
-        assert!(demo.quads > 0, "the patch still meshes after the edit");
-    }
-
-    #[test]
-    #[allow(clippy::cast_possible_truncation)]
-    fn terrain_demo_builds_packed_quads_for_one_column() {
-        let started = Instant::now();
-        let demo = build_terrain_demo(0x5EED, IVec2::new(2, -3), 0).expect("the v1 terrain builds");
-        let elapsed = started.elapsed();
-        eprintln!(
-            "terrain demo: {} sections, {} quads, {elapsed:?}",
-            demo.sections.len(),
-            demo.quads
-        );
-
-        assert!(
-            demo.sections
-                .iter()
-                .any(|section| !section.mesh.opaque.is_empty()),
-            "at least one section emits opaque quads"
-        );
-        assert_eq!(demo.origin_column, IVec2::new(2, -3));
-
-        // Collision is live: the block under the spawn is solid and the spawn
-        // sits exactly one block above it.
-        let feet = IVec3::new(
-            demo.spawn.x.floor() as i32,
-            demo.spawn.y.round() as i32 - 1,
-            demo.spawn.z.floor() as i32,
-        );
-        let solid = demo.solid_blocks_in(feet, feet);
-        assert_eq!(
-            solid,
-            vec![feet],
-            "the spawn column stands on solid terrain"
-        );
-        for section in &demo.sections {
-            for coordinate in section.origin {
-                assert_eq!(
-                    coordinate.rem_euclid(i32::try_from(description::SECTION_SIZE).unwrap()),
-                    0,
-                    "origins are section-aligned multiples of 32"
-                );
-            }
-            for raw in section
-                .mesh
-                .opaque
-                .iter()
-                .chain(&section.mesh.cutout)
-                .chain(&section.mesh.water)
-            {
-                let quad = renderer::decode_quad(raw.bits());
-                assert!(quad.normal <= 7, "reserved quad normal code");
-            }
-        }
-        // A gross-regression guard, not a benchmark: the suite runs tests in
-        // parallel on shared cores, and one column also pays the first
-        // whole-world hydrology solve on this thread.
-        assert!(
-            elapsed < Duration::from_secs(10),
-            "one-column demo build took {elapsed:?}"
-        );
-    }
-}
+mod tests;

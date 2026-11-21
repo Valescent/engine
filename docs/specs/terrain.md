@@ -1480,6 +1480,9 @@ contradict a MUST elsewhere in this document.
   selects the spec's 1,089-column ring (~118 MB, ~686 MB peak, ~79 s), which is the pressure point
   against the 600 MB target. LOD2 remains, with complete far squares at the default and an LOD1
   fallback when the ring is too small for any; the world model behind it is the shipped one.
+  Clipped LOD1 regions at the LOD0 boundary are anchored at a drawn column when their aligned
+  `2x2` base would otherwise reuse a fine section origin; a clipped `2x2` footprint can still
+  bound a finer section, but the two never share an origin or draw the same column.
 - **`terrain-gen map` is ASCII-only** for now: `--seed --from --size --cell` prints a height/water grid and `--json` rows. PNG modes, `tEXt` metadata, legends, and `--ndjson` are deferred.
 - **The full tooling bundle is deferred.** `verify --report <dir>` writes a manifest plus JSON/text; the zip bundle is not implemented. `calibrate-blend` and the PR counter gate are implemented.
 - **Biome blend calibration passes and the dither is wired.** `terrain-gen calibrate-blend
