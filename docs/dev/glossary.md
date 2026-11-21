@@ -48,7 +48,7 @@ something else; it does not ban the word everywhere.
 | [hierarchy target](../design/lod-hierarchy.md#62-node-selection) | Exclusive section draw list: no parent and descendant are selected together; retained fallbacks cover nodes that are still building. | Current (v0.0.9) | selection, when it is ambiguous |
 | [hidden child](architecture.md#rendering-resources) | Ready coarse child kept uploaded but not drawn while its retained parent is drawn. | Current (v0.0.9) | culled child |
 | [frustum culling](../specs/v0.0.5.md) | Skipping chunks and sections outside the camera's view frustum. | Current (v0.0.5) | occlusion culling |
-| [occlusion culling](../specs/v0.0.5.md) | Skipping geometry hidden behind other geometry. The conservative horizon pass covers column-top occlusion for L0 chunks only. | Deferred beyond horizon (v0.0.9) | frustum culling |
+| [occlusion culling](../specs/v0.0.5.md) | Skipping geometry hidden behind other geometry. The conservative horizon pass covers column-top occlusion for L0 chunks and uploaded hierarchy sections. | Deferred beyond horizon (v0.0.9) | frustum culling |
 | [horizon culling](architecture.md#rendering-resources) | Conservative occlusion test using minimum column tops. On by default; `ENGINE_HORIZON_CULL=0` disables it. | Current (v0.0.9) | occlusion culling, when you mean the general case |
 | [async meshing](../specs/v0.0.5.md) | Building meshes on worker threads instead of the main thread. | Current (v0.0.5) | parallel rendering |
 | [worker pool](../decisions/0009-micropool-for-chunk-workers.md) | Threads that run meshing and generation jobs; micropool is selected. | Current (v0.0.5) | thread pool, when you mean this engine component |

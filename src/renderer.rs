@@ -156,6 +156,8 @@ impl GpuChunk {
 pub(crate) struct FrameStats {
     pub(crate) total_chunks: u32,
     pub(crate) visible_chunks: u32,
+    /// Slots skipped by the horizon pass this frame.
+    pub(crate) horizon_culled: u32,
     pub(crate) visible_vertices: u64,
     pub(crate) draw_calls: u32,
     /// Vertex and index bytes resident for every built LOD and water mesh.

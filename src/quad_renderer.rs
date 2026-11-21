@@ -672,9 +672,12 @@ impl QuadRenderer {
             if !frustum.intersects_aabb(min, min + Vec3::splat(extent)) {
                 continue;
             }
-            if let NodeKey::Chunk(chunk) = key
-                && horizon.occludes(chunk)
-            {
+            let occluded = match key {
+                NodeKey::Chunk(chunk) => horizon.occludes(chunk),
+                NodeKey::Section(section) => horizon.occludes_section(section),
+            };
+            if occluded {
+                stats.horizon_culled += 1;
                 continue;
             }
             let mut visible = false;

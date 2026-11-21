@@ -125,6 +125,15 @@ pub(crate) fn overlapping_sections_for_chunk(chunk: ChunkCoord) -> Vec<SectionKe
     overlapping_sections(min, max)
 }
 
+/// Conservative visible bounds of one section, in world metres.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct SectionBounds {
+    /// Lowest solid terrain top, used as the horizon occluder height.
+    pub(crate) min_top: f32,
+    /// Highest visible top, including water, used as the candidate height.
+    pub(crate) max_top: f32,
+}
+
 /// One generated `32³` sample grid.
 #[derive(Debug)]
 pub(crate) struct Section {
@@ -154,6 +163,48 @@ impl Section {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.samples.is_empty()
+    }
+
+    /// Lowest solid terrain top and highest visible surface in the section, in
+    /// world metres.
+    ///
+    /// Water is visible but transparent, so it raises `max_top` without
+    /// lowering the occluder height. All-air columns are ignored.
+    #[allow(clippy::cast_precision_loss)]
+    pub(crate) fn bounds(&self) -> Option<SectionBounds> {
+        let scale = self.key.scale();
+        let origin = self.key.origin();
+        let mut min_top = f32::INFINITY;
+        let mut max_top = f32::NEG_INFINITY;
+        for x in 0..SECTION_SIZE {
+            for z in 0..SECTION_SIZE {
+                let mut visible = f32::NEG_INFINITY;
+                let mut terrain = f32::NEG_INFINITY;
+                for y in (0..SECTION_SIZE).rev() {
+                    let block = self.samples.block(IVec3::new(x, y, z));
+                    if block == Block::Air {
+                        continue;
+                    }
+                    let top = (origin.y + (y + 1) * scale) as f32;
+                    if visible == f32::NEG_INFINITY {
+                        visible = top;
+                    }
+                    if block.is_solid() {
+                        terrain = top;
+                    }
+                    if visible != f32::NEG_INFINITY && terrain != f32::NEG_INFINITY {
+                        break;
+                    }
+                }
+                max_top = max_top.max(visible);
+                if terrain != f32::NEG_INFINITY {
+                    min_top = min_top.min(terrain);
+                }
+            }
+        }
+        max_top
+            .is_finite()
+            .then_some(SectionBounds { min_top, max_top })
     }
 
     /// A snapshot of the sample grid for the mesher.
@@ -735,6 +786,17 @@ mod tests {
         // Baseline from the per-column light path at 86f99d9. Light changes
         // vertex values, not which faces exist or how they greedily merge.
         assert_eq!(mesh.quads.len(), 2234);
+    }
+
+    #[test]
+    fn bounds_use_the_lowest_and_highest_visible_columns() {
+        let mut section = Section::new(SectionKey::new(1, IVec3::ZERO));
+        assert!(section.bounds().is_none());
+        section.set_sample(IVec3::new(0, 0, 0), Block::Stone);
+        section.set_sample(IVec3::new(1, 3, 1), Block::Water);
+        let bounds = section.bounds().expect("visible columns");
+        assert_eq!(bounds.min_top, 2.0);
+        assert_eq!(bounds.max_top, 8.0);
     }
 
     #[test]

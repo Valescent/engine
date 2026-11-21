@@ -796,22 +796,59 @@ the same recursive projected refinement and parent retention as level 2; childre
 
 | Settled 8 km view (west, spawn) | Value |
 |---|---:|
-| Cold target / settled target | 2,836 / 4,990 |
-| Nodes with geometry | 7,023 |
-| Visible nodes | 1,908 |
-| Visible vertices | 9.40 M |
+| Cold target / settled target | 2,836 / 4,908 |
+| Sections with bounds | 4,641 |
+| Sections in the frustum | 1,330 |
+| Sections removed by the horizon | 646 |
+| Visible nodes (sections + L0 chunks) | 1,259 |
+| Visible vertices | 5.15 M |
 | Draw calls | 2 |
-| Frame | 0.908 ms |
-| GPU scene | 0.780 ms |
+| Frame | 0.577 ms |
+| GPU scene | 0.323 ms |
 | Allocated quads | 74.62 MB |
+| Visible quads | 9.83 MB |
 | Geometry reservation | 94.24 MB |
 | L0 resident (detail 16) | 85.9 MB |
 
 - Far refinement adds about 1,900 settled sections; the 8M pool holds them with ~20 MB of headroom.
   Two uploads were deferred during startup and none after.
+- The section horizon removes 646 of 1,330 in-frustum sections (-49%), 4.25 M of 9.40 M visible
+  vertices (-45%), and 8.10 MB of visible geometry (-45%) at the spawn view. GPU scene time falls
+  from 0.780 ms to 0.323 ms.
+- `bench_horizon_sections` reproduces the target and culling counts without a window:
+  `target=4908 bounds=4641 frustum=1330 occluded=646 visible=684`.
 - The 8 km gate holds: 60 FPS, under 500 MB working set, and 2 draws.
 - The far view extends the water and land to the horizon; the hierarchy 2 km and L0 controls agree on
   the visible island and cave patches.
+
+#### Section horizon
+
+`Horizon` now takes the uploaded sections' conservative bounds. For each section, `Section::bounds`
+reports the lowest **solid** column top and the highest visible top (water is visible but transparent,
+so it raises the candidate height without acting as an occluder). An occluder is inserted at the
+section's farthest point with the lowest top; a candidate is tested at its nearest point with the
+highest top across every azimuth bin its footprint covers. Sections nearer than 256 m, sections
+without bounds, and sections whose footprint spans half the bins are kept. The result is
+quality-neutral: a section is removed only when even its highest surface is below the nearer terrain
+across its whole angular footprint.
+
+#### Parallel section builds
+
+Coarse sections now run as `Job::Section` on the shared worker pool instead of the main thread. The
+main thread builds the edit overlay and uploads finished opaque/water meshes and horizon bounds; up
+to eight section jobs are in flight. Timing from `generated world ready` to `target=4908 queue=0`:
+
+| | Main-thread build | Pooled build |
+|---|---:|---:|
+| Hierarchy settle (4,908 sections) | 22.9 s | **6.4-6.9 s** |
+| First logged frame | 4.14 ms | **2.36 ms** |
+| Settled frame / GPU | 0.69 / 0.33 ms | 0.58-0.69 / 0.32-0.33 ms |
+
+- The pool has 11 workers and also serves chunk generation, light, and meshing. Section jobs use
+  `Priority::Background`, so a saturated chunk load delays them rather than blocking the frame.
+- The steady frame is unchanged, as expected: the work moved off the main thread, it did not shrink.
+- The full 4,908-section target still meshes to the same 5.15 M visible vertices after the horizon
+  pass. `sections_in_flight` in the frame log shows the queue draining.
 
 ### Section foundation (level 1)
 

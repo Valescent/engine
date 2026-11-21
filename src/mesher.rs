@@ -13,6 +13,7 @@ use crate::light::{LightField, LightJob, LightResult, LightSnapshot};
 use crate::mesh::{
     BorderBlocks, ChunkSnapshot, Lod, MeshData, build_mesh, build_water_mesh, select_lod,
 };
+use crate::section::{SectionBounds, SectionEdits, SectionKey, generate_section};
 use crate::world::{ChunkCoord, DirtyChunks, World};
 
 thread_local! {
@@ -52,11 +53,22 @@ pub(crate) struct MeshJob {
     pub(crate) light: Option<Arc<LightField>>,
 }
 
+/// One coarse hierarchy section build.
+pub(crate) struct SectionJob {
+    pub(crate) key: SectionKey,
+    /// Monotonic id that lets the app drop results invalidated by an edit or
+    /// a newer build of the same section.
+    pub(crate) job: u64,
+    pub(crate) seed: u64,
+    pub(crate) edits: SectionEdits,
+}
+
 /// One unit of work for the pool.
 pub(crate) enum Job {
     Mesh(MeshJob),
     Light(LightJob),
     Generate(GenJob),
+    Section(SectionJob),
 }
 
 /// A finished job of either kind.
@@ -65,6 +77,7 @@ pub(crate) enum JobResult {
     Mesh(MeshResult),
     Light(LightResult),
     Generate(GenResult),
+    Section(SectionResult),
 }
 
 /// One finished mesh, tagged so stale results can be discarded.
@@ -75,6 +88,17 @@ pub(crate) struct MeshResult {
     pub(crate) kind: MeshKind,
     pub(crate) revision: u64,
     pub(crate) mesh: MeshData,
+    pub(crate) elapsed: Duration,
+}
+
+/// One finished coarse section: both meshes and its horizon bounds.
+#[derive(Debug)]
+pub(crate) struct SectionResult {
+    pub(crate) key: SectionKey,
+    pub(crate) job: u64,
+    pub(crate) opaque: MeshData,
+    pub(crate) water: MeshData,
+    pub(crate) bounds: Option<SectionBounds>,
     pub(crate) elapsed: Duration,
 }
 
@@ -214,6 +238,28 @@ pub(crate) fn create_pool() -> Arc<dyn MeshPool> {
     Arc::new(WorkerPool::new())
 }
 
+/// Generates, lights, and meshes one coarse section.
+pub(crate) fn build_section(job: &SectionJob) -> SectionResult {
+    let started = Instant::now();
+    let generator = Generator::new(job.seed);
+    let section = generate_section(&generator, job.key, &job.edits);
+    let bounds = section.bounds();
+    let (opaque, water) = if section.is_empty() {
+        (MeshData::default(), MeshData::default())
+    } else {
+        let light = section.light();
+        (section.mesh(Some(&light)), section.water_mesh(Some(&light)))
+    };
+    SectionResult {
+        key: job.key,
+        job: job.job,
+        opaque,
+        water,
+        bounds,
+        elapsed: started.elapsed(),
+    }
+}
+
 /// Runs one job and reports its result, then releases the in-flight slot.
 fn run_job(job: &Job, sender: &Sender<JobResult>, counter: &AtomicUsize) {
     name_worker_thread();
@@ -255,6 +301,10 @@ fn run_job(job: &Job, sender: &Sender<JobResult>, counter: &AtomicUsize) {
                 light: crate::light::compute(&job.snapshot, job.chunk),
                 elapsed: started.elapsed(),
             })
+        }
+        Job::Section(job) => {
+            profiling::scope!("section build");
+            JobResult::Section(build_section(job))
         }
     };
     let _ = sender.send(result);
@@ -495,43 +545,54 @@ impl MeshQueue {
     }
 }
 
-/// Accepts up to `budget` current meshes and returns them with the total worker
-/// time of every result received, stale ones included.
+/// Finished jobs collected in one frame.
+#[derive(Debug, Default)]
+pub(crate) struct FinishedWork {
+    pub(crate) meshes: Vec<MeshResult>,
+    pub(crate) lights: Vec<LightResult>,
+    pub(crate) generations: Vec<GenResult>,
+    pub(crate) sections: Vec<SectionResult>,
+    /// Total worker time of every result received, stale ones included.
+    pub(crate) worker_time: Duration,
+}
+
+/// Accepts up to `budget` current meshes and sections.
 pub(crate) fn collect_finished(
     queue: &mut MeshQueue,
     pool: &dyn MeshPool,
     budget: usize,
-) -> (Vec<MeshResult>, Vec<LightResult>, Vec<GenResult>, Duration) {
-    let mut meshes = Vec::new();
-    let mut lights = Vec::new();
-    let mut generations = Vec::new();
-    let mut worker_time = Duration::ZERO;
-    while meshes.len() < budget {
+) -> FinishedWork {
+    let mut finished = FinishedWork::default();
+    while finished.meshes.len() < budget && finished.sections.len() < budget {
         let Some(result) = pool.try_recv() else {
             break;
         };
         match result {
             JobResult::Mesh(result) => {
-                worker_time += result.elapsed;
+                finished.worker_time += result.elapsed;
                 if queue.accept(&result) {
-                    meshes.push(result);
+                    finished.meshes.push(result);
                 }
             }
             JobResult::Light(result) => {
-                worker_time += result.elapsed;
+                finished.worker_time += result.elapsed;
                 if queue.accept_light(&result) {
-                    lights.push(result);
+                    finished.lights.push(result);
                 }
             }
             JobResult::Generate(result) => {
-                worker_time += result.elapsed;
+                finished.worker_time += result.elapsed;
                 if queue.accept_generation(&result) {
-                    generations.push(result);
+                    finished.generations.push(result);
                 }
+            }
+            JobResult::Section(result) => {
+                finished.worker_time += result.elapsed;
+                finished.sections.push(result);
             }
         }
     }
-    (meshes, lights, generations, worker_time)
+    finished
 }
 
 #[cfg(test)]
@@ -781,14 +842,55 @@ mod tests {
             );
         }
 
-        let (first, lights, generations, worker_time) = collect_finished(&mut queue, &pool, 2);
-        assert_eq!(first.len(), 2);
-        assert!(lights.is_empty());
-        assert!(generations.is_empty());
-        assert_eq!(worker_time, Duration::from_millis(2));
+        let first = collect_finished(&mut queue, &pool, 2);
+        assert_eq!(first.meshes.len(), 2);
+        assert!(first.lights.is_empty());
+        assert!(first.generations.is_empty());
+        assert!(first.sections.is_empty());
+        assert_eq!(first.worker_time, Duration::from_millis(2));
 
-        let (second, _, _, _) = collect_finished(&mut queue, &pool, 2);
-        assert_eq!(second.len(), 2);
+        let second = collect_finished(&mut queue, &pool, 2);
+        assert_eq!(second.meshes.len(), 2);
+    }
+
+    #[test]
+    fn a_section_job_builds_both_meshes_and_bounds() {
+        let key = SectionKey::new(1, glam::IVec3::ZERO);
+        let job = SectionJob {
+            key,
+            job: 0,
+            seed: 42,
+            edits: SectionEdits::new(),
+        };
+
+        let result = build_section(&job);
+
+        assert_eq!(result.key, key);
+        assert_ne!(result.opaque.quads.len(), 0);
+        assert!(result.bounds.is_some());
+    }
+
+    #[test]
+    fn section_results_are_collected_within_the_budget() {
+        let pool = FakePool::default();
+        let key = SectionKey::new(1, glam::IVec3::ZERO);
+        pool.results
+            .lock()
+            .unwrap()
+            .push(JobResult::Section(SectionResult {
+                key,
+                job: 0,
+                opaque: MeshData::default(),
+                water: MeshData::default(),
+                bounds: None,
+                elapsed: Duration::ZERO,
+            }));
+        let mut queue = MeshQueue::default();
+
+        let finished = collect_finished(&mut queue, &pool, 2);
+
+        assert_eq!(finished.sections.len(), 1);
+        assert_eq!(finished.sections[0].key, key);
     }
 
     #[test]
@@ -796,13 +898,13 @@ mod tests {
         let pool = FakePool::default();
         let mut queue = MeshQueue::default();
 
-        let (results, lights, generations, worker_time) = collect_finished(&mut queue, &pool, 2);
+        let finished = collect_finished(&mut queue, &pool, 2);
 
-        assert!(results.is_empty());
-        assert!(lights.is_empty());
-        assert!(generations.is_empty());
-        assert!(generations.is_empty());
-        assert!(worker_time.is_zero());
+        assert!(finished.meshes.is_empty());
+        assert!(finished.lights.is_empty());
+        assert!(finished.generations.is_empty());
+        assert!(finished.sections.is_empty());
+        assert!(finished.worker_time.is_zero());
     }
 
     #[test]

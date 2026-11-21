@@ -55,12 +55,15 @@ use frustum::Frustum;
 use generation::Generator;
 use hierarchy::{DEFAULT_DETAIL_CHUNKS, DEFAULT_PIXELS_PER_RADIAN, Hierarchy};
 use mesh::Lod;
-use mesher::{MeshKind, MeshPool, MeshQueue, Priority, collect_finished, create_pool};
+use mesher::{
+    Job, MeshKind, MeshPool, MeshQueue, Priority, SectionJob, SectionResult, build_section,
+    collect_finished, create_pool,
+};
 use player::{Player, PlayerInput};
 use raycast::{RaycastHit, raycast};
 pub use renderer::RendererError;
 use renderer::{FrameStats, Renderer};
-use section::{SectionKey, generate_section, overlapping_sections_for_chunk};
+use section::{SectionBounds, SectionKey, overlapping_sections_for_chunk};
 use sky::Sky;
 use streaming::Streaming;
 use voxel::build_highlight_mesh;
@@ -74,6 +77,8 @@ const WORLD_CHUNKS: &str = "world/chunks";
 const CONFIG_FILE: &str = "config.toml";
 const MAX_COLUMNS_PER_FRAME: usize = 2;
 const MAX_SECTION_BUILDS_PER_FRAME: usize = 1;
+/// Coarse section jobs kept in flight on the shared worker pool.
+const MAX_SECTION_JOBS: usize = 8;
 const INTERACTION_DISTANCE: f32 = 6.0;
 const SPAWN_X: i32 = 32;
 const SPAWN_Z: i32 = 32;
@@ -450,11 +455,15 @@ struct App {
     auto_strafe: bool,
     hierarchy: bool,
     detail_chunks: i32,
-    hierarchy_generator: Option<Generator>,
     /// Parent-retained target, readiness, and build queue.
     sections: Hierarchy,
     section_cursor: usize,
     sections_uploaded: HashSet<SectionKey>,
+    sections_in_flight: HashSet<SectionKey>,
+    /// Job id expected for each in-flight section build.
+    section_jobs: HashMap<SectionKey, u64>,
+    next_section_job: u64,
+    section_bounds: HashMap<SectionKey, SectionBounds>,
     hierarchy_at: Instant,
     hierarchy_cell: Option<IVec2>,
     horizon: horizon::Horizon,
@@ -565,10 +574,13 @@ impl App {
             auto_strafe: std::env::var("ENGINE_AUTO_STRAFE").is_ok_and(|value| value == "1"),
             hierarchy: std::env::var("ENGINE_HIERARCHY").is_ok_and(|value| value == "1"),
             detail_chunks: DEFAULT_DETAIL_CHUNKS,
-            hierarchy_generator: None,
             sections: Hierarchy::default(),
             section_cursor: 0,
             sections_uploaded: HashSet::new(),
+            sections_in_flight: HashSet::new(),
+            section_jobs: HashMap::new(),
+            next_section_job: 0,
+            section_bounds: HashMap::new(),
             hierarchy_at: Instant::now(),
             hierarchy_cell: None,
             horizon: horizon::Horizon::disabled(),
@@ -659,6 +671,9 @@ impl App {
         }
         for key in &keys {
             self.sections_uploaded.remove(key);
+            self.section_bounds.remove(key);
+            self.section_jobs.remove(key);
+            self.sections_in_flight.remove(key);
         }
         self.sections.mark_dirty(keys);
     }
@@ -849,20 +864,19 @@ impl App {
 
     fn upload_finished_meshes(&mut self, pool: &dyn MeshPool) {
         profiling::scope!("mesh upload");
-        let (results, lights, generations, rebuild) =
-            collect_finished(&mut self.queue, pool, MAX_UPLOADS_PER_FRAME);
-        let rebuild_ms = rebuild.as_secs_f64() * 1000.0;
+        let finished = collect_finished(&mut self.queue, pool, MAX_UPLOADS_PER_FRAME);
+        let rebuild_ms = finished.worker_time.as_secs_f64() * 1000.0;
         self.stats.rebuild_ms += rebuild_ms;
         self.stats.last_rebuild_ms = rebuild_ms;
 
-        for light in lights {
+        for light in finished.lights {
             self.level_work.insert(light.chunk);
             self.world.set_light_field(light.chunk, light.light);
         }
 
         let chunk_directory = save_directory(self.stress);
-        let had_generations = !generations.is_empty();
-        for generation in generations {
+        let had_generations = !finished.generations.is_empty();
+        for generation in finished.generations {
             self.stats.generated_columns += 1;
             self.stats.generation_ms += generation.elapsed.as_secs_f64() * 1000.0;
             let mut loaded = true;
@@ -893,7 +907,7 @@ impl App {
         if had_generations {
             self.admit_deferred_light();
         }
-        for result in &results {
+        for result in &finished.meshes {
             self.mark_column_ready(chunk_column(result.chunk));
         }
 
@@ -901,7 +915,7 @@ impl App {
             return;
         };
         let mut upload_ms = 0.0;
-        for result in &results {
+        for result in &finished.meshes {
             let started = Instant::now();
             let desired = self.queue.desired(result.chunk);
             let uploaded = match result.kind {
@@ -950,6 +964,9 @@ impl App {
         }
         self.stats.upload_ms += upload_ms;
         self.stats.last_upload_ms = upload_ms;
+        for result in &finished.sections {
+            self.upload_section_result(result);
+        }
     }
 
     fn target_hit(&self) -> Option<RaycastHit> {
@@ -1122,7 +1139,8 @@ impl App {
         }
 
         if self.hierarchy {
-            self.ensure_hierarchy();
+            let pool = self.mesher.clone();
+            self.ensure_hierarchy(pool.as_deref());
         }
 
         let overlay = self.show_overlay.then(|| {
@@ -1135,15 +1153,14 @@ impl App {
             profiling::scope!("frustum");
             Frustum::from_view_projection(self.camera.view_projection())
         };
+        if self.horizon_cull && self.horizon_at.elapsed() >= Duration::from_millis(250) {
+            self.rebuild_horizon();
+        }
         let slow_render = Instant::now();
         if let Some(renderer) = &mut self.renderer {
             renderer.set_camera(&self.camera);
             renderer.set_sky(&self.sky.sample(), self.unlit);
             renderer.set_overlay(overlay.as_deref());
-            if self.horizon_cull && self.horizon_at.elapsed() >= Duration::from_millis(250) {
-                self.horizon = horizon::Horizon::build(self.camera.position(), &mut self.world);
-                self.horizon_at = Instant::now();
-            }
             self.stats.totals = renderer.render(&frustum, &self.horizon);
         }
         let render_ms = slow_render.elapsed().as_secs_f64() * 1000.0;
@@ -1181,6 +1198,8 @@ impl App {
                 fps = frames / seconds,
                 frame_ms = seconds * 1000.0 / frames,
                 visible_chunks = self.stats.totals.visible_chunks,
+                horizon_culled = self.stats.totals.horizon_culled,
+                sections_in_flight = self.sections_in_flight.len(),
                 total_chunks = self.stats.totals.total_chunks,
                 visible_vertices = self.stats.totals.visible_vertices,
                 draw_calls = self.stats.totals.draw_calls,
@@ -1297,14 +1316,81 @@ impl App {
         }
     }
 
-    /// Selects, generates, and uploads hierarchy sections, one per frame.
+    /// Rebuilds the horizon from the near chunks and, with the hierarchy on,
+    /// the uploaded sections' visible bounds.
+    fn rebuild_horizon(&mut self) {
+        let camera = self.camera.position();
+        let built = if self.hierarchy {
+            horizon::Horizon::build_with_sections(camera, &mut self.world, &self.section_bounds)
+        } else {
+            horizon::Horizon::build(camera, &mut self.world)
+        };
+        self.horizon = built;
+        self.horizon_at = Instant::now();
+    }
+
+    /// Uploads one finished section and advances its hierarchy state.
+    ///
+    /// Returns whether the section became drawable. An upload that cannot get
+    /// pool or slot space is marked dirty so it is rebuilt later.
+    fn upload_section_result(&mut self, result: &SectionResult) -> bool {
+        let key = result.key;
+        if self.section_jobs.get(&key) != Some(&result.job) {
+            return false;
+        }
+        self.section_jobs.remove(&key);
+        self.sections_in_flight.remove(&key);
+        if let Some(bounds) = result.bounds {
+            self.section_bounds.insert(key, bounds);
+        }
+        let ready = if result.opaque.quads.is_empty() && result.water.quads.is_empty() {
+            true
+        } else {
+            let Some(renderer) = &mut self.renderer else {
+                return false;
+            };
+            let mut uploaded = true;
+            if !result.opaque.quads.is_empty() {
+                uploaded = renderer.upload_section(key, &result.opaque);
+            }
+            if uploaded && !result.water.quads.is_empty() {
+                uploaded = renderer.upload_section_water(key, &result.water);
+            }
+            if uploaded {
+                self.sections_uploaded.insert(key);
+            }
+            uploaded
+        };
+        if ready {
+            self.sections.mark_ready(key);
+            if self.sections_uploaded.len().is_multiple_of(100) {
+                debug!(
+                    sections = self.sections_uploaded.len(),
+                    "hierarchy progress"
+                );
+            }
+        } else {
+            debug!(
+                ?key,
+                uploaded = self.sections_uploaded.len(),
+                "section upload deferred: pool or slot limit"
+            );
+            self.sections_uploaded.remove(&key);
+            self.sections.mark_dirty([key]);
+        }
+        ready
+    }
+
+    /// Selects, generates, and uploads hierarchy sections.
     ///
     /// The recursive parent-retained target is rebuilt when the player crosses
     /// a 64 m cell or a readiness change can swap a node for its in-world
     /// children. Uploads outside the target (plus a margin) are evicted, except
     /// for ancestor fallbacks and parents whose children are still building.
+    /// With a worker pool, up to [`MAX_SECTION_JOBS`] generation/light/mesh jobs
+    /// run in the background and their results are uploaded on the main thread.
     #[allow(clippy::cast_possible_truncation)]
-    fn ensure_hierarchy(&mut self) {
+    fn ensure_hierarchy(&mut self, pool: Option<&dyn MeshPool>) {
         if !self.hierarchy {
             return;
         }
@@ -1334,6 +1420,7 @@ impl App {
                 debug!(
                     target = self.sections.target().len(),
                     queue = self.sections.queue().len(),
+                    in_flight = self.sections_in_flight.len(),
                     detail = self.detail_chunks,
                     "hierarchy target"
                 );
@@ -1343,73 +1430,66 @@ impl App {
         if self.renderer.is_none() {
             return;
         }
+        if let Some(pool) = pool {
+            self.submit_section_jobs(pool, seed);
+            return;
+        }
+
         let mut built = 0;
         while built < MAX_SECTION_BUILDS_PER_FRAME {
             let Some(key) = self.sections.next_build(&mut self.section_cursor) else {
                 break;
             };
             self.sections.mark_building(key);
-
-            // Build the overlay, the light, and the meshes before borrowing
-            // the renderer, so the world and renderer are never borrowed
-            // mutably at the same time.
             let edits =
                 self.world
                     .section_edits(key, self.save_directory.as_deref(), &self.saved_chunks);
-            let section = {
-                let generator = self
-                    .hierarchy_generator
-                    .get_or_insert_with(|| Generator::new(seed));
-                generate_section(generator, key, &edits)
-            };
-            let ready = if section.is_empty() {
-                true
-            } else {
-                let light = section.light();
-                let opaque = section.mesh(Some(&light));
-                let water = section.water_mesh(Some(&light));
-                if opaque.quads.is_empty() && water.quads.is_empty() {
-                    true
-                } else {
-                    let renderer = self
-                        .renderer
-                        .as_mut()
-                        .expect("the renderer was checked before the build loop");
-                    let mut uploaded = true;
-                    if !opaque.quads.is_empty() {
-                        uploaded = renderer.upload_section(key, &opaque);
-                    }
-                    if uploaded && !water.quads.is_empty() {
-                        uploaded = renderer.upload_section_water(key, &water);
-                    }
-                    if uploaded {
-                        self.sections_uploaded.insert(key);
-                    }
-                    uploaded
-                }
-            };
-            if ready {
-                self.sections.mark_ready(key);
+            let job = self.next_section_job;
+            self.next_section_job = self.next_section_job.wrapping_add(1);
+            let result = build_section(&SectionJob {
+                key,
+                job,
+                seed,
+                edits,
+            });
+            self.section_jobs.insert(key, job);
+            self.sections_in_flight.insert(key);
+            if self.upload_section_result(&result) {
                 built += 1;
-                if self.sections_uploaded.len().is_multiple_of(100) {
-                    debug!(
-                        sections = self.sections_uploaded.len(),
-                        cursor = self.section_cursor,
-                        "hierarchy progress"
-                    );
-                }
             } else {
-                // The renderer ran out of quad pages or slots; retry this
-                // section next frame instead of skipping it. A dirty section
-                // never touched the queue cursor, so re-marking is the only
-                // safe retry. Far rings can hit this first when they exhaust
-                // the unchanged pool.
-                debug!(
-                    ?key,
-                    uploaded = self.sections_uploaded.len(),
-                    "section upload deferred: pool or slot limit"
-                );
-                self.sections_uploaded.remove(&key);
+                break;
+            }
+        }
+    }
+
+    /// Fills the worker pool with coarse section jobs.
+    fn submit_section_jobs(&mut self, pool: &dyn MeshPool, seed: u64) {
+        while self.sections_in_flight.len() < MAX_SECTION_JOBS
+            && pool.can_submit(Priority::Background)
+        {
+            let Some(key) = self.sections.next_build(&mut self.section_cursor) else {
+                break;
+            };
+            if self.sections_in_flight.contains(&key) {
+                continue;
+            }
+            let edits =
+                self.world
+                    .section_edits(key, self.save_directory.as_deref(), &self.saved_chunks);
+            let job = self.next_section_job;
+            self.next_section_job = self.next_section_job.wrapping_add(1);
+            let job = SectionJob {
+                key,
+                job,
+                seed,
+                edits,
+            };
+            let job_id = job.job;
+            if pool.submit(Job::Section(job), Priority::Background) {
+                self.sections.mark_building(key);
+                self.sections_in_flight.insert(key);
+                self.section_jobs.insert(key, job_id);
+            } else {
                 self.sections.mark_dirty([key]);
                 break;
             }
@@ -1433,6 +1513,9 @@ impl App {
         }
         for key in &stale {
             self.sections_uploaded.remove(key);
+            self.section_bounds.remove(key);
+            self.section_jobs.remove(key);
+            self.sections_in_flight.remove(key);
             self.sections.forget(*key);
         }
     }
@@ -1754,7 +1837,9 @@ mod tests {
 
     use super::*;
     use crate::generation::GenResult;
-    use mesher::{Job, JobResult, MeshResult};
+    use crate::mesh::MeshData;
+    use crate::section::generate_section;
+    use mesher::{Job, JobResult, MeshResult, SectionResult};
 
     #[test]
     fn mouse_look_requires_capture_and_focus() {
@@ -1932,6 +2017,28 @@ mod tests {
                     self.mesh_jobs.fetch_add(1, Ordering::Relaxed);
                 }
                 Job::Generate(_) => {}
+                Job::Section(job) => {
+                    let generator = Generator::new(job.seed);
+                    let section = generate_section(&generator, job.key, &job.edits);
+                    let bounds = section.bounds();
+                    let (opaque, water) = if section.is_empty() {
+                        (MeshData::default(), MeshData::default())
+                    } else {
+                        let light = section.light();
+                        (section.mesh(Some(&light)), section.water_mesh(Some(&light)))
+                    };
+                    self.results
+                        .lock()
+                        .unwrap()
+                        .push(JobResult::Section(SectionResult {
+                            key: job.key,
+                            job: job.job,
+                            opaque,
+                            water,
+                            bounds,
+                            elapsed: Duration::ZERO,
+                        }));
+                }
             }
             true
         }
@@ -1981,6 +2088,32 @@ mod tests {
 
         assert_eq!(app.world.block(target), Block::Air);
         assert!(!app.queue.light_is_current(chunk));
+    }
+
+    #[test]
+    fn a_stale_section_result_is_dropped() {
+        let mut app = App::with_world(World::default(), false);
+        let key = SectionKey::new(1, IVec3::ZERO);
+        app.section_jobs.insert(key, 7);
+        app.sections_in_flight.insert(key);
+        app.sections.mark_building(key);
+
+        let stale = SectionResult {
+            key,
+            job: 6,
+            opaque: MeshData::default(),
+            water: MeshData::default(),
+            bounds: None,
+            elapsed: Duration::ZERO,
+        };
+        assert!(!app.upload_section_result(&stale));
+        assert_ne!(app.sections.state(key), hierarchy::Readiness::Ready);
+        assert!(app.sections_in_flight.contains(&key));
+
+        let fresh = SectionResult { job: 7, ..stale };
+        assert!(app.upload_section_result(&fresh));
+        assert_eq!(app.sections.state(key), hierarchy::Readiness::Ready);
+        assert!(!app.sections_in_flight.contains(&key));
     }
 
     #[test]

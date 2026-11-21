@@ -397,6 +397,83 @@ mod tests {
         }
     }
 
+    /// Counts the settled hierarchy target and how many frustum-visible
+    /// sections the section horizon removes at the spawn view.
+    #[test]
+    #[ignore = "benchmark; run with cargo test --release --lib bench_horizon_sections -- --ignored --nocapture"]
+    fn bench_horizon_sections() {
+        use std::collections::HashMap;
+
+        use crate::camera::Camera;
+        use crate::frustum::Frustum;
+        use crate::hierarchy::{DEFAULT_DETAIL_CHUNKS, DEFAULT_PIXELS_PER_RADIAN, Hierarchy};
+        use crate::horizon::Horizon;
+        use crate::player::EYE_HEIGHT;
+
+        let generator = Generator::new(42);
+        let (x, z, height) = generator.spawn_column();
+        let spawn = Vec3::new(x as f32 + 0.5, (height + 1) as f32, z as f32 + 0.5);
+        let mut hierarchy = Hierarchy::default();
+        for _ in 0..16 {
+            hierarchy.update(spawn, DEFAULT_DETAIL_CHUNKS, DEFAULT_PIXELS_PER_RADIAN);
+            let queue = hierarchy.queue().to_vec();
+            if queue.is_empty() {
+                break;
+            }
+            for key in queue {
+                hierarchy.mark_ready(key);
+            }
+        }
+        hierarchy.update(spawn, DEFAULT_DETAIL_CHUNKS, DEFAULT_PIXELS_PER_RADIAN);
+        let target = hierarchy.target().to_vec();
+
+        let edits = SectionEdits::new();
+        let mut bounds = HashMap::new();
+        let gen_started = Instant::now();
+        let mut scan_us = 0.0;
+        for key in &target {
+            let section = generate_section(&generator, *key, &edits);
+            let scan_started = Instant::now();
+            if let Some(section_bounds) = section.bounds() {
+                bounds.insert(*key, section_bounds);
+            }
+            scan_us += scan_started.elapsed().as_secs_f64() * 1e6;
+        }
+        let gen_us = gen_started.elapsed().as_secs_f64() * 1e6;
+
+        let mut camera = Camera::new(1280.0 / 720.0);
+        camera.set_position(spawn + Vec3::Y * EYE_HEIGHT);
+        camera.set_yaw(270.0_f32.to_radians());
+        camera.set_far_plane(9_216.0);
+        let frustum = Frustum::from_view_projection(camera.view_projection());
+        let mut world = World::default();
+        let horizon_started = Instant::now();
+        let horizon = Horizon::build_with_sections(camera.position(), &mut world, &bounds);
+        let horizon_us = horizon_started.elapsed().as_secs_f64() * 1e6;
+
+        let mut candidates = 0;
+        let mut occluded = 0;
+        for key in &target {
+            let min = key.origin();
+            let extent = key.extent();
+            if !frustum.intersects_aabb(min.as_vec3(), min.as_vec3() + Vec3::splat(extent as f32)) {
+                continue;
+            }
+            candidates += 1;
+            if horizon.occludes_section(*key) {
+                occluded += 1;
+            }
+        }
+        eprintln!(
+            "HORIZON target={} bounds={} frustum={} occluded={} visible={} gen_us={gen_us:.0} scan_us={scan_us:.0} horizon_us={horizon_us:.0}",
+            target.len(),
+            bounds.len(),
+            candidates,
+            occluded,
+            candidates - occluded
+        );
+    }
+
     #[test]
     #[ignore = "benchmark; run with cargo test --release --lib bench_mesh_build -- --ignored --nocapture"]
     fn bench_mesh_build() {

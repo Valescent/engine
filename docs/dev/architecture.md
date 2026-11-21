@@ -19,7 +19,7 @@ The engine is a small `winit` and `wgpu` application. This page describes the cu
 | `src/section.rs` | `SectionKey` level/extent/origin/parent/child math, seed-native coarse generation, the modified-chunk edit overlay, coarse light, and section meshes. |
 | `src/hierarchy.rs` | Projected section selection, readiness, hysteresis, parent retention, hidden children, build order, and eviction. |
 | `src/frustum.rs` | Six-plane frustum extraction and conservative AABB tests. |
-| `src/horizon.rs` | Column-top horizon bins and the conservative occlusion test for L0 chunks. |
+| `src/horizon.rs` | Column-top horizon bins and the conservative occlusion test for L0 chunks and hierarchy sections. |
 | `src/metrics.rs` | Tracy plots for frame, GPU, chunk, draw, rebuild, upload, and queue metrics; no-ops without the `tracy` feature. |
 | `src/light.rs` | Four-bit packed sky/block light, BFS propagation, padded `LightField` accessors, and direct-light snapshots. |
 | `src/generation.rs` | Seeded noise fields, height, biomes, caves, water fill, trees, and the spawn column. |
@@ -46,7 +46,7 @@ The engine is a small `winit` and `wgpu` application. This page describes the cu
 - `World` owns the packed chunk map and the cached light fields; every stored chunk is non-empty. Generated chunks are inserted through `World::insert_chunk`, and chunk snapshots for meshing are a direct copy of the block array.
 - `hierarchy::Hierarchy` owns the section target, readiness, build queue, hysteresis memory, and eviction decisions. Coarse sections are derived from the seed plus the modified-chunk overlay; they live outside `World` and are never saved.
 - `mesh::build_mesh` is a pure function over a chunk snapshot and its border blocks; `section::generate_section` is a pure function of the seed, level, coordinate, and edit overlay.
-- `mesher::WorkerPool` owns the worker threads for mesh and light jobs; `MeshQueue` owns revisions, pending jobs, built state, and desired LODs.
+- `mesher::WorkerPool` owns the worker threads for chunk generation, light, mesh, and coarse section jobs; `MeshQueue` owns revisions, pending jobs, built state, and desired LODs.
 
 The renderer holds an `Arc<Window>` and creates a `Surface<'static>` from it. The application also holds a window clone for redraw requests and cursor capture.
 
@@ -77,8 +77,8 @@ RedrawRequested
   -> recalculate each chunk's desired LOD and request missing meshes
   -> drain finished light, mesh, and generation results (two mesh uploads per frame)
   -> upload them and select the active LOD per chunk
-  -> when the hierarchy is enabled, select sections by projected size, build one section,
-     then update section visibility and evict stale sections
+  -> when the hierarchy is enabled, select sections by projected size, submit up to eight
+     generation/light/mesh jobs, upload finished sections, then update visibility and evict
   -> rebuild horizon bins every 250 ms when horizon culling is enabled
   -> extract the frustum from the view-projection
   -> write camera uniform
@@ -126,7 +126,7 @@ See [Coordinates](coordinates.md) for the full conventions, including chunk and 
 - With `ENGINE_HIERARCHY=1`, L0 stops at `ENGINE_DETAIL_CHUNKS` chunks around the player (default `16`, 512 m). Outside it, `SectionKey { level, coord }` names a 32³ sample section at a spacing of `2^level`: levels 1-4 cover 64/128/256/512 m. Level 0 is a chunk. Sections come from the seed plus the modified-chunk overlay, are never saved, and mesh in sample space with the same greedy contract. See the [hierarchy design](../design/lod-hierarchy.md), [design review](lod-hierarchy-review.md), and [ADR-0014](../decisions/0014-seed-native-lod-hierarchy.md).
 - Greedy quads UVs are in block units, so the sampler repeats the texture tile across merged faces.
 - Chunk data, collision, editing, and saving stay full-resolution; LOD1, LOD2, and coarse sections are rendering-only.
-- Chunk meshes are built from immutable snapshots and a one-cell border on worker threads; the main thread only uploads finished results. Coarse sections generate and mesh on the main thread, one per frame.
+- Chunk meshes are built from immutable snapshots and a one-cell border on worker threads; the main thread only uploads finished results. Coarse sections run as background jobs on the same pool (up to eight in flight); the main thread builds the edit overlay, uploads the finished meshes, and records horizon bounds.
 - Chunks are saved as `VCHK` v3 files; light is derived and never saved. Only modified chunks are written, and an emptied chunk is a v3 file with zero records. The format and validation rules are in the [v0.0.4 spec](../specs/v0.0.4.md), [v0.0.6 spec](../specs/v0.0.6.md), [v0.0.7 spec](../specs/v0.0.7.md), and [ADR-0008](../decisions/0008-chunk-save-format.md).
 
 ## Rendering resources
@@ -137,7 +137,7 @@ See [Coordinates](coordinates.md) for the full conventions, including chunk and 
 - The per-chunk fallback gives each non-empty chunk an origin uniform in bind group 1 and up to four vertex meshes: LOD0, LOD1, LOD2, and an optional transparent water mesh. Index buffers are shared until a larger chunk allocates its own. The vertex shader adds the origin to the chunk-local vertex position. The renderer uses this path when the adapter lacks storage buffers, `INDIRECT_FIRST_INSTANCE`, or indirect execution.
 - The primary path is the quad pool from [ADR-0015](../decisions/0015-quad-pool-and-indirect-draws.md). Bind group 1 is a 48-byte-per-node info table plus the 12-byte quad pool. The vertex shader pulls one record per four indexed vertices through a shared `u16` index pattern; meshes above 16,383 quads keep the six-vertex non-indexed path. The CPU writes the opaque and water argument lists and normally records one `multi_draw_indexed_indirect` per pass, for two draws total; a mesh above 16,383 quads adds a non-indexed draw in that pass. Slots are dense and swap-removed; the renderer reports resident and visible geometry bytes, draw calls, and the pool high-water mark once per second.
 - `NodeKey::{Chunk, Section}` shares one pool. Section slots stay resident while a retained parent is drawn but are hidden (`visible = false`) until the selection swaps them in. The hierarchy uses a larger pool reservation (8M quads) than the distance-32 path (3.2M). See the [hierarchy design](../design/lod-hierarchy.md), [design review](lod-hierarchy-review.md), and [ADR-0014](../decisions/0014-seed-native-lod-hierarchy.md).
-- Horizon culling builds column-top bins every 250 ms and is on by default (`ENGINE_HORIZON_CULL=0` disables it). It rejects L0 chunks only; sections rely on the frustum.
+- Horizon culling builds column-top bins every 250 ms and is on by default (`ENGINE_HORIZON_CULL=0` disables it). It rejects L0 chunks and, with the hierarchy on, uploaded sections. Section occluders use the lowest solid column top and candidates the highest visible top, so water never hides land behind it.
 - The clear colour follows the interpolated sky colour, so fog blends into the distance instead of ending against a fixed backdrop.
 - A chunk's previous mesh stays visible until a newer mesh for its LOD is uploaded. Edits invalidate both LODs and every overlapping coarse section; a chunk or section with an empty mesh releases its range or buffer.
 - The CPU frustum-culls chunk and section AABBs in the quad path and writes indirect arguments for each visible node; visible chunks, visible vertices, resident and visible geometry bytes, draw calls, worker rebuild time, and upload time are logged once per second.
@@ -151,7 +151,7 @@ See [Coordinates](coordinates.md) for the full conventions, including chunk and 
 
 ## Current limitations
 
-- Horizon culling is the only occlusion test and applies to L0 chunks; coarse sections rely on the frustum. Hi-Z and GPU traversal remain deferred.
+- Horizon culling is the only occlusion test and applies to L0 chunks and uploaded sections; Hi-Z and GPU traversal remain deferred.
 - The hierarchy is opt-in behind `ENGINE_HIERARCHY=1`; the per-chunk LOD path remains the default and the fallback. Levels 3-4 use the same recursive projected refinement and parent retention as levels 1-2, with 256/512 m sections out to 8 km.
 - No shadow maps or sorted transparency; water faces blend in slot order.
 - One block palette; no inventory UI.
