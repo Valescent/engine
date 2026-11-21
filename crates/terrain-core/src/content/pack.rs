@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
 use crate::error::TerrainError;
-use crate::section::BlockId;
 
 use super::hash::record_hash;
+use super::id::BlockId;
 use super::record::{BlockRecord, LIGHT_LEVELS, MAX_RECORDS, content_error, validate};
 
 /// Skylight attenuation reported for an id that the pack does not hold.
@@ -169,7 +169,8 @@ mod tests {
     use super::*;
     use crate::content::v1_default;
     use crate::error::{ErrorKind, TerrainError};
-    use crate::section::BlockId;
+
+    use super::super::id::BlockId;
 
     use super::super::record::{LAMP_EMISSION, UNKNOWN_BASE, WATER_SKY_ATTEN, opaque};
 

@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use crate::error::{ErrorKind, Stage, TerrainError};
-use crate::section::BlockId;
 
+use super::id::BlockId;
 use super::pack::ContentPack;
 
 /// First runtime id reserved for an unknown saved name (`T1.6`).

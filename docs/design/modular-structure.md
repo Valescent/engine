@@ -239,7 +239,7 @@ with a real counterexample, **1** ad hoc, **0** absent or opposite.
 |---:|---|---|---:|---|
 | 1 | Headless crate boundary | `terrain-core` normal deps exclude `winit`, `wgpu`, `tracy-client`, `wgpu-profiler` | 4 | `cargo tree -p terrain-core -e normal` resolves only `fastnoise-lite` and `thiserror`; the CI `Crate graph` step fails on a window, GPU, or profiler leak ([testing](../dev/testing.md)). |
 | 2 | Dependency direction inside `terrain-core` | A stage never imports `pipeline`, `save`, or `world_save`; only `pipeline` imports all stages | 3 | The `use crate::` edges are clean: `pipeline` names every stage, and no stage names `pipeline`, `save`, or `world_save` outside a test module. There is still no edge checker, so the rule rests on review. |
-| 3 | Cycle freedom | The module graph has no back edge | 1 | `content <-> section` and `v0::light <-> v0::mesh` remain; the root/headless cycle is gone, but `app <-> startup` replaced it (§3.1). |
+| 3 | Cycle freedom | The module graph has no back edge | 1 | `v0::light <-> v0::mesh` and `app <-> startup` remain; the root/headless cycle is gone, and `content <-> section` is broken by moving `BlockId` to `content` (§3.1). |
 | 4 | Public surface | `pub` only at a crate boundary; `pub(crate)` inside | 3 | `terrain-core`: 325 reachable public items, down from 889, against 712 `pub(crate)` declarations; `tests/visibility.rs`, three `compile_fail` doctests, and the strict rustdoc CI gate guard it. `engine`: 6 public items and 8 public modules, including the transitional `v0` re-exports. |
 | 5 | Module depth and ownership | One module owns each state; callers use an interface smaller than the body | 3 | `src/lib.rs` is 75 lines with no function body; `pipeline` hides every stage behind 22 public items; `DemoRuntime` owns patch, ring, save, repair, and the edit queue. `App` is down from 39 fields to 34, one of them `demo`, and keeps all 34 `pub(crate)` for the rest of the crate. |
 | 6 | File budget | No new file over 1,000 lines; exceptions listed | 4 | `scripts/size-budgets.sh` exits 0: 177 tracked files (8 `src/v0/` excluded), 0 counted files over 1,000, 30 over 600; the largest counted file is `metrics2.rs` at 991. CI runs the script as a hard gate. |
@@ -251,9 +251,9 @@ with a real counterexample, **1** ad hoc, **0** absent or opposite.
 | 12 | Build isolation | A renderer change does not rebuild `terrain-core` | 4 | Two crates, one direction; `terrain-core` compiles without GPU or window dependencies. |
 
 **Total: 37/48, up from 28/48.** The strong parts are the crate boundary, the build isolation, the
-file budget, the narrowed `terrain-core` surface, and change locality. The weak parts are the three
-cycles, the advisory function budget, the direct `winit`/`wgpu` types in `RunError`, and the
-transitional `v0` modules that are still public from `engine`.
+file budget, the narrowed `terrain-core` surface, and change locality. The weak parts are the
+remaining cycles, the advisory function budget, the direct `winit`/`wgpu` types in `RunError`, and
+the transitional `v0` modules that are still public from `engine`.
 
 ### 3.1 Dependency edges and cycles
 
@@ -264,7 +264,7 @@ excluded):
 terrain-core:
   pipeline -> climate, content, curve, description, error, features, graph, hash,
               height, hydro, metrics2, section, strata, surface, volume
-  content -> error, hash, section          # cycle: section <-> content
+  content -> error, hash
   section -> content, description, error, hash, header
   mesher2 -> description, lod, padded, revisions, section
   world_save -> content, description, editlog, error, hash, header, save, section
@@ -282,15 +282,16 @@ engine:
   renderer -> mesher2::Quad (via the engine re-export)
 ```
 
-Two of the three original cycles remain; the third is broken, but a new `app <-> startup` cycle took
-its place:
+One of the three original cycles remains; the other two are broken, but a new
+`app <-> startup` cycle took the root/headless one's place:
 
 - **Crate root `<->` headless: broken.** `headless` imports `crate::app::App`; `startup` imports
   `headless` and `app`; `src/lib.rs` only declares `mod headless;`. The edge is
   `startup -> headless -> app`, which is acyclic.
-- **`section <-> content`: remains.** `BlockId` is still `pub type BlockId = u16` in
-  `section/storage.rs`; `content/pack.rs` and `content/record.rs` import it, and `section/codec.rs`
-  imports `content::{ContentPack, ...}`.
+- **`section <-> content`: broken.** `BlockId` now lives in `content/id.rs` and is re-exported as
+  `content::BlockId`; `section` re-exports it, so `section::BlockId` paths still resolve. `content`
+  no longer names `section`, while `section/codec.rs` still imports `content::{ContentPack, ...}`
+  for the saved-record name mapping, so that edge is one-way.
 - **`light <-> mesh`: remains, now under `src/v0/`.** `v0/light.rs` imports
   `crate::mesh::ChunkSnapshot`, `v0/mesh.rs` imports `crate::light::LightField`, and
   `ChunkSnapshot` is still defined in `v0/mesh.rs`.
@@ -300,10 +301,10 @@ The engine did not become acyclic: `app/mod.rs` and `app/frame.rs` import four h
 pair also violates the §5.1 row that forbids `app -> startup`; moving those helpers into `app` or a
 shared leaf module would break it.
 
-The `section <-> content` cycle is a type-placement problem: `BlockId` is a content concept, but it
-lives in `section`. The `v0::light <-> v0::mesh` cycle is a data-structure placement problem:
-`ChunkSnapshot` belongs with the chunk data in `v0::world`, not in `v0::mesh`. Both are small fixes
-with large effects on the graph; neither landed with Stage 2.
+The `v0::light <-> v0::mesh` cycle that remains is a data-structure placement problem:
+`ChunkSnapshot` belongs with the chunk data in `v0::world`, not in `v0::mesh`. `section <-> content`
+is fixed by moving `BlockId` to `content`, where the id concept belongs. The `ChunkSnapshot` move is
+a small fix with a large effect on the graph and did not land with Stage 2.
 
 ### 3.2 The 20 largest Rust files
 
@@ -718,22 +719,22 @@ and `git diff --color-moved` stay useful.
 The `Size` column is the original estimate, kept for review history; the measured outcomes are in the
 table below.
 
-**Stage outcomes (2026-11-21):** every structural stage has landed except the two Stage 2 type moves.
-The table records the commit that produced each outcome; §6.1 keeps the original per-stage
-instructions.
+**Stage outcomes (2026-11-21):** every structural stage has landed except the Stage 2
+`ChunkSnapshot` move. The table records the commit that produced each outcome; §6.1 keeps the
+original per-stage instructions.
 
 | Stage | State | Commit-level outcome |
 |---|---|---|
 | 1 | Landed | `e17eafc` split the 6,506-line root into `startup.rs`, `app.rs`, and `demo/`; `d897fab` split `app.rs` into `app/{mod,input,frame}.rs`. `src/lib.rs` is 75 lines, with no function body. The root/headless cycle is gone. |
-| 2 | Partial | `bf7f01e` moved the seven legacy modules under `src/v0/` with `git mv` and no content edits; the crate root still re-exports them. The `BlockId` and `ChunkSnapshot` type moves did not land, so both data cycles remain (§3.1). |
+| 2 | Partial | `bf7f01e` moved the seven legacy modules under `src/v0/` with `git mv` and no content edits; the crate root still re-exports them. The `BlockId` move landed (`BlockId` is `content`'s type and `section` re-exports it), but `ChunkSnapshot` is still in `v0::mesh`, so `v0::light <-> v0::mesh` remains (§3.1). |
 | 3 | Landed | `e17eafc` produced `demo/{patch,lod,stream,edit,persist}` and `2463234` produced `demo/{build,content}`. The demo's 35 tests live beside the code, and no demo test constructs `App`. |
 | 4 | Landed | `184d7f1` introduced `DemoRuntime`; `App` holds `demo: Option<DemoRuntime>` and owns only the renderer upload (`app/frame.rs`). `demo` names no renderer, `winit`, or `wgpu`. |
 | 5 | Landed | The splits landed per file: `4a2dfcc` (light2), `6aefb56` (mesher2), `af487cc` (volume), `950fed1` (pipeline), `66b18ee` (features), `8b383a5` (description), `7f5f3ac` (section), `240099e` (climate), `d2c065a` (surface), `a0c0cec` (save, world_save), `e08c3f4` (editlog, residency), `a6720f0` (content, header), `3ab2683` (tests). `d80b1fd` split `terrain-gen` by subcommand and `23872e2` split the renderer. Every counted file is under 1,000 lines. |
 | 6 (visibility) | Landed | Batches `dc03914`/`eef849a` (889→564), `07320ec` (564→383), and `6f3d17e` (383→325); `c0d47e9` finished the docs and the strict gate. `tests/visibility.rs` and three `compile_fail` doctests guard the surface; `b5a0601` published `engine::terrain`. `RunError` and the public `v0` re-exports are the documented remainder. |
 | 7 | Optional | Not started. The §7 triggers still do not fire: the demo never names `wgpu`, there is one frontend, and no measured build win exists. |
 
-Stage 2 is the only structural gap: the `v0/` grouping landed, but the two type moves that break the
-data cycles did not. Their instructions remain in §6.1.
+Stage 2 is the only structural gap: the `v0/` grouping and the `BlockId` move landed, but the
+`ChunkSnapshot` move that breaks the last data cycle did not. Its instructions remain in §6.1.
 
 ### 6.1 Stage detail
 
@@ -945,9 +946,8 @@ gate (`RUSTDOCFLAGS="-D warnings" cargo doc -p terrain-core --no-deps
 --no-default-features`) runs in CI. The item-by-item evidence is in the
 [Visibility audit](visibility-audit.md).
 
-Still open, and cheap to decide later: whether `BlockId` lives in `content` or a leaf `ids` module
-(the plan prefers `content`), the trigger for a future `terrain-demo` crate, and whether `tracy`
-stays a default feature.
+Settled: `BlockId` lives in `content`. Still open, and cheap to decide later: the trigger for a
+future `terrain-demo` crate, and whether `tracy` stays a default feature.
 
 ## References
 

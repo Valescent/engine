@@ -55,9 +55,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::storage::{
-    BlockId, Section, SectionKey, bits_for, read_word, volume_u32, word_count, write_word,
+    Section, SectionKey, bits_for, read_word, volume_u32, word_count, write_word,
 };
-use crate::content::{ContentPack, MAX_NAME_BYTES, UNKNOWN_BASE};
+use crate::content::{BlockId, ContentPack, MAX_NAME_BYTES, UNKNOWN_BASE};
 use crate::description::{SECTION_VOLUME, SECTIONS_PER_COLUMN};
 use crate::error::{ErrorKind, SectionFault, Stage, TerrainError};
 use crate::header::crc32;

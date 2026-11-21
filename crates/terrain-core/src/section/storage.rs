@@ -21,10 +21,8 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
+use crate::content::BlockId;
 use crate::description::{SECTION_SIZE, SECTION_VOLUME};
-
-/// A block type id. Id `0` is air by registry convention.
-pub type BlockId = u16;
 
 /// Local coordinate mask (`31`).
 const LOCAL_MASK: u32 = SECTION_SIZE - 1;

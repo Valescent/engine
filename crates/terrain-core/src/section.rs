@@ -83,10 +83,11 @@ mod storage;
 #[cfg(test)]
 mod tests;
 
+pub use crate::content::BlockId;
 pub use baseline::baseline_hash;
 #[allow(unused_imports)] // crate-private re-exports keep the flat module paths
 pub(crate) use codec::{SECTION_RECORD_MAGIC, SECTION_RECORD_VERSION};
 pub use codec::{SavedSection, decode_record, decode_record_at, encode_record};
-pub use storage::{BlockId, Section, SectionKey};
+pub use storage::{Section, SectionKey};
 #[allow(unused_imports)] // crate-private re-exports keep the flat module paths
 pub(crate) use storage::{section_coord, section_index};

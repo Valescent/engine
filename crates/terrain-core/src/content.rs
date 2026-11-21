@@ -9,7 +9,7 @@
 //! # Identity
 //!
 //! Stable names are what a save file, an edit record, and a description pin.
-//! [`BlockId`](crate::section::BlockId)s are **derived at load** by sorting records by name (`A5.1`), so
+//! [`BlockId`]s are **derived at load** by sorting records by name (`A5.1`), so
 //! one pack yields the same ids on every run, and two packs that differ only in
 //! declaration order produce identical ids. Ids are never saved, hashed, or
 //! reported; they are an in-memory index into [`ContentPack::records`].
@@ -38,11 +38,13 @@
 //! version, never an edit in place, and removal is deprecation.
 
 mod hash;
+mod id;
 mod pack;
 mod record;
 
 #[allow(unused_imports)] // crate-private re-exports keep the flat module paths
 pub(crate) use hash::{KIND_BLOCK, record_hash, render_hash};
+pub use id::BlockId;
 pub use pack::{ContentPack, UNKNOWN_SKY_ATTEN};
 pub use record::{BlockRecord, FaceTextures, LIGHT_LEVELS, RenderLayer, RenderShape, v1_default};
 #[allow(unused_imports)] // crate-private re-exports keep the flat module paths
