@@ -8,10 +8,10 @@ The repository is a two-package workspace rooted at the `engine` package:
 
 | Crate | Responsibility |
 |---|---|
-| `engine` | `winit` application, renderer, camera, player, legacy v0 world/chunk stack, and re-exports of the terrain stack. It depends on `terrain-core`. |
+| `engine` | `winit` application, renderer, camera, player, legacy v0 world/chunk stack, and the `engine::terrain` facade over the terrain stack. It depends on `terrain-core`. |
 | `terrain-core` (`crates/terrain-core`) | Headless terrain description, generation, storage, lighting, meshing, and save stack, plus the `terrain-gen` binary. It has no window, GPU, audio, or renderer dependency. |
 
-`terrain-core` is a normal dependency (not a dev-dependency). `engine` re-exports its modules with `pub use terrain_core::{...}`, so existing paths such as `engine::pipeline::Terrain`, `engine::light2`, and `engine::section` keep working. The `terrain-gen` binary lives in `terrain-core`; CI checks that its normal dependency tree contains no `wgpu`, `winit`, `wgpu-profiler`, or `tracy-client`.
+`terrain-core` is a normal dependency (not a dev-dependency). `engine` exposes its modules through the public `engine::terrain` facade, so external code uses paths such as `engine::terrain::pipeline::Terrain`, `engine::terrain::light2`, and `engine::terrain::section`. Internally, `src/lib.rs` keeps `pub(crate) use terrain_core::{...}`, so `crate::pipeline` and the other flat paths still resolve inside the crate; they are not public API. The `terrain-gen` binary lives in `terrain-core`; CI checks that its normal dependency tree contains no `wgpu`, `winit`, `wgpu-profiler`, or `tracy-client`.
 
 ## Modules
 
@@ -37,7 +37,7 @@ src/
 | Path | Responsibility |
 |---|---|
 | `src/main.rs` | Thin binary entry point; calls `engine::run()`. |
-| `src/lib.rs` | Crate table of contents: crate docs, `mod` declarations, and the public re-exports (`run`, `RunError`, `RendererError`, `ChunkCoord`, `SaveError`, `v0`, and `terrain-core`). No logic. See [Public API](public-api.md). |
+| `src/lib.rs` | Crate table of contents: crate docs, `mod` declarations, the `pub(crate)` terrain re-exports, and the public surface (`run`, `RunError`, `RendererError`, `ChunkCoord`, `SaveError`, `v0`, and the `terrain` facade). No logic. See [Public API](public-api.md). |
 | `src/startup.rs` | `run`, tracing setup, configuration and seed loading, world choice (saved, generated, or stress), the v1 demo's open/replay path, and the headless hand-off. |
 | `src/app.rs` | `App`, the `winit` application handler, window/renderer lifecycle, frame and redraw order, input mapping, overlay and stats, and the demo-to-renderer upload adapter. |
 | `src/demo/mod.rs` | The v1 terrain demo module tree: shared constants and the test fixtures. |

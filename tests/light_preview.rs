@@ -3,8 +3,8 @@
 //! Not a rendering: it prints ASCII maps of sky, block, and water-attenuated
 //! light. Run with `cargo test --test light_preview -- --nocapture` to see them.
 
-use engine::light2::{ColumnBlocks, compute_column, default_table};
-use engine::section::Section;
+use engine::terrain::light2::{ColumnBlocks, compute_column, default_table};
+use engine::terrain::section::Section;
 
 const AIR: u16 = 0;
 const STONE: u16 = 1;

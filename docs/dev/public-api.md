@@ -13,7 +13,7 @@ reference.
 | Local rustdoc | Builds with `cargo doc --no-deps` |
 | Missing-docs lint | Not enabled |
 | Public API diff or semver check | Not run |
-| Public items | `run`, `RunError`, `RendererError`, `SaveError`, `ChunkCoord`, plus the transitional `terrain_core` and `v0` module re-exports |
+| Public items | `run`, `RunError`, `RendererError`, `SaveError`, `ChunkCoord`, the `terrain` facade, plus the transitional `v0` module re-exports |
 
 ## Current surface
 
@@ -55,6 +55,14 @@ pub enum SaveError {
 }
 
 pub struct ChunkCoord(IVec3);
+
+pub mod terrain {
+    pub use terrain_core::{
+        climate, content, curve, description, editlog, error, features, graph, hash, header,
+        height, hydro, lattice, light2, lod, mesher2, metrics2, noise, padded, pipeline,
+        residency, revisions, save, section, strata, surface, volume, world_save,
+    };
+}
 ```
 
 - `run` initializes tracing, loads or seeds the world, creates the event loop and application, and
@@ -65,12 +73,17 @@ pub struct ChunkCoord(IVec3);
   or accessor; the world-facing methods are `pub(crate)`.
 - `RendererError` is defined in the private `renderer` module, `SaveError` in the private
   `v0::world` module; their re-exports are public API.
-- **Transitional re-exports (not part of the intended surface):** `src/lib.rs` currently does
-  `pub use terrain_core::{...}` for the 28 headless terrain modules (`pipeline`, `section`,
-  `content`, `save`, and the rest) and `pub use v0::{generation, light, mesh, mesher, streaming,
-  voxel, world};`. They exist so the tests and tools compile across the crate split. The structure
-  plan narrows them to one `engine::terrain` facade; see [Modular structure](../design/modular-structure.md)
-  §4.2 and §8, decision 2.
+- `engine::terrain` is the one supported entry point for the headless terrain stack. It
+  re-exports the 28 `terrain-core` modules unchanged, so the supported paths are
+  `engine::terrain::pipeline::Terrain`, `engine::terrain::section::Section`,
+  `engine::terrain::light2`, and the other modules under the facade. Types are not wrapped.
+- The flat terrain paths (`engine::pipeline`, `engine::section`, `engine::light2`, and the rest)
+  are `pub(crate)` re-exports in `src/lib.rs`. They keep internal code on `crate::<module>`, but
+  they are not public API and do not resolve outside the crate. The `compile_fail` doctests on
+  `engine::terrain` and `tests/facade.rs` guard both sides of that boundary.
+- **Transitional re-exports:** `src/lib.rs` still does
+  `pub use v0::{generation, light, mesh, mesher, streaming, voxel, world};` because v0 remains the
+  default run path. They are removed with v0, not with the terrain facade.
 - There are no other public traits, constants, or macros. The crate has two optional Cargo
   features, `tracy` and `rayon-pool`, and both are development aids rather than API surface.
 - None of the error enums or `ChunkCoord` is `#[non_exhaustive]`. Adding a variant is a breaking
@@ -87,8 +100,11 @@ This surface has no semver compatibility promise. Any `0.0.x` release may change
 - The `block`, `camera`, `config`, `frustum`, `generation`, `headless`, `light`, `mesh`, `mesher`,
   `metrics`, `overlay`, `player`, `raycast`, `renderer`, `sky`, `streaming`, `voxel`, and `world`
   modules are private. Paths such as `engine::Camera` or `engine::Renderer` do not exist.
-- `src/main.rs` is the only in-repo consumer. It calls `engine::run()` and returns
-  `engine::RunError`.
+- The flat terrain modules (`engine::pipeline`, `engine::section`, `engine::light2`, and the other
+  25) are `pub(crate)`. Only `engine::terrain::<module>` is public.
+- `src/main.rs` calls `engine::run()` and returns `engine::RunError`. The integration tests
+  (`tests/light_preview.rs` and `tests/facade.rs`) are the other in-repo consumers; they use
+  `engine::terrain`.
 - The shader, mesh layout, texture pipeline, world state, and configuration are not public API.
 
 ## Current reference

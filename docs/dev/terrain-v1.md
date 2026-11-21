@@ -28,8 +28,9 @@ and repairs use `world/terrain-demo/`; the legacy `world/chunks/` path is untouc
 
 ## Modules
 
-The headless terrain stack lives in the `terrain-core` crate; `engine` re-exports it so the
-demo can keep using `engine::pipeline`, `engine::section`, and the other module paths.
+The headless terrain stack lives in the `terrain-core` crate; `engine` re-exports it under the
+public `engine::terrain` facade. Internal demo code keeps using `crate::pipeline`, `crate::section`,
+and the other flat crate-root paths, which are `pub(crate)` and not public API.
 
 | File | Responsibility |
 |---|---|
