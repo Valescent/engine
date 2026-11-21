@@ -1,8 +1,9 @@
-//! Parent-retained hierarchy selection for the first LOD slice.
+//! Parent-retained hierarchy selection for the LOD slices.
 //!
 //! L0 covers [`DEFAULT_DETAIL_CHUNKS`] chunks around the player. Level-1
-//! sections (64 m) fill the ring from the detail radius out to 768 m, and
-//! level-2 sections (128 m) fill the far ring from 768 m to 2,048 m.
+//! sections (64 m) fill the ring from the detail radius out to 768 m, level-2
+//! sections (128 m) cover 768-2,048 m, level-3 sections (256 m) cover
+//! 2,048-4,096 m, and level-4 sections (512 m) cover 4,096-8,192 m.
 //!
 //! Level-2 parents are selected from the far ring and stay drawable as soon as
 //! they are requested. A parent whose projected size exceeds [`REFINE_PIXELS`]
@@ -12,6 +13,14 @@
 //! stays refined until its projected size drops below [`COLLAPSE_PIXELS`]; the
 //! band between the two thresholds is the hysteresis that stops a boundary from
 //! thrashing. A selection never contains a parent and its children together.
+//!
+//! Levels 3 and 4 are direct, surface-only rings at `y = 0`. Projected
+//! parent/child refinement for those far levels is deferred: this slice selects
+//! them as leaves, and only level-2 parents refine into level-1 children.
+//!
+//! Ring boundaries are aligned on the grid of the coarser neighbouring level,
+//! so adjacent levels meet exactly instead of overlapping or leaving a seam as
+//! the player crosses a cell.
 //!
 //! The projection uses `extent / distance * pixels_per_radian`, where distance
 //! is measured from the camera to the nearest point of the section footprint.
@@ -25,7 +34,7 @@ use std::collections::{HashMap, HashSet};
 
 use glam::{IVec2, IVec3, Vec2, Vec3};
 
-use crate::section::{SECTION_SIZE, SectionKey};
+use crate::section::{MAX_LEVEL, SECTION_SIZE, SectionKey};
 
 /// Default L0 detail radius in chunks.
 pub(crate) const DEFAULT_DETAIL_CHUNKS: i32 = 16;
@@ -34,9 +43,15 @@ pub(crate) const DEFAULT_DETAIL_CHUNKS: i32 = 16;
 const LEVEL1_OUTER_METERS: i32 = 768;
 /// Level-2 outer radius in metres.
 const LEVEL2_OUTER_METERS: i32 = 2_048;
+/// Level-3 outer radius in metres.
+const LEVEL3_OUTER_METERS: i32 = 4_096;
+/// Level-4 outer radius in metres, the hierarchy's 8 km limit.
+const LEVEL4_OUTER_METERS: i32 = 8_192;
 
 const LEVEL1_EXTENT: i32 = SECTION_SIZE * 2;
 const LEVEL2_EXTENT: i32 = SECTION_SIZE * 4;
+const LEVEL3_EXTENT: i32 = SECTION_SIZE * 8;
+const LEVEL4_EXTENT: i32 = SECTION_SIZE * 16;
 
 /// Projected child size, in pixels, above which a level-2 parent refines.
 ///
@@ -54,8 +69,9 @@ pub(crate) const COLLAPSE_PIXELS: f32 = 62.0;
 pub(crate) const DEFAULT_PIXELS_PER_RADIAN: f32 = 900.0;
 
 /// How far outside the target an uploaded section stays resident before it is
-/// evicted. The margin hides section-sized steps as the player crosses a cell.
-const EVICTION_MARGIN_METERS: i32 = 128;
+/// evicted. One level-4 section hides the largest section-sized step as the
+/// player crosses a cell.
+const EVICTION_MARGIN_METERS: i32 = LEVEL4_EXTENT;
 
 /// Per-key build readiness.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -144,32 +160,103 @@ fn cell_at(position: Vec3, extent: i32) -> IVec2 {
 }
 
 fn ceil_div(value: i32, divisor: i32) -> i32 {
-    (value + divisor - 1) / divisor
+    (value + divisor - 1).div_euclid(divisor)
 }
 
-/// Appends the square ring of sections between `inner` and `outer` cells.
+/// Cell index of the last boundary at or below `value`.
+fn floor_cell(value: i32, extent: i32) -> i32 {
+    value.div_euclid(extent)
+}
+
+/// Cell index of the first boundary at or above `value`.
+fn ceil_cell(value: i32, extent: i32) -> i32 {
+    ceil_div(value, extent)
+}
+
+/// Cell range of one axis for a ring between two world radii.
+///
+/// The inner hole is covered by the finer level and the outer band by the
+/// coarser one. Both edges are snapped to the grid of the level they border so
+/// adjacent rings share an edge as the player moves.
+#[derive(Clone, Copy, Debug)]
+struct AxisRing {
+    inner_min: i32,
+    inner_max: i32,
+    outer_min: i32,
+    outer_max: i32,
+}
+
+fn axis_ring(
+    position: i32,
+    extent: i32,
+    inner_radius: i32,
+    outer_radius: i32,
+    outermost: bool,
+) -> AxisRing {
+    let inner_min = ceil_cell(position - inner_radius, extent);
+    let inner_max = floor_cell(position + inner_radius, extent) - 1;
+
+    // Interior boundaries use the coarser neighbour's extent, so the finer and
+    // coarser rings meet on a shared cell edge. The outermost level has no
+    // neighbour beyond it, so it rounds outward and covers the full radius.
+    let (outer_min, outer_max) = if outermost {
+        (
+            floor_cell(position - outer_radius, extent),
+            ceil_cell(position + outer_radius, extent) - 1,
+        )
+    } else {
+        let coarser = extent * 2;
+        let cells_per_coarse = coarser / extent;
+        (
+            ceil_cell(position - outer_radius, coarser) * cells_per_coarse,
+            floor_cell(position + outer_radius, coarser) * cells_per_coarse - 1,
+        )
+    };
+
+    AxisRing {
+        inner_min,
+        inner_max,
+        outer_min,
+        outer_max,
+    }
+}
+
+/// Appends the square ring of sections between `inner_radius` and
+/// `outer_radius` world metres around `player`.
 #[allow(clippy::too_many_arguments)]
 fn ring(
     keys: &mut Vec<SectionKey>,
     player: Vec3,
     level: u8,
     extent: i32,
-    inner: i32,
-    outer: i32,
+    inner_radius: i32,
+    outer_radius: i32,
     layers: i32,
 ) {
-    if inner > outer {
-        return;
-    }
-    let center = cell_at(player, extent);
-    for sx in -outer..=outer {
-        for sz in -outer..=outer {
-            if sx.abs().max(sz.abs()) < inner {
+    let outermost = level == MAX_LEVEL;
+    let x = axis_ring(
+        player.x.floor() as i32,
+        extent,
+        inner_radius,
+        outer_radius,
+        outermost,
+    );
+    let z = axis_ring(
+        player.z.floor() as i32,
+        extent,
+        inner_radius,
+        outer_radius,
+        outermost,
+    );
+    for sx in x.outer_min..=x.outer_max {
+        for sz in z.outer_min..=z.outer_max {
+            if (x.inner_min..=x.inner_max).contains(&sx)
+                && (z.inner_min..=z.inner_max).contains(&sz)
+            {
                 continue;
             }
-            let coord = center + IVec2::new(sx, sz);
             for y in 0..layers {
-                keys.push(SectionKey::new(level, IVec3::new(coord.x, y, coord.y)));
+                keys.push(SectionKey::new(level, IVec3::new(sx, y, sz)));
             }
         }
     }
@@ -202,7 +289,7 @@ fn covered_by_children(key: SectionKey, target: &HashSet<SectionKey>) -> bool {
 fn outside_target_region(key: SectionKey, player: Vec3, detail_meters: i32) -> bool {
     let nearest = nearest_xz_distance(player, key);
     nearest < detail_meters as f32
-        || nearest > (LEVEL2_OUTER_METERS + EVICTION_MARGIN_METERS) as f32
+        || nearest > (LEVEL4_OUTER_METERS + EVICTION_MARGIN_METERS) as f32
 }
 
 /// Sections that stay resident for a draw list and its fallback parents.
@@ -401,10 +488,7 @@ impl Hierarchy {
     /// refined and ready contributes only its children.
     fn rebuild(&mut self, player: Vec3, detail_chunks: i32, pixels_per_radian: f32) {
         let detail = detail_meters(detail_chunks);
-        let l2_inner = ceil_div(LEVEL1_OUTER_METERS.max(detail), LEVEL2_EXTENT);
-        let l2_outer = ceil_div(LEVEL2_OUTER_METERS, LEVEL2_EXTENT);
-        let l1_inner = ceil_div(detail, LEVEL1_EXTENT);
-        let l1_outer = ceil_div(LEVEL1_OUTER_METERS, LEVEL1_EXTENT);
+        let l2_inner = LEVEL1_OUTER_METERS.max(detail);
 
         let mut parents = Vec::new();
         ring(
@@ -413,7 +497,7 @@ impl Hierarchy {
             2,
             LEVEL2_EXTENT,
             l2_inner,
-            l2_outer,
+            LEVEL2_OUTER_METERS,
             1,
         );
         let parent_set: HashSet<SectionKey> = parents.iter().copied().collect();
@@ -432,7 +516,35 @@ impl Hierarchy {
         );
 
         let mut direct = Vec::new();
-        ring(&mut direct, player, 1, LEVEL1_EXTENT, l1_inner, l1_outer, 2);
+        ring(
+            &mut direct,
+            player,
+            1,
+            LEVEL1_EXTENT,
+            detail,
+            LEVEL1_OUTER_METERS,
+            2,
+        );
+        // Surface-only far rings. Projected refinement of these levels is
+        // deferred, so they are always selected as direct leaves.
+        ring(
+            &mut direct,
+            player,
+            3,
+            LEVEL3_EXTENT,
+            LEVEL2_OUTER_METERS,
+            LEVEL3_OUTER_METERS,
+            1,
+        );
+        ring(
+            &mut direct,
+            player,
+            4,
+            LEVEL4_EXTENT,
+            LEVEL3_OUTER_METERS,
+            LEVEL4_OUTER_METERS,
+            1,
+        );
         add_direct_sections(&direct, &mut target);
 
         let queue = self.finish_queue(&target, &mut units, player);
@@ -598,6 +710,88 @@ mod tests {
         SectionKey::new(2, IVec3::new(offset.x, 0, offset.y))
     }
 
+    fn ground_keys(hierarchy: &Hierarchy, level: u8) -> Vec<SectionKey> {
+        hierarchy
+            .target()
+            .iter()
+            .copied()
+            .filter(|key| key.level == level && key.coord.y == 0)
+            .collect()
+    }
+
+    fn ring_keys(
+        player: Vec3,
+        level: u8,
+        extent: i32,
+        inner_radius: i32,
+        outer_radius: i32,
+        layers: i32,
+    ) -> Vec<SectionKey> {
+        let mut keys = Vec::new();
+        ring(
+            &mut keys,
+            player,
+            level,
+            extent,
+            inner_radius,
+            outer_radius,
+            layers,
+        );
+        keys
+    }
+
+    fn footprints_overlap(left: SectionKey, right: SectionKey) -> bool {
+        let left_min = left.origin();
+        let left_max = left_min + IVec3::splat(left.extent());
+        let right_min = right.origin();
+        let right_max = right_min + IVec3::splat(right.extent());
+        left_min.cmplt(right_max).all() && right_min.cmplt(left_max).all()
+    }
+
+    fn assert_disjoint(left: &[SectionKey], right: &[SectionKey]) {
+        for left_key in left {
+            for right_key in right {
+                assert!(
+                    !footprints_overlap(*left_key, *right_key),
+                    "{left_key:?} overlaps {right_key:?}"
+                );
+            }
+        }
+    }
+
+    /// Samples circles at the far radii and requires exactly one selected
+    /// ground footprint covering each sample.
+    fn assert_unique_ground_coverage(hierarchy: &Hierarchy, player: Vec3, radii: &[f32]) {
+        let ground: Vec<SectionKey> = hierarchy
+            .target()
+            .iter()
+            .copied()
+            .filter(|key| key.coord.y == 0)
+            .collect();
+        for &radius in radii {
+            for step in 0..24_u8 {
+                let angle = f32::from(step) * std::f32::consts::TAU / 24.0;
+                let x = player.x + radius * angle.cos();
+                let z = player.z + radius * angle.sin();
+                let hits = ground
+                    .iter()
+                    .filter(|key| {
+                        let origin = key.origin();
+                        let max = origin + IVec3::splat(key.extent());
+                        x >= origin.x as f32
+                            && x < max.x as f32
+                            && z >= origin.z as f32
+                            && z < max.z as f32
+                    })
+                    .count();
+                assert_eq!(
+                    hits, 1,
+                    "radius {radius} angle {step}: expected one footprint at ({x}, {z})"
+                );
+            }
+        }
+    }
+
     fn assert_no_double_draw(hierarchy: &Hierarchy) {
         let target: HashSet<SectionKey> = hierarchy.target().iter().copied().collect();
         for key in hierarchy.target() {
@@ -614,8 +808,12 @@ mod tests {
     fn section_extents_match_the_level_math() {
         assert_eq!(SectionKey::new(1, IVec3::ZERO).extent(), 64);
         assert_eq!(SectionKey::new(2, IVec3::ZERO).extent(), 128);
+        assert_eq!(SectionKey::new(3, IVec3::ZERO).extent(), 256);
+        assert_eq!(SectionKey::new(4, IVec3::ZERO).extent(), 512);
         assert_eq!(LEVEL1_EXTENT, 64);
         assert_eq!(LEVEL2_EXTENT, 128);
+        assert_eq!(LEVEL3_EXTENT, 256);
+        assert_eq!(LEVEL4_EXTENT, 512);
     }
 
     #[test]
@@ -826,6 +1024,42 @@ mod tests {
     }
 
     #[test]
+    fn a_dirty_far_section_rebuilds_before_the_queue() {
+        let mut hierarchy = selected(PLAYER);
+        let far = *hierarchy
+            .target()
+            .iter()
+            .rev()
+            .find(|key| key.level == 4)
+            .expect("a level-4 target");
+        hierarchy.mark_ready(far);
+        assert!(hierarchy.update(PLAYER, DEFAULT_DETAIL_CHUNKS, PP_RAD));
+        assert!(hierarchy.target().contains(&far));
+
+        hierarchy.mark_dirty([far]);
+
+        assert_eq!(hierarchy.state(far), Readiness::Requested);
+        let mut cursor = 0;
+        assert_eq!(hierarchy.next_build(&mut cursor), Some(far));
+        assert_eq!(cursor, 0, "a dirty rebuild must not consume the queue");
+    }
+
+    #[test]
+    fn a_dirty_far_section_outside_the_target_is_discarded() {
+        for level in [3, 4] {
+            let mut hierarchy = selected(PLAYER);
+            hierarchy.queue.clear();
+            let outside = SectionKey::new(level, IVec3::new(100, 0, 100));
+
+            hierarchy.mark_dirty([outside]);
+
+            assert_eq!(hierarchy.state(outside), Readiness::Requested);
+            let mut cursor = 0;
+            assert_eq!(hierarchy.next_build(&mut cursor), None, "{outside:?}");
+        }
+    }
+
+    #[test]
     fn the_queue_builds_a_parent_before_its_children() {
         let hierarchy = selected(PLAYER);
         let parent = *hierarchy
@@ -878,12 +1112,95 @@ mod tests {
     }
 
     #[test]
-    fn negative_coordinates_select_both_levels() {
+    fn negative_coordinates_select_all_four_levels() {
         let path_player = Vec3::new(-1_200.0, 40.0, -1_200.0);
         let hierarchy = selected(path_player);
 
-        assert!(hierarchy.target().iter().any(|key| key.level == 1));
-        assert!(hierarchy.target().iter().any(|key| key.level == 2));
+        for level in 1..=4 {
+            assert!(
+                hierarchy.target().iter().any(|key| key.level == level),
+                "level {level} missing"
+            );
+        }
+        assert_no_double_draw(&hierarchy);
+    }
+
+    #[test]
+    fn level3_and_level4_rings_cover_the_far_annuli() {
+        let hierarchy = selected(PLAYER);
+        let l2 = ground_keys(&hierarchy, 2);
+        let l3 = ground_keys(&hierarchy, 3);
+        let l4 = ground_keys(&hierarchy, 4);
+
+        assert_ne!(l3.len(), 0);
+        assert_ne!(l4.len(), 0);
+        assert_eq!(
+            l3.iter().copied().collect::<HashSet<_>>(),
+            ring_keys(
+                PLAYER,
+                3,
+                LEVEL3_EXTENT,
+                LEVEL2_OUTER_METERS,
+                LEVEL3_OUTER_METERS,
+                1,
+            )
+            .into_iter()
+            .collect::<HashSet<_>>()
+        );
+        assert_eq!(
+            l4.iter().copied().collect::<HashSet<_>>(),
+            ring_keys(
+                PLAYER,
+                4,
+                LEVEL4_EXTENT,
+                LEVEL3_OUTER_METERS,
+                LEVEL4_OUTER_METERS,
+                1,
+            )
+            .into_iter()
+            .collect::<HashSet<_>>()
+        );
+        assert!(
+            l4.iter().all(|key| key.coord.y == 0),
+            "level-4 sections are selected only at y = 0"
+        );
+
+        assert_disjoint(&l2, &l3);
+        assert_disjoint(&l2, &l4);
+        assert_disjoint(&l3, &l4);
+        assert_unique_ground_coverage(
+            &hierarchy,
+            PLAYER,
+            &[
+                2_049.0, 3_000.0, 4_000.0, 4_097.0, 6_000.0, 8_000.0, 8_191.0,
+            ],
+        );
+        assert_no_double_draw(&hierarchy);
+    }
+
+    #[test]
+    fn far_rings_follow_negative_player_coordinates() {
+        let player = Vec3::new(-5_700.0, 40.0, -3_300.0);
+        let hierarchy = selected(player);
+        let l2 = ground_keys(&hierarchy, 2);
+        let l3 = ground_keys(&hierarchy, 3);
+        let l4 = ground_keys(&hierarchy, 4);
+
+        assert_ne!(l2.len(), 0);
+        assert_ne!(l3.len(), 0);
+        assert_ne!(l4.len(), 0);
+        assert_disjoint(&l2, &l3);
+        assert_disjoint(&l2, &l4);
+        assert_disjoint(&l3, &l4);
+        assert_unique_ground_coverage(
+            &hierarchy,
+            player,
+            &[2_049.0, 3_000.0, 4_097.0, 6_000.0, 8_191.0],
+        );
+        assert!(
+            l4.iter().all(|key| key.coord.y == 0),
+            "level-4 sections are selected only at y = 0"
+        );
         assert_no_double_draw(&hierarchy);
     }
 
@@ -908,16 +1225,19 @@ mod tests {
     }
 
     #[test]
-    fn eviction_keeps_the_margin_outside_the_target() {
+    fn eviction_keeps_the_eight_kilometre_margin_outside_the_target() {
         let detail = detail_meters(DEFAULT_DETAIL_CHUNKS);
-        let target = vec![SectionKey::new(1, IVec3::new(0, 0, 0))];
-        let margin = SectionKey::new(2, IVec3::new(17, 0, 0));
-        let beyond = SectionKey::new(2, IVec3::new(18, 0, 0));
+        let target = vec![SectionKey::new(4, IVec3::new(15, 0, 0))];
+        // 8,192-8,704 m and 8,704-9,216 m sit inside the level-4 margin.
+        let margin = SectionKey::new(4, IVec3::new(16, 0, 0));
+        let edge = SectionKey::new(4, IVec3::new(17, 0, 0));
+        // 9,216 m is beyond the 8,192 m outer radius plus the 512 m margin.
+        let beyond = SectionKey::new(4, IVec3::new(18, 0, 0));
         let inside_l0 = SectionKey::new(1, IVec3::new(0, 0, 1));
         // A section that merely touches the L0 boundary must not stay drawn
         // over the exact chunks.
         let overlapping_l0 = SectionKey::new(1, IVec3::new(0, 0, 7));
-        let uploaded: HashSet<SectionKey> = [margin, beyond, inside_l0, overlapping_l0]
+        let uploaded: HashSet<SectionKey> = [margin, edge, beyond, inside_l0, overlapping_l0]
             .into_iter()
             .collect();
 
@@ -925,7 +1245,11 @@ mod tests {
 
         assert!(stale.contains(&inside_l0));
         assert!(stale.contains(&overlapping_l0));
-        assert!(!stale.contains(&margin), "the margin keeps one ring alive");
+        assert!(
+            !stale.contains(&margin),
+            "the 8 km margin keeps a level-4 ring alive"
+        );
+        assert!(!stale.contains(&edge), "the edge of the margin stays");
         assert!(stale.contains(&beyond));
     }
 

@@ -12,7 +12,7 @@ use glam::IVec3;
 
 use crate::block::Block;
 use crate::mesh::ChunkSnapshot;
-use crate::world::{CHUNK_COLUMN, CHUNK_SIZE, ChunkCoord, World};
+use crate::world::{CHUNK_COLUMN, CHUNK_SIZE, Chunk, ChunkCoord, World, packed_block};
 
 /// Maximum light level.
 pub(crate) const MAX_LIGHT: u8 = 15;
@@ -28,6 +28,10 @@ const GRID: i32 = SIZE * 3;
 
 /// Cells per axis of the stored field: the chunk plus one border cell.
 const PADDED: i32 = CHUNK_SIZE + 2;
+
+/// Cells per axis of the coarse BFS grid: the padded field plus a solid
+/// sentinel layer on every side, so neighbour lookups need no bounds checks.
+const COARSE_GRID: i32 = PADDED + 2;
 
 const NEIGHBOURS: [IVec3; 6] = [
     IVec3::X,
@@ -105,18 +109,107 @@ impl LightField {
         self.sky.get(field_index(local))
     }
 
-    /// Coarse per-column sky light: `15` above the column top, `0` below.
+    /// Coarse BFS sky light for one `32³` section sample grid.
     ///
-    /// `top` takes a local `(x, z)` in `-1..=32` and returns the highest
-    /// solid/water sample, or `-1` for an open column.
-    pub(crate) fn coarse(top: impl Fn(i32, i32) -> i32) -> Self {
-        let mut sky = PackedLight::new();
-        for local in grid_coords() {
-            if local.y > top(local.x, local.z) {
-                sky.set(field_index(local), MAX_LIGHT);
+    /// Every non-solid sample above the highest solid sample in its column is
+    /// open to the section sky and seeds [`MAX_LIGHT`]. Light then spreads
+    /// six-connected through non-solid samples: `Water` keeps the value and
+    /// every other non-solid sample loses one level, matching [`spread`] for L0
+    /// chunks.
+    ///
+    /// The halo (`-1..=32`) is part of the BFS grid so the mesher's border
+    /// samples are defined without touching another section. A halo sample
+    /// reuses the nearest interior edge sample, so a solid edge stays solid and
+    /// an open edge stays open; a halo column above the edge column's highest
+    /// solid sample is seeded with [`MAX_LIGHT`]. This is conservative: the halo
+    /// never invents light below an edge top, while the sky above a solid edge
+    /// top (including `y = 32`) stays open.
+    pub(crate) fn coarse(samples: &Chunk) -> Self {
+        let stride = usize::try_from(COARSE_GRID).expect("coarse grid size fits");
+        let plane = stride * stride;
+        let cells = plane * stride;
+        let columns = usize::try_from(SIZE * SIZE).expect("coarse columns fit in usize");
+        let size = usize::try_from(SIZE).expect("section size fits");
+        let storage = samples.shared_storage();
+
+        // The outermost layer stays `Stone`, so BFS neighbours never need a
+        // bounds check: every step off the halo lands in a solid sentinel.
+        let mut blocks = vec![Block::Stone; cells];
+        let mut ceiling = vec![-1_i32; columns];
+        for x in 0..SIZE {
+            for z in 0..SIZE {
+                let column = usize::try_from(x * SIZE + z).expect("column fits");
+                let mut source = usize::try_from(x * SIZE * SIZE + z).expect("sample fits");
+                let mut destination = coarse_index(IVec3::new(x, 0, z));
+                for y in 0..SIZE {
+                    let sample = packed_block(&storage, source);
+                    blocks[destination] = sample;
+                    if sample.is_solid() {
+                        ceiling[column] = y;
+                    }
+                    source += size;
+                    destination += stride;
+                }
             }
         }
-        Self { sky, block: None }
+        copy_halo_blocks(&mut blocks);
+
+        let mut values = vec![0_u8; cells];
+        let step = isize::try_from(stride).expect("coarse grid size fits");
+        let slice = isize::try_from(plane).expect("coarse plane fits");
+        let offsets = [1, -1, step, -step, slice, -slice];
+        for x in -1..=SIZE {
+            for z in -1..=SIZE {
+                let edge_x = x.clamp(0, SIZE - 1);
+                let edge_z = z.clamp(0, SIZE - 1);
+                let column = usize::try_from(edge_x * SIZE + edge_z).expect("column fits");
+                let first = ceiling[column] + 1;
+                let mut index = coarse_index(IVec3::new(x, first, z));
+                for _ in first..=SIZE {
+                    values[index] = MAX_LIGHT;
+                    index += stride;
+                }
+            }
+        }
+        // Only shadowed non-solid cells that touch an open-sky cell can start
+        // a descent. Seeding just those keeps flat terrain out of the BFS.
+        let mut buckets: [Vec<u32>; 16] = std::array::from_fn(|_| Vec::new());
+        for (index, block) in blocks.iter().copied().enumerate() {
+            if block.is_solid() || values[index] != 0 {
+                continue;
+            }
+            if offsets
+                .iter()
+                .all(|offset| values[index.wrapping_add_signed(*offset)] != MAX_LIGHT)
+            {
+                continue;
+            }
+            let value = if block == Block::Water {
+                MAX_LIGHT
+            } else {
+                MAX_LIGHT - 1
+            };
+            values[index] = value;
+            buckets[usize::from(value)].push(u32::try_from(index).expect("coarse index fits"));
+        }
+        spread_coarse(&blocks, &mut values, &mut buckets, offsets);
+
+        let mut field = PackedLight::new();
+        let mut position = 0;
+        for x in -1..=SIZE {
+            let mut base = coarse_index(IVec3::new(x, -1, -1));
+            for _ in -1..=SIZE {
+                for (offset, _) in (-1..=SIZE).enumerate() {
+                    field.set(position, values[base + offset]);
+                    position += 1;
+                }
+                base += stride;
+            }
+        }
+        Self {
+            sky: field,
+            block: None,
+        }
     }
 
     /// Block light at a local coordinate in `-1..=32`.
@@ -282,6 +375,85 @@ fn spread(blocks: &[Block], values: &mut [u8], queue: &mut VecDeque<(IVec3, u8)>
             }
         }
     }
+}
+
+/// Copies the nearest interior edge sample into the halo of `blocks`.
+///
+/// The six halo faces are filled once each; edge and corner halo samples take
+/// the closest interior sample by clamping their in-plane coordinates. A solid
+/// edge therefore stays solid and an open edge stays open.
+fn copy_halo_blocks(blocks: &mut [Block]) {
+    let last = SIZE - 1;
+    let edge = |coordinate: i32| coordinate.clamp(0, last);
+    for y in -1..=SIZE {
+        for z in -1..=SIZE {
+            let (ey, ez) = (edge(y), edge(z));
+            blocks[coarse_index(IVec3::new(-1, y, z))] =
+                blocks[coarse_index(IVec3::new(0, ey, ez))];
+            blocks[coarse_index(IVec3::new(SIZE, y, z))] =
+                blocks[coarse_index(IVec3::new(last, ey, ez))];
+        }
+    }
+    for x in 0..SIZE {
+        for y in -1..=SIZE {
+            let ey = edge(y);
+            blocks[coarse_index(IVec3::new(x, y, -1))] = blocks[coarse_index(IVec3::new(x, ey, 0))];
+            blocks[coarse_index(IVec3::new(x, y, SIZE))] =
+                blocks[coarse_index(IVec3::new(x, ey, last))];
+        }
+    }
+    for x in 0..SIZE {
+        for z in 0..SIZE {
+            blocks[coarse_index(IVec3::new(x, -1, z))] = blocks[coarse_index(IVec3::new(x, 0, z))];
+            blocks[coarse_index(IVec3::new(x, SIZE, z))] =
+                blocks[coarse_index(IVec3::new(x, last, z))];
+        }
+    }
+}
+
+/// Spreads coarse sky values over the halo-padded section grid.
+///
+/// Mirrors [`spread`]: a step into `Water` keeps the value and every other step
+/// loses one level. Buckets run from [`MAX_LIGHT`] down to one, so a cell is
+/// finalized the first time it is reached with its highest value; the solid
+/// sentinel layer around the grid replaces bounds checks.
+fn spread_coarse(
+    blocks: &[Block],
+    values: &mut [u8],
+    buckets: &mut [Vec<u32>; 16],
+    offsets: [isize; 6],
+) {
+    for level in (1..=MAX_LIGHT).rev() {
+        let bucket = usize::from(level);
+        let mut index_in_bucket = 0;
+        while index_in_bucket < buckets[bucket].len() {
+            let index =
+                usize::try_from(buckets[bucket][index_in_bucket]).expect("coarse index fits");
+            index_in_bucket += 1;
+            let next = level - 1;
+            for offset in offsets {
+                let neighbour = index.wrapping_add_signed(offset);
+                let block = blocks[neighbour];
+                if block.is_solid() {
+                    continue;
+                }
+                let value = if block == Block::Water { level } else { next };
+                if value > values[neighbour] {
+                    values[neighbour] = value;
+                    buckets[usize::from(value)]
+                        .push(u32::try_from(neighbour).expect("coarse index fits"));
+                }
+            }
+        }
+    }
+}
+
+fn coarse_index(cell: IVec3) -> usize {
+    let stride = usize::try_from(COARSE_GRID).expect("coarse grid size fits");
+    let x = usize::try_from(cell.x + 2).expect("coarse coordinate fits");
+    let y = usize::try_from(cell.y + 2).expect("coarse coordinate fits");
+    let z = usize::try_from(cell.z + 2).expect("coarse coordinate fits");
+    (x * stride + y) * stride + z
 }
 
 fn extract(values: &[u8]) -> PackedLight {

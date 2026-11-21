@@ -20,7 +20,7 @@ use crate::frustum::Frustum;
 use crate::horizon::Horizon;
 use crate::mesh::{Lod, MeshData};
 use crate::overlay::{OverlayVertex, build_overlay_mesh};
-use crate::quad_renderer::{POOL_BYTES, QuadRenderer};
+use crate::quad_renderer::{CAPACITY_QUADS, HIERARCHY_CAPACITY_QUADS, QuadRenderer, pool_bytes};
 use crate::section::SectionKey;
 use crate::sky::SkySample;
 use crate::voxel::{HighlightVertex, Vertex};
@@ -301,6 +301,12 @@ impl Renderer {
         let adapter_limits = adapter.limits();
         let downlevel = adapter.get_downlevel_capabilities().flags;
         let legacy_forced = std::env::var("ENGINE_LEGACY_RENDER").is_ok_and(|value| value == "1");
+        let capacity_quads = if std::env::var("ENGINE_HIERARCHY").is_ok_and(|value| value == "1") {
+            HIERARCHY_CAPACITY_QUADS
+        } else {
+            CAPACITY_QUADS
+        };
+        let quad_pool_bytes = pool_bytes(capacity_quads);
         let quad_supported = !legacy_forced
             && adapter
                 .features()
@@ -308,8 +314,8 @@ impl Renderer {
             && downlevel.contains(wgpu::DownlevelFlags::INDIRECT_EXECUTION)
             && downlevel.contains(wgpu::DownlevelFlags::VERTEX_STORAGE)
             && adapter_limits.max_storage_buffers_per_shader_stage >= 2
-            && adapter_limits.max_storage_buffer_binding_size >= POOL_BYTES
-            && adapter_limits.max_buffer_size >= POOL_BYTES;
+            && adapter_limits.max_storage_buffer_binding_size >= quad_pool_bytes
+            && adapter_limits.max_buffer_size >= quad_pool_bytes;
         if quad_supported {
             info!("quad pool render path enabled");
         } else {
@@ -324,8 +330,8 @@ impl Renderer {
             wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter_limits);
         if quad_supported {
             required_limits.max_storage_buffers_per_shader_stage = 2;
-            required_limits.max_storage_buffer_binding_size = POOL_BYTES;
-            required_limits.max_buffer_size = required_limits.max_buffer_size.max(POOL_BYTES);
+            required_limits.max_storage_buffer_binding_size = quad_pool_bytes;
+            required_limits.max_buffer_size = required_limits.max_buffer_size.max(quad_pool_bytes);
         }
 
         let (device, queue) = adapter
@@ -404,6 +410,7 @@ impl Renderer {
                 &config,
                 &camera_bind_group_layout,
                 &texture_bind_group_layout,
+                capacity_quads,
             )
         } else {
             None

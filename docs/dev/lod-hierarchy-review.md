@@ -131,14 +131,13 @@ Landed on the `lod-hierarchy` branch:
 
 Still blocking the visual gate:
 
-- Coarse BFS light. Per-column light leaves coarse cliff faces dark next to L0 BFS light; the west
-  capture and the L0 control agree on the visible island and caves, so the remaining difference is
-  lighting rather than missing geometry.
-- Levels 3-4 and the 8 km gate. The 2 km gate is met: 0.466 ms frame, 0.235 ms GPU, 3.58 M vertices,
-  2 draws, 30.94 MB of allocated quads, and 85.9 MB of L0 resident at detail 16.
+- Far-level projected refinement and parent retention for levels 3-4. The 8 km rings are direct
+  bands in this slice; they are visually coherent but not screen-error driven.
+- Manual acceptance and the release decision. The 2 km and 8 km gates are measured and the capture
+  controls are in place.
 
-The first-slice selection is now projected-size with 72/62 px hysteresis, parent retention with
-ready children kept hidden until the swap, a 250 ms target cadence, and edit invalidation from the
-modified/saved chunk overlay. The earlier fixed bands, missing parent retention, and the dark
-coarse-water seam are resolved.
+The earlier blockers are resolved: the hierarchy renderer/streaming path, the L0 detail radius and
+water seam, coarse BFS light, the 2 km selection/memory table, and edit invalidation. The 8 km gate
+holds at 0.600 ms frame / 0.368 ms GPU, 2 draws, 50.24 MB allocated quads, and 71.35 MB reservation;
+L0 detail 16 is 85.9 MB resident.
 

@@ -45,8 +45,13 @@ impl NodeKey {
 
 /// Pool budget: 3.2M quads at 12 bytes each, 38.4 MB.
 pub(crate) const CAPACITY_QUADS: u32 = 3_200_000;
-/// Bytes reserved for the quad pool.
-pub(crate) const POOL_BYTES: u64 = CAPACITY_QUADS as u64 * size_of::<QuadRecord>() as u64;
+/// Larger pool for the section hierarchy, which covers 8 km.
+pub(crate) const HIERARCHY_CAPACITY_QUADS: u32 = 6_000_000;
+
+/// Bytes reserved for `capacity_quads` quad records.
+pub(crate) fn pool_bytes(capacity_quads: u32) -> u64 {
+    u64::from(capacity_quads) * size_of::<QuadRecord>() as u64
+}
 
 /// Slots for the largest world: `(2 * (32 + 2) + 1)^2` columns of four chunks,
 /// rounded up with a small margin.
@@ -132,8 +137,10 @@ impl Slot {
     }
 }
 
-/// Bytes held by the pool, chunk table, indirect arguments, and index pattern.
-pub(crate) const GEOMETRY_BYTES: u64 = POOL_BYTES + INFO_BYTES + ARGS_BYTES + INDEX_BYTES;
+/// Bytes held by one hierarchy's pool, chunk table, indirect arguments, and index pattern.
+pub(crate) fn geometry_bytes(capacity_quads: u32) -> u64 {
+    pool_bytes(capacity_quads) + INFO_BYTES + ARGS_BYTES + INDEX_BYTES
+}
 
 /// The quad-pool render path. Present only when the adapter supports it.
 pub(crate) struct QuadRenderer {
@@ -147,6 +154,8 @@ pub(crate) struct QuadRenderer {
     opaque_indexed_pipeline: wgpu::RenderPipeline,
     water_indexed_pipeline: wgpu::RenderPipeline,
     pool: QuadPool,
+    /// Bytes reserved by this renderer's pool, table, arguments, and index.
+    geometry_bytes: u64,
     /// Active slots in draw order; `slot_positions` maps a node to its index.
     slots: Vec<Slot>,
     slot_positions: HashMap<NodeKey, usize>,
@@ -171,6 +180,7 @@ impl QuadRenderer {
         config: &wgpu::SurfaceConfiguration,
         camera_layout: &wgpu::BindGroupLayout,
         texture_layout: &wgpu::BindGroupLayout,
+        capacity_quads: u32,
     ) -> Option<Self> {
         let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
 
@@ -202,7 +212,7 @@ impl QuadRenderer {
 
         let pool_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("quad pool"),
-            size: POOL_BYTES,
+            size: pool_bytes(capacity_quads),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -319,7 +329,8 @@ impl QuadRenderer {
             water_pipeline,
             opaque_indexed_pipeline,
             water_indexed_pipeline,
-            pool: QuadPool::new(CAPACITY_QUADS),
+            pool: QuadPool::new(capacity_quads),
+            geometry_bytes: geometry_bytes(capacity_quads),
             slots: Vec::new(),
             slot_positions: HashMap::new(),
             free_slots: Vec::new(),
@@ -755,7 +766,7 @@ impl QuadRenderer {
 
         stats.visible_chunks += visible_chunks;
         stats.visible_vertices += visible_quads * 6;
-        stats.geometry_bytes = GEOMETRY_BYTES;
+        stats.geometry_bytes = self.geometry_bytes;
         stats.visible_bytes = visible_quads * size_of::<QuadRecord>() as u64;
         let allocated_quads = self.pool.allocated_quads();
         self.peak_allocated_quads = self.peak_allocated_quads.max(allocated_quads);

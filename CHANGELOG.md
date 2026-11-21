@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Back faces are culled for terrain and water; greedy quads wind counter-clockwise around their outward normal on all six faces.
 - The LOD hierarchy foundation is on the `lod-hierarchy` branch: `SectionKey` level math, a level-1 coarse generator with a modified-chunk overlay, per-column coarse light, and a `32³` sample-space mesh path. One level-1 section uses 32 KiB of samples + 19.7 KiB of light for 2,193 quads; the eight LOD1 chunks covering the same volume use 288 KiB of samples + light for 3,613 quads.
 - The quad pool accepts coarse section nodes through `NodeKey`. `ENGINE_HIERARCHY=1` stops L0 at `ENGINE_DETAIL_CHUNKS` (default 16), selects level-1/2 sections out to 2 km with projected-size hysteresis, retains parents until all eight children are ready, keeps ready children hidden until the swap, meshes coarse water, and rebuilds sections from the modified/saved chunk overlay on edits. The settled west view is 0.466 ms / 0.235 ms GPU, 3.58 M vertices, 2 draws, and 30.94 MB of allocated quads; L0 at detail 16 is 85.9 MB resident.
+- Levels 3-4 extend the hierarchy to 8 km with 256 m and 512 m direct rings and a 6M-quad (72 MB) hierarchy pool. Coarse BFS light replaces the per-column 0/15 field (about 120 µs per section); water stays lit through the seabed top. The settled 8 km west view is 0.600 ms / 0.368 ms GPU, 5.89 M vertices, 1,380 visible nodes, 2 draws, 50.24 MB allocated quads, and 71.35 MB geometry reservation.
 
 ### Changed
 

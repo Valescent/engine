@@ -780,11 +780,34 @@ children stay in the pool but hidden until the swap; one target rebuild runs per
 - The west capture matches the L0-only control for the visible island and caves; the hierarchy fills
   the ring beyond the 1,024 m L0 edge. The earlier dark coarse-water seam was fixed by using the
   highest solid sample as the coarse sky top, so water cells above the seabed stay lit.
-- Coarse cliffs still use per-column sky light (0 below the top), so unlit side faces read dark next
-  to L0 BFS light. That is the design's first-slice lighting; coarse BFS is the next lighting step.
-- Caves and trees above L0 are intentionally absent; the far terrain is blockier and smoother.
+- Coarse BFS light replaces the per-column 0/15 field: sky seeds above each column's highest solid,
+  spreads through non-solid samples, and water passes without attenuation. It costs about 120 µs per
+  section; the fixed-key mesh quad count is unchanged. Halo samples copy the nearest edge interior
+  cell; no neighbouring section is read.
 - Edit invalidation marks the overlapping level-1/2 sections dirty, removes the stale upload, and
   rebuilds from the modified/saved chunk overlay before the normal queue.
+
+#### Levels 3-4 and the 8 km gate
+
+Level-3 sections (256 m) cover 2,048-4,096 m and level-4 sections (512 m) cover 4,096-8,192 m as
+direct `y = 0` rings. Far-level projected refinement is deferred. The hierarchy pool is 6M quads
+(72 MB) when `ENGINE_HIERARCHY=1`; the distance-32 path keeps 3.2M (38.4 MB).
+
+| Settled 8 km view (west, spawn) | Value |
+|---|---:|
+| Visible nodes | 1,380 |
+| Visible vertices | 5.89 M |
+| Draw calls | 2 |
+| Frame | 0.600 ms |
+| GPU scene | 0.368 ms |
+| Allocated quads | 50.24 MB |
+| Geometry reservation | 71.35 MB |
+| L0 resident (detail 16) | 85.9 MB |
+
+- The 8 km gate holds with a large margin: 60 FPS, under 500 MB working set, and 2 draws.
+- Two section uploads were deferred during startup; the far rings then fit the 6M pool. No stall.
+- The far view extends the water and land to the horizon; the hierarchy 2 km and L0 controls agree on
+  the visible island and cave patches.
 
 ### Section foundation (level 1)
 

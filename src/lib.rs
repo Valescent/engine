@@ -1289,8 +1289,8 @@ impl App {
     fn apply_render_distance(&mut self) {
         let distance = self.config.render_distance_chunks as f32 * 32.0;
         if self.hierarchy {
-            self.camera.set_far_plane(2_304.0);
-            self.camera.set_fog_end(2_300.0);
+            self.camera.set_far_plane(9_216.0);
+            self.camera.set_fog_end(9_200.0);
         } else {
             self.camera.set_far_plane(distance + 64.0);
             self.camera.set_fog_end(distance);
@@ -1399,9 +1399,16 @@ impl App {
                     );
                 }
             } else {
-                // The renderer ran out of quad pages; retry this section next
-                // frame instead of skipping it. A dirty section never touched
-                // the queue cursor, so re-marking is the only safe retry.
+                // The renderer ran out of quad pages or slots; retry this
+                // section next frame instead of skipping it. A dirty section
+                // never touched the queue cursor, so re-marking is the only
+                // safe retry. Far rings can hit this first when they exhaust
+                // the unchanged pool.
+                debug!(
+                    ?key,
+                    uploaded = self.sections_uploaded.len(),
+                    "section upload deferred: pool or slot limit"
+                );
                 self.sections_uploaded.remove(&key);
                 self.sections.mark_dirty([key]);
                 break;
@@ -1982,6 +1989,8 @@ mod tests {
         let world_position = IVec3::new(1, 127, 1);
         let chunk = ChunkCoord::from_world(world_position).0;
         let keys = overlapping_sections_for_chunk(chunk);
+        let levels: HashSet<u8> = keys.iter().map(|key| key.level).collect();
+        assert_eq!(levels, HashSet::from([1, 2, 3, 4]));
         for key in &keys {
             app.sections.mark_ready(*key);
             app.sections_uploaded.insert(*key);
@@ -2269,6 +2278,19 @@ mod tests {
 
         assert_eq!(app.camera.far_plane(), 448.0);
         assert_eq!(app.camera.fog_end(), 384.0);
+    }
+
+    #[test]
+    fn the_hierarchy_render_distance_covers_eight_kilometres() {
+        let mut app = App::new(demo_world());
+        app.hierarchy = true;
+        app.config.render_distance_chunks = 12;
+
+        app.apply_render_distance();
+
+        assert_eq!(app.camera.far_plane(), 9_216.0);
+        assert_eq!(app.camera.fog_end(), 9_200.0);
+        assert!(app.camera.fog_end() > 8_192.0);
     }
 
     #[test]
