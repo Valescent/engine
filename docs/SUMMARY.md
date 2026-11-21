@@ -42,6 +42,7 @@
 - [Seed-native LOD hierarchy](design/lod-hierarchy.md)
 - [Terrain reference notes](design/terrain-lessons.md)
 - [Modular structure](design/modular-structure.md)
+- [Visibility audit](design/visibility-audit.md)
 
 # Development
 
