@@ -17,7 +17,7 @@ use super::{ore, scatter, tree};
 /// are the feature passes. [`Stage`] has no per-feature variant, so boulders,
 /// trees, and plants share [`Stage::Features`]: the *position* in this array is
 /// the contract, and [`WRITE_PASSES`] maps each position to its kind.
-pub const WRITE_ORDER: [Stage; 5] = [
+pub(crate) const WRITE_ORDER: [Stage; 5] = [
     Stage::Volume,
     Stage::Strata,
     Stage::Features,
@@ -26,7 +26,7 @@ pub const WRITE_ORDER: [Stage; 5] = [
 ];
 
 /// The feature kind applied at each [`WRITE_ORDER`] position, `None` for terrain.
-pub const WRITE_PASSES: [Option<FeatureKind>; 5] = [
+pub(crate) const WRITE_PASSES: [Option<FeatureKind>; 5] = [
     None,
     Some(FeatureKind::Ore),
     Some(FeatureKind::Boulder),
@@ -36,7 +36,7 @@ pub const WRITE_PASSES: [Option<FeatureKind>; 5] = [
 
 /// The stage a feature pass is attributed to in [`WRITE_ORDER`].
 #[must_use]
-pub const fn stage_for(kind: FeatureKind) -> Stage {
+pub(crate) const fn stage_for(kind: FeatureKind) -> Stage {
     match kind {
         FeatureKind::Ore => Stage::Strata,
         FeatureKind::Boulder | FeatureKind::Tree | FeatureKind::Scatter => Stage::Features,
@@ -45,7 +45,7 @@ pub const fn stage_for(kind: FeatureKind) -> Stage {
 
 /// Everything application needs besides the block array (`H2.2`, `H3.4`).
 #[derive(Clone, Copy, Debug)]
-pub struct ApplyContext<'a> {
+pub(crate) struct ApplyContext<'a> {
     /// World seed, used by scatter and tree acceptance.
     pub seed: u64,
     /// Structural block ids.
@@ -65,14 +65,14 @@ pub struct ApplyContext<'a> {
 impl ApplyContext<'_> {
     /// The section's own origin, aligned to [`REGION_SIZE`].
     #[must_use]
-    pub fn section_origin(&self) -> [i32; 3] {
+    pub(crate) fn section_origin(&self) -> [i32; 3] {
         self.regions[region_slot([0, 0, 0])]
     }
 }
 
 /// What one [`apply`] pass did.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ApplyStats {
+pub(crate) struct ApplyStats {
     /// Block writes that changed a cell.
     pub writes: u32,
     /// Candidates offered to the pass.
@@ -83,7 +83,7 @@ pub struct ApplyStats {
 
 /// [`ApplyStats`] plus the number of per-block tests performed.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ApplyReport {
+pub(crate) struct ApplyReport {
     /// Write, skip, and candidate counts.
     pub stats: ApplyStats,
     /// Blocks that passed the bounding-box cull and reached a mask test.
@@ -92,7 +92,7 @@ pub struct ApplyReport {
 
 /// Writes gathered candidates into one section (`H2`, `H2.1`, `H2.4`).
 #[must_use]
-pub fn apply(
+pub(crate) fn apply(
     blocks: &mut [BlockId; SECTION_VOLUME],
     candidates: &[Candidate],
     ctx: &ApplyContext<'_>,
@@ -105,7 +105,7 @@ pub fn apply(
 ///
 /// The counter is what proves a `Uniform` section costs nothing (`H2.2`).
 #[must_use]
-pub fn apply_counted(
+pub(crate) fn apply_counted(
     blocks: &mut [BlockId; SECTION_VOLUME],
     candidates: &[Candidate],
     ctx: &ApplyContext<'_>,
@@ -160,7 +160,7 @@ pub fn apply_counted(
 /// plant is free, and uniform water or bedrock is never writable. The decoded
 /// blocks are copied back only for a section that received a write.
 #[must_use]
-pub fn apply_section(
+pub(crate) fn apply_section(
     section: &mut Section,
     candidates: &[Candidate],
     ctx: &ApplyContext<'_>,
@@ -171,7 +171,7 @@ pub fn apply_section(
 
 /// [`apply_section`] with the per-block test counter exposed.
 #[must_use]
-pub fn apply_section_counted(
+pub(crate) fn apply_section_counted(
     section: &mut Section,
     candidates: &[Candidate],
     ctx: &ApplyContext<'_>,

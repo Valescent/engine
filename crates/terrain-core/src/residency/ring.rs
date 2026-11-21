@@ -241,7 +241,7 @@ impl Applied {
 
     /// `K3.1`: whether a finished result still matches its request.
     ///
-    /// Returns `true` and counts `applied` when [`RequestKey::accepts`] holds for
+    /// Returns `true` and counts `applied` when `RequestKey::accepts` holds for
     /// all three fields. Otherwise the result is stale: returns `false` and
     /// counts `discarded_stale`. Either way exactly one of those two counters
     /// moves.

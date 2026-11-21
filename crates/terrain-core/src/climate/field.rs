@@ -14,53 +14,53 @@ use super::table::{BiomeTable, smoothstep01};
 /// A tile owns 32 cells (128 blocks) per axis. Cells `-1..=32` are readable through the
 /// [`ClimateTile`] accessors; the remaining storage on each axis keeps the stride at
 /// [`SIDE`] without a second index formula.
-pub const SIDE: i32 = 35;
+pub(crate) const SIDE: i32 = 35;
 
 /// First readable cell coordinate: the one-cell border on the low side (`E3.5`).
-pub const MIN_CELL: i32 = -1;
+pub(crate) const MIN_CELL: i32 = -1;
 
 /// Last readable cell coordinate: the one-cell border on the high side (`E3.5`).
-pub const MAX_CELL: i32 = 32;
+pub(crate) const MAX_CELL: i32 = 32;
 
 /// Cells in one stored axis, as a `usize` stride.
 #[allow(clippy::cast_sign_loss)]
-pub const CELL_COUNT: usize = SIDE as usize * SIDE as usize;
+pub(crate) const CELL_COUNT: usize = SIDE as usize * SIDE as usize;
 
 /// Values in one padded macro grid: `(SIDE + SHADOW_RANGE_CELLS) * SIDE` (`E2.3`).
 #[allow(clippy::cast_sign_loss)]
-pub const PADDED_CELLS: usize = ((SIDE + SHADOW_RANGE_CELLS) * SIDE) as usize;
+pub(crate) const PADDED_CELLS: usize = ((SIDE + SHADOW_RANGE_CELLS) * SIDE) as usize;
 
 /// Amplitude of the temperature noise, in temperature units (`E1.1`).
-pub const TEMP_NOISE_AMP: f32 = 0.15;
+pub(crate) const TEMP_NOISE_AMP: f32 = 0.15;
 
 /// Distance the rain shadow march reaches upwind, in cells (`E2.2`).
-pub const SHADOW_RANGE_CELLS: i32 = 32;
+pub(crate) const SHADOW_RANGE_CELLS: i32 = 32;
 
 /// Slope the march subtracts per cell, in blocks per block (`E2.2`).
-pub const SLOPE_K: f32 = 0.5;
+pub(crate) const SLOPE_K: f32 = 0.5;
 
 /// Shadow depth that fills the shadow curve (`E2.2`).
-pub const SHADOW_NORM: f32 = 32.0;
+pub(crate) const SHADOW_NORM: f32 = 32.0;
 
 /// Humidity added on a windward coast (`E2.2`).
-pub const MARITIME: f32 = 0.25;
+pub(crate) const MARITIME: f32 = 0.25;
 
 /// Weight of the shadow curve in the drying multiplier (`E1.3`).
 ///
 /// `E1.3` leaves `strength` unpinned. v1 folds it into the caller's shadow curve at 1.0,
 /// so the curve alone owns the drying profile and retuning it is a description change,
 /// not a code change.
-pub const SHADOW_STRENGTH: f32 = 1.0;
+pub(crate) const SHADOW_STRENGTH: f32 = 1.0;
 
 /// The prevailing wind axis. Pinned to `X`: wind blows toward `+x`, the march goes
 /// toward `-x` (`E2.1`).
-pub const WIND_DIR: Axis = Axis::X;
+pub(crate) const WIND_DIR: Axis = Axis::X;
 
 /// Domain tag of the temperature noise stream.
-pub const TEMP_DOMAIN: &str = "climate_temp";
+pub(crate) const TEMP_DOMAIN: &str = "climate_temp";
 
 /// Domain tag of the humidity noise stream.
-pub const HUMIDITY_DOMAIN: &str = "climate_humidity";
+pub(crate) const HUMIDITY_DOMAIN: &str = "climate_humidity";
 
 /// Domain tag of the per-block biome dither (`E3.3`).
 pub const DITHER_DOMAIN: &str = "biome_dither";
@@ -96,7 +96,7 @@ pub(super) const MACRO_CELL_F: f32 = MACRO_CELL as f32;
 /// `(cell_x + 1) + SIDE * (cell_z + 1)`. The domain is `-1..=32` on both axes; the
 /// accessors assert it before calling.
 #[must_use]
-pub fn index(cell_x: i32, cell_z: i32) -> usize {
+pub(crate) fn index(cell_x: i32, cell_z: i32) -> usize {
     usize::try_from((cell_x + 1) + SIDE * (cell_z + 1))
         .expect("a climate cell index inside -1..=32 is non-negative")
 }
@@ -112,7 +112,7 @@ pub fn index(cell_x: i32, cell_z: i32) -> usize {
 /// Panics outside that padded range; a caller that pads a different grid must not use
 /// this helper.
 #[must_use]
-pub fn padded_index(cell_x: i32, cell_z: i32) -> usize {
+pub(crate) fn padded_index(cell_x: i32, cell_z: i32) -> usize {
     assert!(
         (-(SHADOW_RANGE_CELLS + 1)..=(SIDE - 2)).contains(&cell_x),
         "macro cell x {cell_x} is outside the padded range"
@@ -133,7 +133,7 @@ pub fn padded_index(cell_x: i32, cell_z: i32) -> usize {
 /// deep, with [`SHADOW_RANGE_CELLS`] extra cells on the upwind (`-x`) side. Heights are
 /// in blocks, before detail, rivers, or caves; the climate stage reads nothing else.
 #[derive(Clone, Debug)]
-pub struct MacroCells {
+pub(crate) struct MacroCells {
     /// Cells per row, `SIDE + SHADOW_RANGE_CELLS`.
     pub width: i32,
     /// Cells per column, `SIDE`.
@@ -150,7 +150,7 @@ impl MacroCells {
     /// Rejects a width or depth other than [`SIDE`] plus [`SHADOW_RANGE_CELLS`], a
     /// value count that does not match, and any non-finite height (`S1.9` rejects,
     /// never clamps).
-    pub fn new(width: i32, depth: i32, values: Box<[f32]>) -> Result<Self, TerrainError> {
+    pub(crate) fn new(width: i32, depth: i32, values: Box<[f32]>) -> Result<Self, TerrainError> {
         if width != SIDE + SHADOW_RANGE_CELLS || depth != SIDE {
             return Err(TerrainError::new(
                 Stage::Fields,
@@ -191,7 +191,7 @@ impl MacroCells {
     ///
     /// Panics outside the padded range of [`padded_index`].
     #[must_use]
-    pub fn get(&self, cell_x: i32, cell_z: i32) -> f32 {
+    pub(crate) fn get(&self, cell_x: i32, cell_z: i32) -> f32 {
         debug_assert_eq!(self.width, SIDE + SHADOW_RANGE_CELLS);
         debug_assert_eq!(self.depth, SIDE);
         self.values[padded_index(cell_x, cell_z)]
@@ -200,7 +200,7 @@ impl MacroCells {
 
 /// The result of the fixed rain-shadow march (`E2.2`).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Shadow {
+pub(crate) struct Shadow {
     /// Raw shadow depth in blocks, `>= 0`, before the shadow curve.
     pub depth: f32,
     /// Whether an ocean cell (`h <= SEA`) sits upwind inside the march.
@@ -219,7 +219,7 @@ pub struct Shadow {
 /// upwind padding.
 #[must_use]
 #[allow(clippy::cast_precision_loss)]
-pub fn shadow(macro_cells: &MacroCells, cell_x: i32, cell_z: i32) -> Shadow {
+pub(crate) fn shadow(macro_cells: &MacroCells, cell_x: i32, cell_z: i32) -> Shadow {
     let here = macro_cells.get(cell_x, cell_z);
     let mut depth = 0.0_f32;
     let mut ocean_upwind = false;
@@ -241,7 +241,7 @@ pub fn shadow(macro_cells: &MacroCells, cell_x: i32, cell_z: i32) -> Shadow {
 
 /// One tile of lattice climate and biome picks (`E3.5`).
 ///
-/// Five parallel arrays of [`CELL_COUNT`] entries: temperature, humidity, and the three
+/// Five parallel arrays of `CELL_COUNT` entries: temperature, humidity, and the three
 /// `u8` biome arrays. Accessors accept cells `-1..=32` and panic outside it.
 #[derive(Clone, Debug)]
 pub struct ClimateTile {
@@ -364,7 +364,7 @@ pub(super) fn stream_seed(seed: u64, tag: u64) -> u32 {
 
 /// The climate stage. Stateless apart from its cached stream tags.
 #[derive(Clone, Copy, Debug)]
-pub struct Climate {
+pub(crate) struct Climate {
     /// Domain tag of the temperature noise stream.
     temp_tag: u64,
     /// Domain tag of the humidity noise stream.
@@ -380,7 +380,7 @@ impl Default for Climate {
 impl Climate {
     /// Builds the stage, hashing the two noise domain tags once.
     #[must_use]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             temp_tag: domain(TEMP_DOMAIN),
             humid_tag: domain(HUMIDITY_DOMAIN),
@@ -390,8 +390,9 @@ impl Climate {
     /// Solves the tile whose local cell `0` is global cell `0`.
     ///
     /// Equivalent to [`Climate::solve_at`] with a zero origin.
+    #[allow(dead_code)]
     #[must_use]
-    pub fn solve(
+    pub(crate) fn solve(
         &self,
         macro_cells: &MacroCells,
         table: &BiomeTable,
@@ -409,7 +410,7 @@ impl Climate {
     /// arrays for the readable `-1..=32`; no per-cell allocation happens.
     #[must_use]
     #[allow(clippy::cast_precision_loss)]
-    pub fn solve_at(
+    pub(crate) fn solve_at(
         &self,
         origin_x: i32,
         origin_z: i32,

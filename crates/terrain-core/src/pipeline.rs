@@ -9,7 +9,7 @@
 //! 1. macro height from the lattice, bilinear to blocks,
 //! 2. per-block detail, then terrace, then river carve, one `top_solid_y`,
 //! 3. solid fill from the surface stack, strata resolved symbolically,
-//! 4. 3D detail and cave carve ([`crate::volume::Volume::apply`]),
+//! 4. 3D detail and cave carve (`crate::volume::Volume::apply`),
 //! 5. water fill, which never floods a cave (`D7.1`).
 //!
 //! Water is placed after the volume pass rather than at step 2 as `F1.5` words it.

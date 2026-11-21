@@ -11,7 +11,7 @@ use crate::curve::Curve;
 /// `B3.7`: macro nodes evaluate on the 4-block lattice; block nodes evaluate at block
 /// resolution. The compiler rejects a node whose children have a different lattice.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub enum Lattice {
+pub(crate) enum Lattice {
     /// The global 4-block macro lattice, sampled at `4k + 0.5`.
     Macro,
     /// Per-block sampling at `block + 0.5`.
@@ -20,7 +20,7 @@ pub enum Lattice {
 
 /// The closed set of node kinds.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum Node {
+pub(crate) enum Node {
     /// One `OpenSimplex2` 2D sample.
     Noise2d,
     /// Fractal Brownian motion.
@@ -53,7 +53,7 @@ pub enum Node {
 
 /// The parameter block of a node. The variant must match [`NodeSpec::kind`].
 #[derive(Clone, Debug, PartialEq)]
-pub enum Params {
+pub(crate) enum Params {
     /// No parameters.
     None,
     /// A constant value.
@@ -119,7 +119,7 @@ pub enum Params {
 
 /// One declarative node.
 #[derive(Clone, Debug, PartialEq)]
-pub struct NodeSpec {
+pub(crate) struct NodeSpec {
     /// Node kind.
     pub kind: Node,
     /// Declared sampling lattice.
@@ -133,7 +133,7 @@ pub struct NodeSpec {
 impl NodeSpec {
     /// Number of inputs the kind requires.
     #[must_use]
-    pub fn arity(&self) -> usize {
+    pub(crate) fn arity(&self) -> usize {
         match self.kind {
             Node::Noise2d | Node::Fbm | Node::Ridged | Node::Billow | Node::Const | Node::Input => {
                 0
@@ -146,7 +146,7 @@ impl NodeSpec {
 
     /// Whether the parameter block matches the node kind.
     #[must_use]
-    pub fn params_match(&self) -> bool {
+    pub(crate) fn params_match(&self) -> bool {
         matches!(
             (self.kind, &self.params),
             (Node::Noise2d, Params::Noise { .. })
@@ -169,7 +169,7 @@ impl NodeSpec {
 
     /// Every `f32` in the parameter block, for finiteness checks.
     #[must_use]
-    pub fn floats(&self) -> Vec<f32> {
+    pub(crate) fn floats(&self) -> Vec<f32> {
         match &self.params {
             Params::None => Vec::new(),
             Params::Const { value } => vec![*value],
@@ -197,7 +197,7 @@ impl NodeSpec {
 
     /// One `OpenSimplex2` source.
     #[must_use]
-    pub fn noise2d(lattice: Lattice, seed: u32, frequency: f32) -> Self {
+    pub(crate) fn noise2d(lattice: Lattice, seed: u32, frequency: f32) -> Self {
         Self {
             kind: Node::Noise2d,
             lattice,
@@ -208,7 +208,7 @@ impl NodeSpec {
 
     /// One fractal source of the given kind.
     #[must_use]
-    pub fn fractal(
+    pub(crate) fn fractal(
         kind: Node,
         lattice: Lattice,
         seed: u32,
@@ -234,7 +234,7 @@ impl NodeSpec {
 
     /// Fractal Brownian motion.
     #[must_use]
-    pub fn fbm(
+    pub(crate) fn fbm(
         lattice: Lattice,
         seed: u32,
         frequency: f32,
@@ -255,7 +255,7 @@ impl NodeSpec {
 
     /// A ridged fractal.
     #[must_use]
-    pub fn ridged(
+    pub(crate) fn ridged(
         lattice: Lattice,
         seed: u32,
         frequency: f32,
@@ -276,7 +276,7 @@ impl NodeSpec {
 
     /// A billow fractal.
     #[must_use]
-    pub fn billow(
+    pub(crate) fn billow(
         lattice: Lattice,
         seed: u32,
         frequency: f32,
@@ -297,7 +297,7 @@ impl NodeSpec {
 
     /// A 2D domain warp of `input`.
     #[must_use]
-    pub fn warp(
+    pub(crate) fn warp(
         lattice: Lattice,
         seed_a: u32,
         seed_b: u32,
@@ -320,7 +320,7 @@ impl NodeSpec {
 
     /// A terrace transform of `input`.
     #[must_use]
-    pub fn terrace(lattice: Lattice, step: f32, sharpness: f32, input: u32) -> Self {
+    pub(crate) fn terrace(lattice: Lattice, step: f32, sharpness: f32, input: u32) -> Self {
         Self {
             kind: Node::Terrace,
             lattice,
@@ -331,7 +331,7 @@ impl NodeSpec {
 
     /// A curve transform of `input`.
     #[must_use]
-    pub fn curve(lattice: Lattice, curve: Curve, input: u32) -> Self {
+    pub(crate) fn curve(lattice: Lattice, curve: Curve, input: u32) -> Self {
         Self {
             kind: Node::Curve,
             lattice,
@@ -342,7 +342,7 @@ impl NodeSpec {
 
     /// A linear remap of `input` from `[0, 1]` to `[low, high]`.
     #[must_use]
-    pub fn remap(lattice: Lattice, low: f32, high: f32, input: u32) -> Self {
+    pub(crate) fn remap(lattice: Lattice, low: f32, high: f32, input: u32) -> Self {
         Self {
             kind: Node::Remap,
             lattice,
@@ -353,7 +353,7 @@ impl NodeSpec {
 
     /// Adds `left` and `right`.
     #[must_use]
-    pub fn add(lattice: Lattice, left: u32, right: u32) -> Self {
+    pub(crate) fn add(lattice: Lattice, left: u32, right: u32) -> Self {
         Self {
             kind: Node::Add,
             lattice,
@@ -364,7 +364,7 @@ impl NodeSpec {
 
     /// Multiplies `left` and `right`.
     #[must_use]
-    pub fn mul(lattice: Lattice, left: u32, right: u32) -> Self {
+    pub(crate) fn mul(lattice: Lattice, left: u32, right: u32) -> Self {
         Self {
             kind: Node::Mul,
             lattice,
@@ -375,7 +375,7 @@ impl NodeSpec {
 
     /// Interpolates `a` toward `b` by `t`.
     #[must_use]
-    pub fn lerp(lattice: Lattice, a: u32, b: u32, t: u32) -> Self {
+    pub(crate) fn lerp(lattice: Lattice, a: u32, b: u32, t: u32) -> Self {
         Self {
             kind: Node::Lerp,
             lattice,
@@ -386,7 +386,7 @@ impl NodeSpec {
 
     /// Clamps `input` to `[low, high]`.
     #[must_use]
-    pub fn clamp(lattice: Lattice, low: f32, high: f32, input: u32) -> Self {
+    pub(crate) fn clamp(lattice: Lattice, low: f32, high: f32, input: u32) -> Self {
         Self {
             kind: Node::Clamp,
             lattice,
@@ -397,7 +397,7 @@ impl NodeSpec {
 
     /// A constant value.
     #[must_use]
-    pub fn constant(lattice: Lattice, value: f32) -> Self {
+    pub(crate) fn constant(lattice: Lattice, value: f32) -> Self {
         Self {
             kind: Node::Const,
             lattice,
@@ -411,7 +411,7 @@ impl NodeSpec {
     /// A scalar graph evaluates one value, so this yields the sample's `x` coordinate in
     /// blocks. Noise nodes receive both coordinates directly.
     #[must_use]
-    pub fn input(lattice: Lattice) -> Self {
+    pub(crate) fn input(lattice: Lattice) -> Self {
         Self {
             kind: Node::Input,
             lattice,

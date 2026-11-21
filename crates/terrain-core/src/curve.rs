@@ -6,7 +6,7 @@
 //! the end points. The cubic is monotone by construction, so an output can never leave
 //! the endpoint range. Flat segments get zero tangents.
 //!
-//! [`Curve::linear`] compiles straight segments instead of cubics. It is the variant
+//! `Curve::linear` compiles straight segments instead of cubics. It is the variant
 //! for terraces and hard cliffs, where a rounded corner would erase the feature.
 //!
 //! No `mul_add` and no transcendental functions are used; every operation is `+ - * /`
@@ -47,7 +47,7 @@ impl Curve {
     ///
     /// Rejects fewer than two points, non-finite values, a `y` outside `[0, 1]`, and
     /// an `x` sequence that is not strictly increasing.
-    pub fn new(points: &[(f32, f32)]) -> Result<Self, TerrainError> {
+    pub(crate) fn new(points: &[(f32, f32)]) -> Result<Self, TerrainError> {
         Self::compile(points, false)
     }
 
@@ -60,7 +60,8 @@ impl Curve {
     /// # Errors
     ///
     /// Same validation as [`Curve::new`].
-    pub fn linear(points: &[(f32, f32)]) -> Result<Self, TerrainError> {
+    #[allow(dead_code)]
+    pub(crate) fn linear(points: &[(f32, f32)]) -> Result<Self, TerrainError> {
         Self::compile(points, true)
     }
 
@@ -80,7 +81,7 @@ impl Curve {
 
     /// Samples the curve at `x`, clamped to the end points.
     #[must_use]
-    pub fn sample(&self, x: f32) -> f32 {
+    pub(crate) fn sample(&self, x: f32) -> f32 {
         let Some(first) = self.points.first() else {
             return 0.0;
         };
@@ -100,13 +101,14 @@ impl Curve {
 
     /// Control points in `x` order.
     #[must_use]
-    pub fn points(&self) -> &[(f32, f32)] {
+    pub(crate) fn points(&self) -> &[(f32, f32)] {
         &self.points
     }
 
     /// Whether the curve is the piecewise-linear variant.
+    #[allow(dead_code)]
     #[must_use]
-    pub fn is_linear(&self) -> bool {
+    pub(crate) fn is_linear(&self) -> bool {
         self.linear
     }
 

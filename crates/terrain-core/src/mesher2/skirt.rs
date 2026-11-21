@@ -19,7 +19,7 @@ use super::record::{
 /// Fully open AO: every corner at `3`, so a skirt never darkens a seam.
 const AO_OPEN: u8 = 0xFF;
 
-/// One horizontal side of a section, in [`Face`](crate::revisions::Face) order.
+/// One horizontal side of a section, in `Face` order.
 ///
 /// The compass meaning follows the hydro flow graph: north is `z - 1`, east is
 /// `x + 1`, south is `z + 1`, west is `x - 1`.

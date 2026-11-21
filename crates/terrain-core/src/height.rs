@@ -8,7 +8,7 @@
 //! # Grid layout
 //!
 //! A tile owns `TILE_BLOCKS` blocks on each axis and carries a one-block margin
-//! on every side, so [`SIDE`] is `130` and `top` accepts `-1..=128`
+//! on every side, so `SIDE` is `130` and `top` accepts `-1..=128`
 //! (`B4.2`). The margin is not a clamped copy of the interior: it is built from
 //! the same global lattice and the same per-block fields as the neighbouring
 //! tile's interior, so two tiles agree bit-for-bit on the column they share.
@@ -21,16 +21,16 @@
 //! # Order of the chain
 //!
 //! Fixed by `F1.5`: bilinear macro height, per-block detail, terrace, river
-//! carve, and **one** `floor` at the end. [`top_solid_y`] is the only quantiser
-//! in this module (`C3.1`); [`build`] calls it exactly once per column. The
+//! carve, and **one** `floor` at the end. `top_solid_y` is the only quantiser
+//! in this module (`C3.1`); `build` calls it exactly once per column. The
 //! terrace grid holds a displacement in blocks, so the carve that follows it is
 //! never re-terraced and the risers stay where the graph put them.
 //!
 //! # The river carve
 //!
 //! The carve subtracts `influence * depth` from the `f32` height, with
-//! `influence` from [`river_influence`] and `depth` from [`bed_depth`] (`D3.3`).
-//! A carved bed is then bounded by [`clamp_bed`], which keeps it at or above
+//! `influence` from `river_influence` and `depth` from `bed_depth` (`D3.3`).
+//! A carved bed is then bounded by `clamp_bed`, which keeps it at or above
 //! `SEA - 30` and `y = 1`. The bound never lifts a column: a column already
 //! below the bed floor is not carved at all, because the open ocean floor is
 //! deliberately lower than the bed floor and is not a river.
@@ -52,16 +52,16 @@ use crate::hydro::flow::{bed_depth, clamp_bed, river_influence};
 use crate::lattice::{bilinear, macro_cell};
 
 /// Blocks along one edge of a tile, margin included: `128 + 2` (`E4.6`).
-pub const SIDE: i32 = 130;
+pub(crate) const SIDE: i32 = 130;
 
 /// Columns in one grid: [`SIDE`] squared.
-pub const CELLS: usize = 16_900;
+pub(crate) const CELLS: usize = 16_900;
 
 /// Lattice samples along one edge of a [`MacroGrid`]: `32 + 3`, margin included.
-pub const MACRO_SIDE: i32 = 35;
+pub(crate) const MACRO_SIDE: i32 = 35;
 
 /// Lattice samples in one [`MacroGrid`]: [`MACRO_SIDE`] squared.
-pub const MACRO_CELLS: usize = 1_225;
+pub(crate) const MACRO_CELLS: usize = 1_225;
 
 /// Row stride of a [`MacroGrid`].
 const MACRO_STRIDE: usize = 35;
@@ -87,7 +87,7 @@ const BED_FLOOR_Y: i32 = SEA - 30;
 /// Panics (by out-of-bounds indexing) when `x` or `z` is outside `-1..=128`.
 #[allow(clippy::cast_sign_loss)]
 #[must_use]
-pub fn index(x: i32, z: i32) -> usize {
+pub(crate) fn index(x: i32, z: i32) -> usize {
     ((x + 1) + SIDE * (z + 1)) as usize
 }
 
@@ -99,7 +99,7 @@ pub fn index(x: i32, z: i32) -> usize {
 /// graph proof, not this function, keeps heights inside the world (`C1.5`).
 #[allow(clippy::cast_possible_truncation)]
 #[must_use]
-pub fn top_solid_y(h: f32) -> i32 {
+pub(crate) fn top_solid_y(h: f32) -> i32 {
     h.floor() as i32
 }
 
@@ -169,9 +169,9 @@ impl MacroGrid {
 
     /// Bilinearly interpolates the lattice to one block (`B4.1`, `C3.3`).
     ///
-    /// Weights are the exact quarters of [`macro_cell`], so the result is exact
+    /// Weights are the exact quarters of `macro_cell`, so the result is exact
     /// for quarter-representable corners. The block coordinate is tile-local:
-    /// `-1..=128`, the same convention as [`index`].
+    /// `-1..=128`, the same convention as `index`.
     ///
     /// # Panics
     ///
@@ -215,7 +215,7 @@ fn macro_index(x: i32, z: i32) -> usize {
 /// Construction rejects a wrong length and a non-finite value; nothing is
 /// clamped (`S1.4`).
 #[derive(Clone, Debug)]
-pub struct BlockGrid {
+pub(crate) struct BlockGrid {
     values: Box<[f32]>,
 }
 
@@ -226,7 +226,7 @@ impl BlockGrid {
     ///
     /// Returns [`Stage::Height`] with [`ErrorKind::InvariantViolated`] when the
     /// slice is not [`CELLS`] long or holds a NaN or infinity.
-    pub fn new(values: Box<[f32]>) -> Result<Self, TerrainError> {
+    pub(crate) fn new(values: Box<[f32]>) -> Result<Self, TerrainError> {
         if values.len() != CELLS {
             return Err(invalid("height grid length"));
         }
@@ -242,7 +242,7 @@ impl BlockGrid {
     ///
     /// Panics when `x` or `z` is outside `-1..=128`.
     #[must_use]
-    pub fn get(&self, x: i32, z: i32) -> f32 {
+    pub(crate) fn get(&self, x: i32, z: i32) -> f32 {
         self.values[index(x, z)]
     }
 }
@@ -258,7 +258,7 @@ impl BlockGrid {
 /// the interpolated river-influence field, never from a per-block path search
 /// (`D3.3`).
 #[derive(Clone, Debug)]
-pub struct RiverCarve {
+pub(crate) struct RiverCarve {
     /// Channel width in blocks; `0` where there is no river.
     pub width: BlockGrid,
     /// U-profile bed depth in blocks, from [`bed_depth`].
@@ -274,7 +274,7 @@ impl RiverCarve {
     /// tile, so a caller cannot carve with a different profile than the one the
     /// water level assumes.
     #[must_use]
-    pub fn new(width: BlockGrid, distance: BlockGrid) -> Self {
+    pub(crate) fn new(width: BlockGrid, distance: BlockGrid) -> Self {
         let depths: Vec<f32> = width.values.iter().map(|&value| bed_depth(value)).collect();
         Self {
             width,
@@ -307,7 +307,7 @@ impl RiverCarve {
 /// height is at or above the bed floor, so the open ocean floor (`SEA - 32`) is
 /// never carved and a river never digs below `SEA - 30`.
 #[must_use]
-pub fn build(
+pub(crate) fn build(
     macro_grid: &MacroGrid,
     detail: &BlockGrid,
     terrace: &BlockGrid,

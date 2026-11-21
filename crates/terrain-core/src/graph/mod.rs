@@ -1,8 +1,8 @@
 //! W2 - the declarative field graph: nodes, canonical form, compiler.
 //!
-//! `B3.1`, `B3.2`, `B3.5`, `B3.6`, `B3.7`, `B3.8`. A [`Graph`] is data: nodes pushed in
-//! declaration order, each naming its inputs by the id `push` returned. [`Graph::compile`]
-//! validates it once and lowers it to a flat [`Compiled`] program that is evaluated into
+//! `B3.1`, `B3.2`, `B3.5`, `B3.6`, `B3.7`, `B3.8`. A `Graph` is data: nodes pushed in
+//! declaration order, each naming its inputs by the id `push` returned. `Graph::compile`
+//! validates it once and lowers it to a flat `Compiled` program that is evaluated into
 //! preallocated slots in topological order, ties broken by node id.
 //!
 //! Canonical form is structural, not positional: encoding walks from the output through
@@ -10,7 +10,7 @@
 //! were pushed in a different order. `Add` and `Mul` sort their two child encodings, so
 //! operand order in those two kinds is not identity either. `f32` values are encoded as
 //! bit patterns with `-0.0` normalised to `+0.0`; comments and whitespace do not exist in
-//! the byte stream. [`Graph::hash`] is `sha256(canonical_bytes())`.
+//! the byte stream. `Graph::hash` is `sha256(canonical_bytes())`.
 //!
 //! `canonical_bytes` is total, including for a graph that cannot compile: a cycle emits
 //! a marker instead of recursing forever. Only a graph that compiles has a meaningful
@@ -19,17 +19,17 @@
 mod compile;
 pub mod node;
 
-pub use compile::Compiled;
-pub use node::{Lattice, Node, NodeSpec, Params};
+pub(crate) use compile::Compiled;
+pub(crate) use node::{Lattice, Node, NodeSpec, Params};
 
 use crate::error::TerrainError;
 use crate::hash::sha256;
 
 /// Maximum number of nodes in a compiled graph.
-pub const MAX_NODES: usize = 256;
+pub(crate) const MAX_NODES: usize = 256;
 
 /// Maximum number of nodes on one dependency path.
-pub const MAX_DEPTH: usize = 32;
+pub(crate) const MAX_DEPTH: usize = 32;
 
 /// Version byte of the canonical graph encoding.
 const CANONICAL_VERSION: u8 = 1;
@@ -45,7 +45,7 @@ const CYCLE: u8 = 0xFF;
 
 /// A declarative field graph.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct Graph {
+pub(crate) struct Graph {
     nodes: Vec<NodeSpec>,
     output: Option<u32>,
 }
@@ -53,33 +53,33 @@ pub struct Graph {
 impl Graph {
     /// An empty graph with no output.
     #[must_use]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
     /// Appends one node and returns its id.
     ///
     /// The id is the declaration index, so an input must name an id below its own.
-    pub fn push(&mut self, node: NodeSpec) -> u32 {
+    pub(crate) fn push(&mut self, node: NodeSpec) -> u32 {
         let id = u32::try_from(self.nodes.len()).unwrap_or(u32::MAX);
         self.nodes.push(node);
         id
     }
 
     /// Declares which node is the graph's output.
-    pub fn set_output(&mut self, id: u32) {
+    pub(crate) fn set_output(&mut self, id: u32) {
         self.output = Some(id);
     }
 
     /// Returns the declared output id, if any.
     #[must_use]
-    pub fn output(&self) -> Option<u32> {
+    pub(crate) fn output(&self) -> Option<u32> {
         self.output
     }
 
     /// Returns the node with `id`, if it exists.
     #[must_use]
-    pub fn node(&self, id: u32) -> Option<&NodeSpec> {
+    pub(crate) fn node(&self, id: u32) -> Option<&NodeSpec> {
         usize::try_from(id)
             .ok()
             .and_then(|index| self.nodes.get(index))
@@ -87,13 +87,13 @@ impl Graph {
 
     /// Number of declared nodes.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.nodes.len()
     }
 
     /// Whether the graph declares no nodes.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }
 
@@ -104,7 +104,7 @@ impl Graph {
     /// Rejects cycles, unknown or forward inputs, a node whose lattice disagrees with
     /// its inputs, a chained warp, more than one warp, a missing output, a node-count
     /// or depth overrun, malformed parameters, and non-finite values.
-    pub fn compile(&self) -> Result<Compiled, TerrainError> {
+    pub(crate) fn compile(&self) -> Result<Compiled, TerrainError> {
         compile::compile(self)
     }
 
@@ -114,7 +114,7 @@ impl Graph {
     /// then one recursive record per reachable node. Each record is kind, lattice,
     /// parameters, child count, and children.
     #[must_use]
-    pub fn canonical_bytes(&self) -> Vec<u8> {
+    pub(crate) fn canonical_bytes(&self) -> Vec<u8> {
         let mut out = vec![CANONICAL_VERSION];
         let output = self
             .output
@@ -132,7 +132,7 @@ impl Graph {
 
     /// The 32-byte structural hash of the graph.
     #[must_use]
-    pub fn hash(&self) -> [u8; 32] {
+    pub(crate) fn hash(&self) -> [u8; 32] {
         sha256(&self.canonical_bytes())
     }
 

@@ -21,7 +21,7 @@
 //! Slots 6 and 7 are the first and the later matches of the biome list: the
 //! first rule is the topsoil, every later rule is a filler that may stack
 //! (`E4.2`). A biome list is mandatory, so "no rule matched" is a table bug;
-//! [`SurfaceTable::validate_table`] rejects a missing catch-all.
+//! `SurfaceTable::validate_table` rejects a missing catch-all.
 //!
 //! Bedrock is the absolute floor as well as the last fallback (`C4.1`): a column
 //! whose top is `y = 0` is bedrock, never sea floor, so slot 9 wins there even
@@ -29,9 +29,9 @@
 //!
 //! # Symbolic stone
 //!
-//! Slot 8 stores [`Layer::Stone`], not an id (`G1.2`). The caller resolves it
-//! through [`Strata::stone_at`](crate::strata::Strata::stone_at) (or
-//! [`Strata::stone_in`](crate::strata::Strata::stone_in) with the cached column
+//! Slot 8 stores `Layer::Stone`, not an id (`G1.2`). The caller resolves it
+//! through `Strata::stone_at` (or
+//! `Strata::stone_in` with the cached column
 //! this module hands back), so deep rock, strata bands, and the dither band stay
 //! one resolver.
 //!
@@ -53,11 +53,13 @@ mod seafloor;
 #[cfg(test)]
 mod tests;
 
-pub use rules::{
+#[allow(unused_imports)] // re-exported for the internal stages and unit tests
+pub(crate) use rules::{
     BiomeRules, ColumnFacts, DITHER_SHARE, Layer, MAX_BIOMES, Order, Predicate, Rule, SLOTS,
     STONE_DROP, SurfaceStack, SurfaceTable, T_SNOW, snow_jitter,
 };
-pub use seafloor::{
+#[allow(unused_imports)] // re-exported for the internal stages and unit tests
+pub(crate) use seafloor::{
     SEABED_CLAY_SHARE, SEABED_DITHER_SHARE, SEABED_SHELF_LAST_DEPTH, SEABED_SHORE_LAST_DEPTH,
     SEABED_SLOPE_LAST_DEPTH, SeabedMaterials, T_COLD_SHELF, T_COLD_SHORE,
 };

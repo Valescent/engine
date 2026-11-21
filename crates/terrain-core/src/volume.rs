@@ -8,7 +8,7 @@
 //!
 //! # Order (`F1.5`)
 //!
-//! [`Volume::apply`] runs two passes in a fixed order: **detail, then caves**. The
+//! `Volume::apply` runs two passes in a fixed order: **detail, then caves**. The
 //! cave roof is tested against the highest solid block *after* the detail pass, so
 //! an overhang cannot hide a cave mouth, and a cave can never breach what detail
 //! left above it.
@@ -16,14 +16,14 @@
 //! # The lattice (`F1.3`)
 //!
 //! The density lattice is the global 4x4x4 grid, 96 cells per 384-tall column, with
-//! samples at `4k + 0.5` on every axis. [`lattice_cell`] owns the `y` half of that
-//! rule and must agree with [`crate::lattice::macro_cell`]; a test pins the two
+//! samples at `4k + 0.5` on every axis. `lattice_cell` owns the `y` half of that
+//! rule and must agree with `crate::lattice::macro_cell`; a test pins the two
 //! together. The lattice is a pure function of absolute world position: it is never
 //! anchored to a chunk, a section, or a tile.
 //!
 //! A lattice cell whose four-block neighbourhood is entirely above
 //! `top_solid_y - CAVE_MIN_ROOF`, or entirely below `CAVE_FLOOR_Y` (`y = 8`),
-//! is never sampled ([`skippable_band`], [`cell_skipped`]). That is what lets a
+//! is never sampled (`skippable_band`, `cell_skipped`). That is what lets a
 //! column stop at the roof instead of walking 96 cells through air above the
 //! terrain.
 //!
@@ -36,11 +36,11 @@
 //!
 //! # Cheese and spaghetti (`F2.1`)
 //!
-//! Exactly [`CAVE_TAP_BUDGET`] noise taps per 3D sample: two octaves of cheese fBm
+//! Exactly `CAVE_TAP_BUDGET` noise taps per 3D sample: two octaves of cheese fBm
 //! at `1/48`, and two independent single-octave spaghetti fields at `1/64`. The
 //! combined density is `max(cheese, spaghetti)` in `[0, 1]`, and rock becomes air
 //! where `density > cave_t` (the `F1.2` threshold). Every sample reports its own tap
-//! count, and [`VolumeStats::taps`] totals a whole column.
+//! count, and `VolumeStats::taps` totals a whole column.
 //!
 //! Both spaghetti fields are `[0, 1]` (`B1.2`), so the interview's `|a|` is the
 //! distance from the neutral 0.5, doubled to span `[0, 1]` again. A tunnel pinches
@@ -61,21 +61,21 @@
 //!
 //! The weights are a function of `(top_solid_y, y)`, not a third noise tap, so
 //! they cost no budget. The two cheese octaves and the two spaghetti fields are
-//! still exactly [`CAVE_TAP_BUDGET`].
+//! still exactly `CAVE_TAP_BUDGET`.
 //!
 //! # Entrance (`F2.5`)
 //!
-//! The entrance field is a two-octave fBm at `1/192` through [`Volume::entrance`]'s
+//! The entrance field is a two-octave fBm at `1/192` through `Volume::entrance`'s
 //! curve. Above `entrance_t` it lowers the roof from [`crate::description::CAVE_MIN_ROOF`]
 //! to zero over a 0.05 ramp and eases the density threshold, which is what turns a
 //! chamber into a mouth. Hard exclusions are applied first and are never overridden:
 //! `y < 1` is out of range for the carve, `top_solid_y <= SEA + 1` is sea floor,
-//! river and lake beds and columns within [`BANK_CLEARANCE`] blocks of a bank are
+//! river and lake beds and columns within `BANK_CLEARANCE` blocks of a bank are
 //! excluded, and a mouth needs `slope >= MOUTH_SLOPE_MIN`.
 //!
-//! [`Volume::is_mouth`] is the coordinate half of the test: the entrance field
-//! crossing `entrance_t` at `(x, z)`. [`Volume::mouth_open`] is the complete gate
-//! including slope, height, and the three exclusions, and [`Volume::roof`] returns
+//! `Volume::is_mouth` is the coordinate half of the test: the entrance field
+//! crossing `entrance_t` at `(x, z)`. `Volume::mouth_open` is the complete gate
+//! including slope, height, and the three exclusions, and `Volume::roof` returns
 //! the thickness it produces. A flag the caller keeps per column is what lets the
 //! span pass treat a mouth column's top as open to the sky even when a one-block
 //! lip survives.
@@ -84,23 +84,23 @@
 //!
 //! Detail applies only inside `[base_top - detail_down, base_top + detail_up]`, with
 //! `base = clamp((h - (y + 0.5)) / 8, -1, 1)` and one 3D tap multiplied by
-//! `detail_amp * band_fade(y) * mask`. [`band_fade`] is zero at both band edges, so
+//! `detail_amp * band_fade(y) * mask`. `band_fade` is zero at both band edges, so
 //! the band never leaves a seam, and `mask = curve_detail(roughness) * coast_mask *
 //! curve_slope(macro_slope)` fades the band out at the coast and on flat ground.
 //!
 //! A cell above the height surface (`base <= 0`) only becomes solid when the total
-//! density clears [`FLOAT_MIN`], so a small noise bump cannot spawn a one-block
+//! density clears `FLOAT_MIN`, so a small noise bump cannot spawn a one-block
 //! floater. `F3.4` removes detail entirely over shallow water (`top <= SEA + 2`),
-//! on river and lake beds, and within [`BANK_CLEARANCE`] blocks of a bank.
+//! on river and lake beds, and within `BANK_CLEARANCE` blocks of a bank.
 //!
 //! # Spans (`F4.1`)
 //!
-//! [`resolve_spans`] groups a finished column into maximal solid runs. One run is a
-//! [`SpanKind::Surface`] column and keeps the `E4.5` stack unchanged. With more than
-//! one run the topmost span is the cave's [`SpanKind::Ceiling`] (its underside is
-//! stone), and every span below the first is a [`SpanKind::CaveFloor`] whose top
-//! takes the reduced rule set from [`span_rule`]: stone and gravel only, no snow, no
-//! beach, and no biome topsoil unless [`open_to_sky`] proves the column is actually
+//! `resolve_spans` groups a finished column into maximal solid runs. One run is a
+//! `SpanKind::Surface` column and keeps the `E4.5` stack unchanged. With more than
+//! one run the topmost span is the cave's `SpanKind::Ceiling` (its underside is
+//! stone), and every span below the first is a `SpanKind::CaveFloor` whose top
+//! takes the reduced rule set from `span_rule`: stone and gravel only, no snow, no
+//! beach, and no biome topsoil unless `open_to_sky` proves the column is actually
 //! open.
 //!
 //! `open_to_sky` is a skylight walk, not a span count: a shaft that reaches the sky
@@ -108,7 +108,7 @@
 //!
 //! # Contract notes
 //!
-//! - [`ColumnInput`] carries `x` and `z` in addition to the field list in the
+//! - `ColumnInput` carries `x` and `z` in addition to the field list in the
 //!   brief. The 3D fields are functions of world position; without the column's
 //!   coordinates no two columns could differ, so the coordinate half is supplied
 //!   like every other fact and is never recomputed here.
@@ -130,12 +130,15 @@ mod spans;
 #[cfg(test)]
 mod tests;
 
-pub use caves::{
+#[allow(unused_imports)] // re-exported for the internal stages and unit tests
+pub(crate) use caves::{
     BANK_CLEARANCE, CAVE_TAP_BUDGET, CaveSample, MOUTH_SLOPE_MIN, SpanSkip, cell_skipped,
     lattice_cell, skippable_band,
 };
-pub use detail::{DETAIL_TAP_BUDGET, DetailSample, FLOAT_MIN, band_fade};
-pub use spans::{Span, SpanKind, SpanRule, open_to_sky, resolve_spans, span_rule};
+#[allow(unused_imports)] // re-exported for the internal stages and unit tests
+pub(crate) use detail::{DETAIL_TAP_BUDGET, DetailSample, FLOAT_MIN, band_fade};
+#[allow(unused_imports)] // re-exported for the internal stages and unit tests
+pub(crate) use spans::{Span, SpanKind, SpanRule, open_to_sky, resolve_spans, span_rule};
 
 use crate::curve::Curve;
 use crate::description::{CAVE_MIN_ROOF, DETAIL_DOWN, DETAIL_UP, MACRO_CELL, SEA, WORLD_HEIGHT};
@@ -147,10 +150,10 @@ use self::caves::ENTRANCE_KNOTS;
 use self::detail::{DETAIL_KNOTS, SLOPE_KNOTS};
 
 /// Blocks in one column: `WORLD_HEIGHT` as a `usize` for array lengths.
-pub const COLUMN_HEIGHT: usize = WORLD_HEIGHT as usize;
+pub(crate) const COLUMN_HEIGHT: usize = WORLD_HEIGHT as usize;
 
 /// Lattice cells in one 384-tall column: `WORLD_HEIGHT / MACRO_CELL` (`F1.3`).
-pub const LATTICE_CELLS: usize = COLUMN_HEIGHT / MACRO_CELL as usize;
+pub(crate) const LATTICE_CELLS: usize = COLUMN_HEIGHT / MACRO_CELL as usize;
 
 const _: () = assert!(LATTICE_CELLS == 96);
 
@@ -160,7 +163,7 @@ const WORLD_LAST_Y: i32 = WORLD_HEIGHT as i32 - 1;
 
 /// Tunable volume parameters. Every field is a required key in the description.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct VolumeParams {
+pub(crate) struct VolumeParams {
     /// Density above which a cave cell becomes air, in `[0, 1]` (`F1.2`).
     pub cave_t: f32,
     /// Entrance field above which the roof starts to open, in `[0, 1]` (`F2.5`).
@@ -184,7 +187,7 @@ pub struct VolumeParams {
 impl VolumeParams {
     /// The v1 defaults, pinned to the description's own values.
     #[must_use]
-    pub fn v1_default(seed: u64) -> Self {
+    pub(crate) fn v1_default(seed: u64) -> Self {
         Self {
             cave_t: 0.55,
             entrance_t: 0.82,
@@ -204,7 +207,7 @@ impl VolumeParams {
     ///
     /// Returns [`Stage::Volume`] with [`ErrorKind::DescriptionInvalid`] naming the
     /// first key that is non-finite or out of range.
-    pub fn validate(&self) -> Result<(), TerrainError> {
+    pub(crate) fn validate(&self) -> Result<(), TerrainError> {
         for (key, value) in [
             ("CAVE_T", self.cave_t),
             ("ENTRANCE_T", self.entrance_t),
@@ -249,7 +252,7 @@ impl VolumeParams {
 /// `macro_height` come from the height tile, and `rough`/`slope` are the fields the
 /// detail mask reads. Nothing here is recomputed by this module.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ColumnInput {
+pub(crate) struct ColumnInput {
     /// World block `x` of the column.
     pub x: i32,
     /// World block `z` of the column.
@@ -272,7 +275,7 @@ pub struct ColumnInput {
 
 /// Counters from one [`Volume::apply`] call.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct VolumeStats {
+pub(crate) struct VolumeStats {
     /// Cells the cave pass turned from solid to air.
     pub cave_cells: u32,
     /// Cells the detail pass changed, in either direction.
@@ -289,7 +292,7 @@ pub struct VolumeStats {
 /// and the stream ids are pure functions of the parameters and the seed, so the
 /// struct is `Send` and gives the same answer from any thread.
 #[derive(Clone, Debug)]
-pub struct Volume {
+pub(crate) struct Volume {
     /// The parameters every pass reads.
     params: VolumeParams,
     /// Raw entrance field to `[0, 1]` (`F2.5`).
@@ -316,7 +319,7 @@ impl Volume {
     /// Returns [`Stage::Volume`] with [`ErrorKind::DescriptionInvalid`] when the
     /// parameters fail [`VolumeParams::validate`], or when a built-in curve table is
     /// not monotone (which would be a code bug, not a world bug).
-    pub fn new(params: VolumeParams) -> Result<Self, TerrainError> {
+    pub(crate) fn new(params: VolumeParams) -> Result<Self, TerrainError> {
         params.validate()?;
         Ok(Self {
             entrance_curve: Curve::new(ENTRANCE_KNOTS)?,
@@ -338,7 +341,7 @@ impl Volume {
 
     /// The parameters this volume was built from.
     #[must_use]
-    pub fn params(&self) -> &VolumeParams {
+    pub(crate) fn params(&self) -> &VolumeParams {
         &self.params
     }
 
@@ -351,7 +354,7 @@ impl Volume {
     /// The passes run detail first, then caves, and the cave roof is measured
     /// against the highest solid block the detail pass left. `y = 0` and everything
     /// below `y = 1` is never touched (`C4.1`).
-    pub fn apply(
+    pub(crate) fn apply(
         &self,
         column: &mut [BlockId; WORLD_HEIGHT as usize],
         input: &ColumnInput,

@@ -18,7 +18,7 @@ pub const MAX_LAKE_Y: i32 = MAX_TERRAIN_Y - 32;
 /// Lowest a river bed may reach (`D3.3`): `SEA - 30`, and never below `y = 1`.
 ///
 /// `SEA - 30` is `98`, so the `y = 1` bound is implied and never the binding
-/// one in v1. [`flow::clamp_bed`] applies both.
+/// one in v1. `flow::clamp_bed` applies both.
 pub const BED_FLOOR: i32 = SEA - 30;
 
 // `BED_FLOOR` is `98`, so the `y = 1` bound in `D3.3` never binds.

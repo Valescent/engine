@@ -25,7 +25,7 @@ use super::flow::{ORDER, neighbour};
 /// Exact in `f32` up to about `2^17` blocks of accumulated rise, so the epsilon
 /// itself never rounds a filled height. A 128-cell flat crossing therefore
 /// distorts by at most `2` blocks, which is the bound `D2.5` quotes.
-pub const EPS: f32 = 1.0 / 64.0;
+pub(crate) const EPS: f32 = 1.0 / 64.0;
 
 /// One priority-queue entry, ordered by `(height, index)` exactly.
 #[derive(Clone, Copy, Debug)]
@@ -70,7 +70,7 @@ impl PartialOrd for Key {
 /// passed.
 ///
 /// Returns an empty vector when `height.len() != side * side`.
-pub fn priority_flood(height: &[f32], side: usize) -> Vec<f32> {
+pub(crate) fn priority_flood(height: &[f32], side: usize) -> Vec<f32> {
     priority_flood_from(height, side, 1)
 }
 
@@ -79,7 +79,7 @@ pub fn priority_flood(height: &[f32], side: usize) -> Vec<f32> {
 /// A tile passes its halo width, so the whole halo is boundary state and only
 /// the interior is filled. A bare test grid passes `1`.
 #[allow(clippy::cast_precision_loss)]
-pub fn priority_flood_from(height: &[f32], side: usize, border: usize) -> Vec<f32> {
+pub(crate) fn priority_flood_from(height: &[f32], side: usize, border: usize) -> Vec<f32> {
     let cells = side * side;
     if side == 0 || height.len() != cells {
         return Vec::new();

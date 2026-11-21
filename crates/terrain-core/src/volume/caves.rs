@@ -10,13 +10,13 @@ use super::{COLUMN_HEIGHT, ColumnInput, Volume, VolumeStats, WORLD_LAST_Y, ramp}
 ///
 /// Two cheese octaves plus two spaghetti fields. The counter in [`CaveSample`] is
 /// the assertion: a sample that spent more would be a version bump.
-pub const CAVE_TAP_BUDGET: u8 = 4;
+pub(crate) const CAVE_TAP_BUDGET: u8 = 4;
 
 /// Integer slope drop at which a column may open a cave mouth (`F2.5`).
-pub const MOUTH_SLOPE_MIN: i32 = 2;
+pub(crate) const MOUTH_SLOPE_MIN: i32 = 2;
 
 /// Clearance, in blocks, that keeps a mouth off a river or lake bank (`F2.5`).
-pub const BANK_CLEARANCE: i32 = 2;
+pub(crate) const BANK_CLEARANCE: i32 = 2;
 
 /// Frequency of the cheese fBm, in cycles per block (`F2.1`).
 const CHEESE_FREQ: f32 = 1.0 / 48.0;
@@ -113,7 +113,7 @@ pub(super) const ENTRANCE_KNOTS: &[(f32, f32)] = &[
 /// above the cave roof; everything below `y = 1` is skipped as well, because the
 /// bedrock block at `y = 0` is never carved.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct SpanSkip {
+pub(crate) struct SpanSkip {
     /// First block `y` that is never sampled.
     pub y_min: i32,
     /// Last block `y` that is never sampled.
@@ -126,7 +126,7 @@ pub struct SpanSkip {
 /// `top - CAVE_MIN_ROOF`, which is exactly `y >= y_min`; the `y = 0` cell is *not*
 /// skipped because it also holds `y = 1..=3`.
 #[must_use]
-pub fn skippable_band(top: i32) -> SpanSkip {
+pub(crate) fn skippable_band(top: i32) -> SpanSkip {
     SpanSkip {
         y_min: top.saturating_sub(CAVE_MIN_ROOF).saturating_add(1),
         y_max: WORLD_LAST_Y,
@@ -139,7 +139,7 @@ pub fn skippable_band(top: i32) -> SpanSkip {
 /// skipped when its four-block neighbourhood is entirely above the cave roof or
 /// entirely below `CAVE_FLOOR_Y` (the `F2.3` floor, `y = 8`).
 #[must_use]
-pub fn cell_skipped(cell: i32, top: i32) -> bool {
+pub(crate) fn cell_skipped(cell: i32, top: i32) -> bool {
     let first = cell.saturating_mul(MACRO_CELL);
     first >= skippable_band(top).y_min || first.saturating_add(MACRO_CELL - 1) < CAVE_FLOOR_Y
 }
@@ -151,7 +151,7 @@ pub fn cell_skipped(cell: i32, top: i32) -> bool {
 /// together on both sides of the origin.
 #[must_use]
 #[allow(clippy::cast_precision_loss)]
-pub fn lattice_cell(y: i32) -> (i32, f32) {
+pub(crate) fn lattice_cell(y: i32) -> (i32, f32) {
     let cell = y.div_euclid(MACRO_CELL);
     let weight = y.rem_euclid(MACRO_CELL) as f32 / MACRO_CELL as f32;
     (cell, weight)
@@ -159,7 +159,7 @@ pub fn lattice_cell(y: i32) -> (i32, f32) {
 
 /// The two densities of one 3D cave sample and the taps it cost (`F2.1`).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct CaveSample {
+pub(crate) struct CaveSample {
     /// `max(cheese, spaghetti)`, in `[0, 1]`.
     pub density: f32,
     /// Noise taps spent: always [`CAVE_TAP_BUDGET`].
@@ -172,7 +172,7 @@ impl Volume {
     /// The entrance field at one column, in `[0, 1]` (`F2.5`).
     #[must_use]
     #[allow(clippy::cast_precision_loss)]
-    pub fn entrance(&self, x: i32, z: i32) -> f32 {
+    pub(crate) fn entrance(&self, x: i32, z: i32) -> f32 {
         let raw = fbm_2d(
             self.entrance_seed,
             x as f32,
@@ -194,7 +194,7 @@ impl Volume {
     /// `is_mouth(x, z) && input.slope >= MOUTH_SLOPE_MIN`, or simply the value
     /// [`Volume::mouth_open`] returns.
     #[must_use]
-    pub fn is_mouth(&self, x: i32, z: i32) -> bool {
+    pub(crate) fn is_mouth(&self, x: i32, z: i32) -> bool {
         self.entrance(x, z) >= self.params.entrance_t
     }
 
@@ -205,7 +205,7 @@ impl Volume {
     /// overridden by the mask: a flat column, a column at or below `SEA + 1`, a
     /// river bed, a lake bed, and a bank all keep the default roof.
     #[must_use]
-    pub fn mouth_open(&self, input: &ColumnInput) -> bool {
+    pub(crate) fn mouth_open(&self, input: &ColumnInput) -> bool {
         self.is_mouth(input.x, input.z)
             && input.slope >= MOUTH_SLOPE_MIN
             && input.top > self.params.sea + 1
@@ -220,7 +220,7 @@ impl Volume {
     /// which case the entrance ramp lowers it towards zero.
     #[must_use]
     #[allow(clippy::cast_precision_loss)]
-    pub fn roof(&self, input: &ColumnInput) -> f32 {
+    pub(crate) fn roof(&self, input: &ColumnInput) -> f32 {
         let default = self.params.cave_min_roof as f32;
         if !self.mouth_open(input) {
             return default;
@@ -235,7 +235,7 @@ impl Volume {
     /// `HeightTile` top; the `F2.3` depth weights are a function of `(top, y)`
     /// and therefore cost no extra tap.
     #[must_use]
-    pub fn cave_density(&self, x: f32, y: f32, z: f32, top: i32) -> CaveSample {
+    pub(crate) fn cave_density(&self, x: f32, y: f32, z: f32, top: i32) -> CaveSample {
         let cheese = self.cheese(x, y, z, top);
         let spaghetti = self.spaghetti(x, y, z, top);
         let density = cheese.max(spaghetti);

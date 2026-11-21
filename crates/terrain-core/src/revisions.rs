@@ -21,17 +21,17 @@
 use crate::error::Stage;
 
 /// Sections in a column (`I1.3`).
-pub const SECTION_COUNT: usize = 12;
+pub(crate) const SECTION_COUNT: usize = 12;
 
 /// Horizontal faces of a column.
-pub const FACE_COUNT: usize = 4;
+pub(crate) const FACE_COUNT: usize = 4;
 
 /// One horizontal face of a column.
 ///
 /// Revisions are keyed by face only, never by an axis: which world direction a
 /// face means is the caller's mapping.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub enum Face {
+pub(crate) enum Face {
     /// One horizontal side.
     North,
     /// One horizontal side.
@@ -44,7 +44,7 @@ pub enum Face {
 
 impl Face {
     /// Every face, in the order [`ColumnRevisions`] stores them.
-    pub const ALL: [Self; FACE_COUNT] = [Self::North, Self::South, Self::East, Self::West];
+    pub(crate) const ALL: [Self; FACE_COUNT] = [Self::North, Self::South, Self::East, Self::West];
 
     /// Index into the per-face arrays.
     const fn index(self) -> usize {
@@ -62,7 +62,7 @@ impl Face {
 /// Constructed from the saved world revision, so a result built at load time is
 /// current until the first edit or promotion (`I3.2`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ColumnRevisions {
+pub(crate) struct ColumnRevisions {
     sections: [u64; SECTION_COUNT],
     borders: [u64; FACE_COUNT],
     world: u64,
@@ -72,7 +72,7 @@ impl ColumnRevisions {
     /// Starts every counter at `world_revision`, the revision loaded from the
     /// save header.
     #[must_use]
-    pub const fn new(world_revision: u64) -> Self {
+    pub(crate) const fn new(world_revision: u64) -> Self {
         Self {
             sections: [world_revision; SECTION_COUNT],
             borders: [world_revision; FACE_COUNT],
@@ -82,7 +82,7 @@ impl ColumnRevisions {
 
     /// The world revision these counters started from.
     #[must_use]
-    pub const fn world_revision(&self) -> u64 {
+    pub(crate) const fn world_revision(&self) -> u64 {
         self.world
     }
 
@@ -91,7 +91,7 @@ impl ColumnRevisions {
     /// An index outside `0..SECTION_COUNT` is ignored and nothing panics: a job
     /// that computes a bad index keeps running and simply dirties nothing.
     /// Saturating, so a revision never wraps and monotonicity holds.
-    pub const fn bump_section(&mut self, section: usize) {
+    pub(crate) const fn bump_section(&mut self, section: usize) {
         if section < SECTION_COUNT {
             self.sections[section] = self.sections[section].saturating_add(1);
         }
@@ -102,7 +102,7 @@ impl ColumnRevisions {
     /// This is the batch entry point: one edit batch is exactly one bump per
     /// touched section, no matter how many blocks it changed (`I3.2`). Bits at
     /// or above [`SECTION_COUNT`] are ignored.
-    pub const fn bump_sections(&mut self, mask: u16) {
+    pub(crate) const fn bump_sections(&mut self, mask: u16) {
         let mut section = 0;
         while section < SECTION_COUNT {
             if mask & (1 << section) != 0 {
@@ -117,7 +117,7 @@ impl ColumnRevisions {
     /// A neighbour's interior change is not this column's business (`I3.2`), so
     /// it must not call this. Saturating, for the same reason as
     /// [`Self::bump_section`].
-    pub const fn bump_border(&mut self, face: Face) {
+    pub(crate) const fn bump_border(&mut self, face: Face) {
         let index = face.index();
         self.borders[index] = self.borders[index].saturating_add(1);
     }
@@ -127,7 +127,7 @@ impl ColumnRevisions {
     /// An index outside `0..SECTION_COUNT` has no counters of its own, so it
     /// reports the world revision - the state it would have had at load time.
     #[must_use]
-    pub const fn section_rev(&self, section: usize) -> u64 {
+    pub(crate) const fn section_rev(&self, section: usize) -> u64 {
         if section < SECTION_COUNT {
             self.sections[section]
         } else {
@@ -137,7 +137,7 @@ impl ColumnRevisions {
 
     /// Revision of one face.
     #[must_use]
-    pub const fn border_rev(&self, face: Face) -> u64 {
+    pub(crate) const fn border_rev(&self, face: Face) -> u64 {
         self.borders[face.index()]
     }
 
@@ -145,7 +145,7 @@ impl ColumnRevisions {
     ///
     /// Derived on every call and never stored, so the two can never disagree.
     #[must_use]
-    pub const fn column_rev(&self) -> u64 {
+    pub(crate) const fn column_rev(&self) -> u64 {
         let mut highest = 0;
         let mut section = 0;
         while section < SECTION_COUNT {
@@ -162,7 +162,7 @@ impl ColumnRevisions {
     /// An index outside `0..SECTION_COUNT` still yields a stable key: the
     /// world revision and a clamped slot, never a panic.
     #[must_use]
-    pub fn section_key(&self, column: [i32; 2], section: usize) -> SectionKey {
+    pub(crate) fn section_key(&self, column: [i32; 2], section: usize) -> SectionKey {
         SectionKey {
             column,
             section: u8::try_from(section).unwrap_or(u8::MAX),
@@ -175,7 +175,7 @@ impl ColumnRevisions {
     /// Equal revisions are current, not dirty: the result already saw that
     /// edit. A bad index is never dirty relative to the world revision.
     #[must_use]
-    pub const fn is_dirty_since(&self, section: usize, rev: u64) -> bool {
+    pub(crate) const fn is_dirty_since(&self, section: usize, rev: u64) -> bool {
         self.section_rev(section) > rev
     }
 }
@@ -186,7 +186,7 @@ impl ColumnRevisions {
 /// `x`, then `z`, then section, then revision - the same order for every
 /// insertion order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct SectionKey {
+pub(crate) struct SectionKey {
     /// The column, `[x, z]`.
     pub column: [i32; 2],
     /// Section slot in the column, `0..12`.
@@ -198,7 +198,7 @@ pub struct SectionKey {
 /// One queued request, keyed by coordinate, stage, and revision (`K3.1`).
 ///
 /// A finished result is applied only when its key still
-/// [`accepts`](Self::accepts) the current one. Otherwise it is discarded as
+/// `accepts` the current one. Otherwise it is discarded as
 /// stale and counted separately from a job dropped before it started (`K3.2`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct RequestKey {
@@ -213,7 +213,7 @@ pub struct RequestKey {
 impl RequestKey {
     /// Whether `other` names the same request: all three fields equal.
     #[must_use]
-    pub fn accepts(&self, other: &Self) -> bool {
+    pub(crate) fn accepts(&self, other: &Self) -> bool {
         self.coord == other.coord && self.stage == other.stage && self.revision == other.revision
     }
 }

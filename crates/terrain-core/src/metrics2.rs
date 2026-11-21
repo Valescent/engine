@@ -2,12 +2,12 @@
 //!
 //! Caller-owned state and a read model, no globals, no rendering:
 //!
-//! - [`METRICS`] and [`Counters`] - the pinned `Q1.1` metric list and its values.
-//! - [`MemoryLedger`] - per-class byte accounting against the `S1.7` cap.
-//! - [`ShedState`] - the `K4.3` load-shedding ladder.
-//! - [`overlay_lines`] - the `Q1.5` text read model, one line per group.
+//! - `METRICS` and [`Counters`] - the pinned `Q1.1` metric list and its values.
+//! - `MemoryLedger` - per-class byte accounting against the `S1.7` cap.
+//! - `ShedState` - the `K4.3` load-shedding ladder.
+//! - `overlay_lines` - the `Q1.5` text read model, one line per group.
 //!
-//! Every counter is a `u64`; the unit lives in [`Unit`], never in the value.
+//! Every counter is a `u64`; the unit lives in `Unit`, never in the value.
 //! Latency names end in `_p50` or `_p95`, byte names end in `_bytes`, rate names
 //! end in `_per_s`, and counts carry no suffix (`_count` is deliberately unused).
 //!
@@ -30,7 +30,7 @@ use crate::error::{ErrorKind, Stage, TerrainError};
 /// count (`_ms`, `_bytes`, `_per_s`); latency percentiles keep their `_p50` and
 /// `_p95` suffixes instead of a `_ms` suffix.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Unit {
+pub(crate) enum Unit {
     /// Milliseconds.
     Milliseconds,
     /// A plain count.
@@ -43,7 +43,7 @@ pub enum Unit {
 
 /// One pinned metric: a stable name, its unit, and the stage that owns it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MetricSpec {
+pub(crate) struct MetricSpec {
     /// Stable name, `lower_snake_case`.
     pub name: &'static str,
     /// Unit of the value.
@@ -61,7 +61,7 @@ const fn metric(name: &'static str, unit: Unit, stage: Stage) -> MetricSpec {
 /// Append only: a rename breaks dashboards, captures, and grep-based tooling, so
 /// the names are treated as a wire format. The order is the `Counters` index
 /// order and is not part of the overlay layout.
-pub const METRICS: &[MetricSpec] = &[
+pub(crate) const METRICS: &[MetricSpec] = &[
     // Per-stage worker latency, one p50/p95 pair per stage that runs on a worker.
     metric("fields_p50", Unit::Milliseconds, Stage::Fields),
     metric("fields_p95", Unit::Milliseconds, Stage::Fields),
@@ -112,7 +112,7 @@ fn index_of(name: &str) -> Option<usize> {
     METRICS.iter().position(|metric| metric.name == name)
 }
 
-/// A `Vec<Cell<u64>>` sampler indexed by [`METRICS`].
+/// A `Vec<Cell<u64>>` sampler indexed by `METRICS`.
 ///
 /// Unknown names are no-ops: `add` and `set` return `false` and `get` returns
 /// `None`. Nothing panics on a typo, so a diagnostics bug can never take the
@@ -230,14 +230,14 @@ const fn latency_name(stage: Stage) -> Option<&'static str> {
 /// Records one latency sample in `stage`'s pinned `_p50` slot.
 ///
 /// Returns `false` when `stage` has no pinned latency pair; nothing panics.
-pub fn record_latency(counters: &mut Counters, stage: Stage, micros: u64) -> bool {
+pub(crate) fn record_latency(counters: &mut Counters, stage: Stage, micros: u64) -> bool {
     counters.record_latency(stage, micros)
 }
 
 /// Sets `resident_columns`, `ready_columns`, and `queued_columns` together.
 ///
 /// Pure over the pinned table; it adds no metric.
-pub fn set_gauges(counters: &mut Counters, resident: u64, ready: u64, queued: u64) {
+pub(crate) fn set_gauges(counters: &mut Counters, resident: u64, ready: u64, queued: u64) {
     counters.set_gauges(resident, ready, queued);
 }
 
@@ -249,7 +249,7 @@ impl Default for Counters {
 
 /// A memory class from `S1.7`. The order is the class order used to break ties.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MemoryClass {
+pub(crate) enum MemoryClass {
     /// Saved and loaded section payloads.
     Sections,
     /// Derived tiles kept between stages.
@@ -266,7 +266,7 @@ pub enum MemoryClass {
 
 impl MemoryClass {
     /// Every class, in class order.
-    pub const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 6] = [
         Self::Sections,
         Self::DerivedTiles,
         Self::Meshes,
@@ -277,7 +277,7 @@ impl MemoryClass {
 
     /// Stable lowercase name used by the overlay and by `ErrorKind::ResourceCap`.
     #[must_use]
-    pub const fn name(self) -> &'static str {
+    pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::Sections => "sections",
             Self::DerivedTiles => "derived_tiles",
@@ -308,7 +308,7 @@ impl MemoryClass {
 /// reservation that would exceed the cap fails with [`ErrorKind::ResourceCap`]
 /// and changes nothing; the caller decides whether to evict, shed, or report.
 #[derive(Debug)]
-pub struct MemoryLedger {
+pub(crate) struct MemoryLedger {
     cap_bytes: u64,
     used: [u64; 6],
 }
@@ -316,7 +316,7 @@ pub struct MemoryLedger {
 impl MemoryLedger {
     /// A ledger with no bytes held and a hard cap of `cap_bytes`.
     #[must_use]
-    pub fn new(cap_bytes: u64) -> Self {
+    pub(crate) fn new(cap_bytes: u64) -> Self {
         Self {
             cap_bytes,
             used: [0; 6],
@@ -325,19 +325,19 @@ impl MemoryLedger {
 
     /// The hard cap in bytes.
     #[must_use]
-    pub const fn cap(&self) -> u64 {
+    pub(crate) const fn cap(&self) -> u64 {
         self.cap_bytes
     }
 
     /// Bytes held by one class.
     #[must_use]
-    pub fn class_bytes(&self, class: MemoryClass) -> u64 {
+    pub(crate) fn class_bytes(&self, class: MemoryClass) -> u64 {
         self.used[class.index()]
     }
 
     /// Total bytes held across every class, saturating at `u64::MAX`.
     #[must_use]
-    pub fn used(&self) -> u64 {
+    pub(crate) fn used(&self) -> u64 {
         self.used
             .iter()
             .fold(0, |total, bytes| total.saturating_add(*bytes))
@@ -346,7 +346,7 @@ impl MemoryLedger {
     /// `used / cap`, clamped to `[0, 1]`. A zero cap reports zero pressure.
     #[allow(clippy::cast_precision_loss)]
     #[must_use]
-    pub fn pressure(&self) -> f32 {
+    pub(crate) fn pressure(&self) -> f32 {
         if self.cap_bytes == 0 {
             return 0.0;
         }
@@ -363,7 +363,7 @@ impl MemoryLedger {
     /// Returns a `ResourceCap` error (stage `Streaming`, the admission point)
     /// when the projected total would exceed the cap or overflow a `u64`. The
     /// ledger is left unchanged on failure.
-    pub fn reserve(&mut self, class: MemoryClass, bytes: u64) -> Result<(), TerrainError> {
+    pub(crate) fn reserve(&mut self, class: MemoryClass, bytes: u64) -> Result<(), TerrainError> {
         let Some(projected) = self.used().checked_add(bytes) else {
             return Err(TerrainError::new(
                 Stage::Streaming,
@@ -391,7 +391,7 @@ impl MemoryLedger {
     ///
     /// Saturates at zero: a discard may race a release, and accounting must
     /// never go negative or panic (`K3.4`).
-    pub fn release(&mut self, class: MemoryClass, bytes: u64) {
+    pub(crate) fn release(&mut self, class: MemoryClass, bytes: u64) {
         let slot = &mut self.used[class.index()];
         *slot = slot.saturating_sub(bytes);
     }
@@ -401,7 +401,7 @@ impl MemoryLedger {
     /// Every class is returned, including empty ones, so callers can render a
     /// fixed table. `limit` truncates the list.
     #[must_use]
-    pub fn largest_classes(&self, limit: usize) -> Vec<(MemoryClass, u64)> {
+    pub(crate) fn largest_classes(&self, limit: usize) -> Vec<(MemoryClass, u64)> {
         let mut classes: Vec<(MemoryClass, u64)> = MemoryClass::ALL
             .into_iter()
             .map(|class| (class, self.class_bytes(class)))
@@ -414,7 +414,7 @@ impl MemoryLedger {
 
 /// One rung of the `K4.3` load-shedding ladder, from least to most shed.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum ShedStep {
+pub(crate) enum ShedStep {
     /// Nothing shed.
     Full,
     /// Background work (compaction, cache, LOD rebuild) stopped.
@@ -456,14 +456,14 @@ impl ShedStep {
 }
 
 /// The largest cut the ladder may make to the view radius, in columns.
-pub const RADIUS_CUT: i32 = 2;
+pub(crate) const RADIUS_CUT: i32 = 2;
 
 /// The smallest view radius the ladder may cut to.
-pub const MIN_VIEW_RADIUS: i32 = 8;
+pub(crate) const MIN_VIEW_RADIUS: i32 = 8;
 
 /// Lag-free windows required before one restore step, at `LAG_WINDOW` = 2 s and
 /// `RESTORE_WINDOW` = 10 s.
-pub const RESTORE_WINDOWS: u32 = 5;
+pub(crate) const RESTORE_WINDOWS: u32 = 5;
 
 /// The `K4.3` ladder state. Never shed past [`ShedStep::RadiusCut`], never
 /// restored past [`ShedStep::Full`].
@@ -473,7 +473,7 @@ pub const RESTORE_WINDOWS: u32 = 5;
 /// ladder, and only the caller knows both. It applies [`RADIUS_CUT`] when this
 /// ladder enters `RadiusCut` and gives it back when it leaves.
 #[derive(Debug)]
-pub struct ShedState {
+pub(crate) struct ShedState {
     step: ShedStep,
     effective_radius: i32,
     restore_after: u32,
@@ -482,7 +482,7 @@ pub struct ShedState {
 impl ShedState {
     /// A ladder at [`ShedStep::Full`] with an uncut radius.
     #[must_use]
-    pub fn new(effective_radius: i32) -> Self {
+    pub(crate) fn new(effective_radius: i32) -> Self {
         Self {
             step: ShedStep::Full,
             effective_radius: effective_radius.max(MIN_VIEW_RADIUS),
@@ -492,29 +492,29 @@ impl ShedState {
 
     /// The current rung.
     #[must_use]
-    pub const fn step(&self) -> ShedStep {
+    pub(crate) const fn step(&self) -> ShedStep {
         self.step
     }
 
     /// The current radius, as last set by the caller.
     #[must_use]
-    pub const fn effective_radius(&self) -> i32 {
+    pub(crate) const fn effective_radius(&self) -> i32 {
         self.effective_radius
     }
 
     /// Lag-free windows still required before the next restore may fire.
     #[must_use]
-    pub const fn restore_after(&self) -> u32 {
+    pub(crate) const fn restore_after(&self) -> u32 {
         self.restore_after
     }
 
     /// Sets the caller-computed effective radius, floored at [`MIN_VIEW_RADIUS`].
-    pub fn set_effective_radius(&mut self, radius: i32) {
+    pub(crate) fn set_effective_radius(&mut self, radius: i32) {
         self.effective_radius = radius.max(MIN_VIEW_RADIUS);
     }
 
     /// Counts one lag-free window, decrementing the restore hold.
-    pub fn count_restore_window(&mut self) {
+    pub(crate) fn count_restore_window(&mut self) {
         self.restore_after = self.restore_after.saturating_sub(1);
     }
 
@@ -523,13 +523,13 @@ impl ShedState {
     /// Class 0 (player edits) and class 1 (urgent streaming) are never shed;
     /// every other class is background work and waits for [`ShedStep::Full`].
     #[must_use]
-    pub const fn allows(&self, class: u8) -> bool {
+    pub(crate) const fn allows(&self, class: u8) -> bool {
         class < 2 || matches!(self.step, ShedStep::Full)
     }
 }
 
 /// Sheds one rung. Returns `false` when already at [`ShedStep::RadiusCut`].
-pub fn shed(state: &mut ShedState) -> bool {
+pub(crate) fn shed(state: &mut ShedState) -> bool {
     let Some(next) = state.step.next_down() else {
         return false;
     };
@@ -539,7 +539,7 @@ pub fn shed(state: &mut ShedState) -> bool {
 }
 
 /// Restores one rung. Returns `false` when already at [`ShedStep::Full`].
-pub fn restore(state: &mut ShedState) -> bool {
+pub(crate) fn restore(state: &mut ShedState) -> bool {
     let Some(next) = state.step.next_up() else {
         return false;
     };
@@ -565,7 +565,11 @@ fn counter(counters: &Counters, name: &str) -> u64 {
 /// `edits`, `shed`. Per-stage latency percentiles are not part of the pinned
 /// groups; the HUD reads them from [`Counters`] beside this block.
 #[must_use]
-pub fn overlay_lines(counters: &Counters, ledger: &MemoryLedger, shed: &ShedState) -> Vec<String> {
+pub(crate) fn overlay_lines(
+    counters: &Counters,
+    ledger: &MemoryLedger,
+    shed: &ShedState,
+) -> Vec<String> {
     let classes: Vec<String> = MemoryClass::ALL
         .into_iter()
         .map(|class| format!("{}={}", class.name(), ledger.class_bytes(class)))

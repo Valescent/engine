@@ -359,7 +359,7 @@ impl fmt::Debug for Section {
 /// The persisted identity of one saved section (`§3.2`).
 ///
 /// This is the on-disk key: a column and a section slot. The revision carried by
-/// [`crate::revisions::SectionKey`] is runtime state and is never saved, so the
+/// `crate::revisions::SectionKey` is runtime state and is never saved, so the
 /// save layer uses this smaller type.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct SectionKey {
