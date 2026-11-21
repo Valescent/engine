@@ -35,8 +35,9 @@ non-zero if the visibility assertions fail.
   and asserts:
   - the empty scene's visible set exactly equals the CPU frustum set;
   - no duplicate ids are emitted;
-  - every indirect record has the expected six fields;
+  - every indirect record has the expected five fields;
   - the wall scene emits only chunks that survived the CPU frustum test;
+  - every chunk comfortably in front of the synthetic wall is still emitted;
   - every chunk well behind the synthetic wall is absent;
   - the wall culls a meaningful number of chunks (roughly half in the default
     setup).

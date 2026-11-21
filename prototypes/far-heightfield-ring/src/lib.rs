@@ -4,7 +4,7 @@
 //!
 //! * How much geometry does a five-level horizon ring need?
 //! * How large is the interpolation error at the seam between adjacent levels?
-//! * Does an 8 m downward skirt cover that error?
+//! * Does an 8 m skirt, extended both above and below the surface, cover that error?
 //!
 //! Every level samples the same continuous [`height`] field, so vertices that
 //! happen to share an `(x, z)` position always carry the same height.
@@ -17,7 +17,10 @@ pub const SIZE: usize = 64;
 pub const LEVELS: usize = 5;
 /// Cell size of level 0, in metres.
 pub const BASE_CELL: f32 = 1.0;
-/// Depth of the vertical skirt that hides a ring seam, in metres.
+/// Half-height of the vertical skirt that hides a ring seam, in metres.
+///
+/// The skirt extends this far above *and* below the surface edge, because the
+/// finer level can sit on either side of the linearly interpolated coarse edge.
 pub const SKIRT_DEPTH: f32 = 8.0;
 /// The prototype is only interesting if it stays well under full resolution.
 pub const BUDGET_FRACTION: f64 = 0.05;
@@ -129,10 +132,10 @@ pub struct Vertex {
 
 /// One clipmap level.
 ///
-/// `surface_*` is the visible heightfield mesh. `skirt_vertices` contains only
-/// the added bottom vertices; `skirt_triangles` index into the concatenation
-/// `surface_vertices ++ skirt_vertices` so the skirt reuses the ring's inner
-/// boundary vertices.
+/// `surface_*` is the visible heightfield mesh. `skirt_vertices` contains the
+/// added lower and upper vertices; `skirt_triangles` index into the
+/// concatenation `surface_vertices ++ skirt_vertices` so the skirt reuses the
+/// ring's inner boundary vertices.
 #[derive(Clone, Debug)]
 pub struct Level {
     pub level: usize,
@@ -186,9 +189,15 @@ pub fn build(camera: [f32; 2]) -> Clipmap {
     let mut levels = Vec::with_capacity(LEVELS);
     let mut max_seam_gap = 0.0_f32;
 
+    // Every level shares the base-level snapped centre. Coarser cells are exact
+    // multiples of `BASE_CELL`, so that centre is also on every coarser lattice.
+    // Snapping each level independently lets adjacent centres differ by up to
+    // one fine cell; the coarse hole then no longer contains the fine square and
+    // leaves an uncovered strip.
+    let center = snapped_center(camera, BASE_CELL);
+
     for level_index in 0..LEVELS {
         let cell = BASE_CELL * (1u32 << level_index) as f32;
-        let center = snapped_center(camera, cell);
         let extent = SIZE as f32 * cell;
         let origin = [center[0] - extent * 0.5, center[1] - extent * 0.5];
         let level = build_level(level_index, cell, center, origin);
@@ -253,9 +262,12 @@ fn build_level(level: usize, cell: f32, center: [f32; 2], origin: [f32; 2]) -> L
 
     if is_ring {
         let surface_len = surface_vertices.len() as u32;
-        let mut bottom_at = vec![None; stride * stride];
+        let mut lower_at = vec![None; stride * stride];
+        let mut upper_at = vec![None; stride * stride];
 
-        // One bottom vertex per vertex on the inner boundary of the hole.
+        // One lower and one upper vertex per vertex on the inner boundary of
+        // the hole. The finer level can cross the coarse edge in either
+        // direction, so a one-sided skirt would only hide half the seams.
         for gz in HOLE_MIN..=HOLE_MAX {
             for gx in HOLE_MIN..=HOLE_MAX {
                 let on_boundary =
@@ -265,30 +277,42 @@ fn build_level(level: usize, cell: f32, center: [f32; 2], origin: [f32; 2]) -> L
                 }
                 let top = index_at[gz * stride + gx].expect("hole boundary vertex");
                 let position = surface_vertices[top as usize].pos;
-                let bottom = skirt_vertices.len() as u32;
+                let lower = skirt_vertices.len() as u32;
                 skirt_vertices.push(Vertex {
                     pos: [position[0], position[1] - SKIRT_DEPTH, position[2]],
                 });
-                bottom_at[gz * stride + gx] = Some(bottom);
+                let upper = skirt_vertices.len() as u32;
+                skirt_vertices.push(Vertex {
+                    pos: [position[0], position[1] + SKIRT_DEPTH, position[2]],
+                });
+                lower_at[gz * stride + gx] = Some(lower);
+                upper_at[gz * stride + gx] = Some(upper);
             }
         }
 
+        // Walk the hole boundary so every edge's inward-facing side faces the
+        // hole. Keeping a single +X/+Z order would turn two walls away from the
+        // fine terrain, and back-face culling would drop them.
         let mut edges = Vec::with_capacity(SIZE / 2 * 4);
         for i in HOLE_MIN..HOLE_MAX {
             edges.push((i, HOLE_MIN, i + 1, HOLE_MIN));
-            edges.push((i, HOLE_MAX, i + 1, HOLE_MAX));
-            edges.push((HOLE_MIN, i, HOLE_MIN, i + 1));
+            edges.push((i + 1, HOLE_MAX, i, HOLE_MAX));
+            edges.push((HOLE_MIN, i + 1, HOLE_MIN, i));
             edges.push((HOLE_MAX, i, HOLE_MAX, i + 1));
         }
 
         for (gx0, gz0, gx1, gz1) in edges {
             let top0 = index_at[gz0 * stride + gx0].expect("skirt top 0");
             let top1 = index_at[gz1 * stride + gx1].expect("skirt top 1");
-            let bottom0 = surface_len + bottom_at[gz0 * stride + gx0].expect("skirt bottom 0");
-            let bottom1 = surface_len + bottom_at[gz1 * stride + gx1].expect("skirt bottom 1");
+            let lower0 = surface_len + lower_at[gz0 * stride + gx0].expect("skirt lower 0");
+            let lower1 = surface_len + lower_at[gz1 * stride + gx1].expect("skirt lower 1");
+            let upper0 = surface_len + upper_at[gz0 * stride + gx0].expect("skirt upper 0");
+            let upper1 = surface_len + upper_at[gz1 * stride + gx1].expect("skirt upper 1");
 
-            skirt_triangles.push([top0, bottom0, bottom1]);
-            skirt_triangles.push([top0, bottom1, top1]);
+            skirt_triangles.push([top0, lower0, lower1]);
+            skirt_triangles.push([top0, lower1, top1]);
+            skirt_triangles.push([top0, upper1, upper0]);
+            skirt_triangles.push([top0, top1, upper1]);
 
             // The coarse edge is linearly interpolated; the finer grid samples
             // the true field at the edge midpoint. Their difference is the
@@ -403,6 +427,9 @@ impl Report {
     }
 
     pub fn skirt_covers_gap(&self) -> bool {
+        // The skirt is two-sided, so the absolute seam error is the right
+        // quantity: it is covered whether the finer sample is above or below
+        // the coarse edge.
         self.max_seam_gap <= self.skirt_depth
     }
 }
@@ -456,7 +483,7 @@ impl fmt::Display for Report {
         writeln!(f, "max_seam_gap: {:.3} m", self.max_seam_gap)?;
         writeln!(
             f,
-            "skirt_depth: {:.3} m (covers gap: {})",
+            "skirt_depth: +/-{:.3} m (covers gap: {})",
             self.skirt_depth,
             if self.skirt_covers_gap() { "yes" } else { "no" }
         )?;
@@ -558,7 +585,7 @@ mod tests {
         let clipmap = build([0.0, 0.0]);
         let full_triangles = SIZE * SIZE * 2;
         let ring_triangles = (SIZE * SIZE - (SIZE / 2) * (SIZE / 2)) * 2;
-        let skirt_triangles = (SIZE / 2) * 4 * 2;
+        let skirt_triangles = (SIZE / 2) * 4 * 4;
         let full_vertices = (SIZE + 1) * (SIZE + 1);
         let ring_vertices = full_vertices - (SIZE / 2 - 1) * (SIZE / 2 - 1);
 
@@ -573,7 +600,7 @@ mod tests {
                 assert_eq!(level.surface_triangles.len(), ring_triangles);
                 assert_eq!(level.surface_vertices.len(), ring_vertices);
                 assert_eq!(level.skirt_triangles.len(), skirt_triangles);
-                assert_eq!(level.skirt_vertices.len(), (SIZE / 2) * 4);
+                assert_eq!(level.skirt_vertices.len(), (SIZE / 2) * 4 * 2);
                 assert_eq!(level.ring_cells, SIZE * SIZE - (SIZE / 2) * (SIZE / 2));
             }
             assert_eq!(
@@ -588,29 +615,60 @@ mod tests {
     }
 
     #[test]
-    fn snapping_is_stable_within_a_cell_and_shifts_by_one_cell() {
+    fn snapping_is_stable_within_a_base_cell_and_shifts_every_level() {
         let base = build([0.0, 0.0]);
 
+        let nudged = build([0.3, 0.3]);
         for (index, level) in base.levels.iter().enumerate() {
-            let cell = level.cell;
-
-            let nudged = build([0.3 * cell, 0.3 * cell]);
             assert_eq!(
                 nudged.levels[index].origin, level.origin,
-                "0.3 cell should not shift level {index}"
+                "0.3 base cells should not shift level {index}"
             );
+        }
 
-            let moved = build([1.3 * cell, 1.3 * cell]);
+        let moved = build([1.3, 1.3]);
+        for (index, level) in base.levels.iter().enumerate() {
             assert_eq!(
                 moved.levels[index].origin[0],
-                level.origin[0] + cell,
-                "1.3 cells should shift level {index} x by one cell"
+                level.origin[0] + BASE_CELL,
+                "1.3 base cells should shift level {index} x by one base cell"
             );
             assert_eq!(
                 moved.levels[index].origin[1],
-                level.origin[1] + cell,
-                "1.3 cells should shift level {index} z by one cell"
+                level.origin[1] + BASE_CELL,
+                "1.3 base cells should shift level {index} z by one base cell"
             );
+        }
+    }
+
+    #[test]
+    fn adjacent_levels_nest_without_an_uncovered_strip() {
+        let cameras = [
+            [0.0, 0.0],
+            [1.2, 0.0],
+            [0.37, -0.81],
+            [-4.71, 3.53],
+            [15.25, 31.75],
+            [-63.3, 127.9],
+        ];
+        for camera in cameras {
+            let clipmap = build(camera);
+            for pair in clipmap.levels.windows(2) {
+                let (fine, coarse) = (&pair[0], &pair[1]);
+                let hole_min_x = coarse.origin[0] + HOLE_MIN as f32 * coarse.cell;
+                let hole_min_z = coarse.origin[1] + HOLE_MIN as f32 * coarse.cell;
+                let hole_max_x = coarse.origin[0] + HOLE_MAX as f32 * coarse.cell;
+                let hole_max_z = coarse.origin[1] + HOLE_MAX as f32 * coarse.cell;
+
+                assert_eq!(
+                    hole_min_x, fine.origin[0],
+                    "camera {camera:?}: level {} hole starts after level {}",
+                    coarse.level, fine.level
+                );
+                assert_eq!(hole_min_z, fine.origin[1]);
+                assert_eq!(hole_max_x, fine.origin[0] + fine.extent);
+                assert_eq!(hole_max_z, fine.origin[1] + fine.extent);
+            }
         }
     }
 
@@ -687,6 +745,66 @@ mod tests {
                 clipmap.max_seam_gap,
                 SKIRT_DEPTH
             );
+        }
+    }
+
+    #[test]
+    fn skirt_is_two_sided_and_faces_the_hole() {
+        let cameras = [[0.0, 0.0], [1.2, -0.7], [-4.71, 3.53], [15.25, 31.75]];
+        for camera in cameras {
+            let clipmap = build(camera);
+            for level in clipmap.levels.iter().filter(|level| level.level > 0) {
+                let surface_len = level.surface_vertices.len();
+                let position = |index: u32| {
+                    let index = index as usize;
+                    if index < surface_len {
+                        level.surface_vertices[index].pos
+                    } else {
+                        level.skirt_vertices[index - surface_len].pos
+                    }
+                };
+
+                // Every boundary vertex gets one vertex below and one above the
+                // surface edge, so seams are covered in both directions.
+                let mut lower = 0usize;
+                let mut upper = 0usize;
+                for vertex in &level.skirt_vertices {
+                    let top = level
+                        .surface_vertices
+                        .iter()
+                        .find(|top| top.pos[0] == vertex.pos[0] && top.pos[2] == vertex.pos[2])
+                        .expect("skirt vertex must sit on a surface edge");
+                    let offset = vertex.pos[1] - top.pos[1];
+                    assert!(
+                        (offset.abs() - SKIRT_DEPTH).abs() < 1e-4,
+                        "level {} skirt vertex offset {offset} is not +/-{SKIRT_DEPTH}",
+                        level.level
+                    );
+                    if offset > 0.0 {
+                        upper += 1;
+                    } else {
+                        lower += 1;
+                    }
+                }
+                assert_eq!(lower, upper, "level {} skirt is one-sided", level.level);
+                assert!(lower > 0, "level {} has no skirt", level.level);
+
+                // Back-face culling relies on every inner wall facing the hole.
+                for (slot, triangle) in level.skirt_triangles.iter().enumerate() {
+                    let [a, b, c] = triangle.map(position);
+                    let normal_x = (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1]);
+                    let normal_z = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+                    let centroid_x = (a[0] + b[0] + c[0]) / 3.0;
+                    let centroid_z = (a[2] + b[2] + c[2]) / 3.0;
+                    let toward_x = level.center[0] - centroid_x;
+                    let toward_z = level.center[1] - centroid_z;
+                    assert!(
+                        normal_x * toward_x + normal_z * toward_z > 0.0,
+                        "camera {camera:?}: level {} skirt triangle {slot} faces away from the hole",
+                        level.level
+                    );
+                }
+            }
         }
     }
 

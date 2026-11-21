@@ -18,9 +18,10 @@ ring prototype is CPU-only, prints a geometry and seam report, and writes a top-
 
 ## Results so far
 
-**Far heightfield ring.** Five levels cover 1,024 m with 33,792 triangles (17,793 vertices), 1.61% of
+**Far heightfield ring.** Five levels cover 1,024 m with 34,816 triangles (18,305 vertices), 1.66% of
 a full-resolution 1 m grid over the same extent. The largest T-junction gap between a coarse edge and
-the finer edges beneath it is 6.1 m and is covered by 8 m skirts. The preview shows the ring layout.
+the finer edges beneath it is 6.1 m and is covered by two-sided 8 m skirts (8 m up and 8 m down). The
+preview shows the ring layout.
 
 **Chunk LOD + Hi-Z.** A compute pass over 4,096 chunk AABBs culls 1,459 of the 2,815 frustum-visible
 chunks (51.8%) against a synthetic 256x256 depth pyramid, including all 1,406 chunks the CPU ground
@@ -31,8 +32,10 @@ is already in the shape ADR-0015 needs. It needs Vulkan and `INDIRECT_FIRST_INST
 ## Ground rules
 
 - **No engine imports.** A prototype may copy a small idiom from the engine, but must build on its own.
-- **Headless by default.** Verification must run without a window so it works on CI hardware. A window
-  is an optional extra, never the only way to see the result.
+- **Headless by default.** Verification must run without a window so it can run unattended, but
+  headless is not the same as CPU-only: the Hi-Z prototype needs a Vulkan GPU adapter, rejects CPU
+  adapters, and requires `INDIRECT_FIRST_INSTANCE`. A window is an optional extra, never the only way
+  to see the result.
 - **Deterministic.** Fixed seeds, no wall-clock, no network.
 - **Delete freely.** A prototype is evidence for a decision, not a compatibility promise.
 

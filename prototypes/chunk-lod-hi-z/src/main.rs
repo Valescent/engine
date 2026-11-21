@@ -53,8 +53,13 @@ fn run() -> Fallible<()> {
     let planes = frustum_planes(view_proj);
     let frustum_ids = chunks_in_frustum(&chunks, &planes);
     let expected_occluded = expected_occluded_ids(&chunks, &planes, eye, forward);
+    let expected_foreground = expected_foreground_ids(&chunks, &planes, eye, forward);
     ensure(!frustum_ids.is_empty(), "empty frustum: camera setup broken")?;
     ensure(!expected_occluded.is_empty(), "wall occludes nothing: setup broken")?;
+    ensure(
+        !expected_foreground.is_empty(),
+        "no chunks in front of the wall: setup broken",
+    )?;
 
     let params = Params {
         planes,
@@ -71,7 +76,14 @@ fn run() -> Fallible<()> {
     let resources = create_resources(&device, &queue, &params, &chunks, hiz_empty.len())?;
     let empty = run_scene(&device, &queue, &resources, &hiz_empty)?;
     let wall = run_scene(&device, &queue, &resources, &hiz_wall)?;
-    verify(&empty, &wall, &frustum_ids, &expected_occluded, &info)
+    verify(
+        &empty,
+        &wall,
+        &frustum_ids,
+        &expected_occluded,
+        &expected_foreground,
+        &info,
+    )
 }
 
 fn ensure(condition: bool, message: impl Into<String>) -> Fallible<()> {
@@ -183,6 +195,12 @@ fn nearest_view_depth(eye: Vec3, forward: Vec3, lo: Vec3, hi: Vec3) -> f32 {
     forward.dot(centre - eye) - forward.abs().dot(half_extent)
 }
 
+fn farthest_view_depth(eye: Vec3, forward: Vec3, lo: Vec3, hi: Vec3) -> f32 {
+    let centre = (lo + hi) * 0.5;
+    let half_extent = (hi - lo) * 0.5;
+    forward.dot(centre - eye) + forward.abs().dot(half_extent)
+}
+
 fn chunks_in_frustum(chunks: &[Chunk], planes: &[[f32; 4]; 6]) -> Vec<u32> {
     chunks
         .iter()
@@ -205,6 +223,22 @@ fn expected_occluded_ids(chunks: &[Chunk], planes: &[[f32; 4]; 6], eye: Vec3, fo
             let visible = inside_frustum(planes, lo, hi);
             let depth = nearest_view_depth(eye, forward, lo, hi);
             (visible && depth > WALL_DEPTH + GROUND_TRUTH_MARGIN).then_some(index as u32)
+        })
+        .collect()
+}
+
+/// Chunks entirely in front of the synthetic wall by the ground-truth margin.
+/// The wall cannot legitimately occlude them, so the wall scene must still
+/// emit them. This also makes an empty or under-filled wall result fail.
+fn expected_foreground_ids(chunks: &[Chunk], planes: &[[f32; 4]; 6], eye: Vec3, forward: Vec3) -> Vec<u32> {
+    chunks
+        .iter()
+        .enumerate()
+        .filter_map(|(index, chunk)| {
+            let (lo, hi) = chunk.aabb();
+            let visible = inside_frustum(planes, lo, hi);
+            let depth = farthest_view_depth(eye, forward, lo, hi);
+            (visible && depth < WALL_DEPTH - GROUND_TRUTH_MARGIN).then_some(index as u32)
         })
         .collect()
 }
@@ -529,6 +563,7 @@ fn verify(
     wall: &SceneResult,
     frustum_ids: &[u32],
     expected_occluded: &[u32],
+    expected_foreground: &[u32],
     info: &wgpu::AdapterInfo,
 ) -> Fallible<()> {
     let mut expected_frustum = frustum_ids.to_vec();
@@ -542,7 +577,18 @@ fn verify(
 
     let wall_ids = sorted_unique(wall.visible_ids.clone(), "wall scene")?;
     ensure(wall.visible_count < empty.visible_count, "wall scene culled nothing")?;
+    ensure(!wall_ids.is_empty(), "wall scene emitted no chunks")?;
     validate(wall, "wall")?;
+
+    // Every chunk comfortably in front of the wall must still be emitted. This
+    // catches a culler (or readback) that drops the whole foreground, which the
+    // cull-nothing and occluded-chunk checks above would not notice.
+    for &id in expected_foreground {
+        ensure(
+            wall_ids.binary_search(&id).is_ok(),
+            format!("foreground chunk {id} was culled by the wall scene"),
+        )?;
+    }
 
     // Every emitted id must have survived the CPU frustum test; membership in
     // the empty scene is equivalent to frustum-visible.
