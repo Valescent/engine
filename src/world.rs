@@ -266,6 +266,56 @@ impl Chunk {
         }
     }
 
+    /// Fills a vertical run of air cells in one column with `block`.
+    ///
+    /// This is the bulk generation path for section samples: it writes the
+    /// packed nibbles in one pass and updates the height and water counters
+    /// once per run instead of once per cell. The run must currently be air;
+    /// the debug build asserts that contract. Coordinates outside the chunk are
+    /// clamped.
+    pub(crate) fn fill_column(&mut self, x: i32, z: i32, y_start: i32, y_end: i32, block: Block) {
+        debug_assert_ne!(block, Block::Air, "fill_column writes non-air blocks");
+        let start = y_start.max(0);
+        let end = y_end.min(CHUNK_SIZE - 1);
+        if start > end || !(0..CHUNK_SIZE).contains(&x) || !(0..CHUNK_SIZE).contains(&z) {
+            return;
+        }
+        let count = usize::try_from(end - start + 1).expect("run length fits");
+        self.filled += count;
+        if block == Block::Water {
+            self.water += count;
+            self.water_top = self.water_top.max(end);
+        } else if block.is_solid() {
+            self.top = self.top.max(end);
+            if block.is_terrain() {
+                self.terrain_top = self.terrain_top.max(end);
+            }
+        }
+        if block.is_terrain() || block == Block::Water {
+            self.terrain_min = i32::MIN;
+        }
+
+        let stride = usize::try_from(CHUNK_SIZE).expect("chunk size fits");
+        let base = usize::try_from(x * CHUNK_SIZE * CHUNK_SIZE + z).expect("column base fits");
+        let packed = block.id();
+        let cells = Arc::make_mut(&mut self.cells);
+        let mut index = base + usize::try_from(start).expect("local y fits") * stride;
+        for _ in 0..count {
+            debug_assert_eq!(
+                packed_block(cells, index),
+                Block::Air,
+                "fill_column must only write air cells"
+            );
+            let byte = &mut cells[index / 2];
+            if index.is_multiple_of(2) {
+                *byte = (*byte & 0xF0) | (packed & 0x0F);
+            } else {
+                *byte = (*byte & 0x0F) | ((packed & 0x0F) << 4);
+            }
+            index += stride;
+        }
+    }
+
     /// Recomputes the highest solid cell after the top block is cleared.
     fn recompute_top(&mut self) {
         for y in (0..CHUNK_SIZE).rev() {
@@ -1195,6 +1245,27 @@ mod tests {
         assert_eq!(world.set_block(interior, Block::Stone), dirty(&[interior]));
         assert!(world.set_block(interior, Block::Stone).is_empty());
         assert_eq!(world.block(interior), Block::Stone);
+    }
+
+    #[test]
+    fn fill_column_matches_per_cell_writes() {
+        let mut bulk = Chunk::default();
+        let mut per_cell = Chunk::default();
+        for (x, z, block) in [
+            (0, 0, Block::Stone),
+            (5, 9, Block::Water),
+            (CHUNK_SIZE - 1, CHUNK_SIZE - 1, Block::Sand),
+        ] {
+            for y in 3..=17 {
+                per_cell.set_block(IVec3::new(x, y, z), block);
+            }
+            bulk.fill_column(x, z, 3, 17, block);
+        }
+
+        assert_eq!(bulk, per_cell);
+        assert_eq!(bulk.len(), 3 * 15);
+        assert!(bulk.has_water());
+        assert_eq!(bulk.water_top(), 17);
     }
 
     #[test]

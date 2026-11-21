@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use glam::IVec3;
 
 use crate::block::Block;
-use crate::generation::{Generator, SEA_LEVEL, WORLD_HEIGHT, surface_block};
+use crate::generation::{Biome, Generator, SEA_LEVEL, WORLD_HEIGHT, surface_block};
 use crate::light::LightField;
 use crate::mesh::{
     BorderBlocks, ChunkSnapshot, MeshData, build_section_mesh, build_section_water_mesh,
@@ -139,6 +139,12 @@ pub(crate) struct SectionBounds {
 pub(crate) struct Section {
     key: SectionKey,
     samples: Chunk,
+    /// Lowest sample layer that may hold a non-air block; `SECTION_SIZE` until
+    /// the first write.
+    sample_y_min: i32,
+    /// Highest sample layer that may hold a non-air block; `-1` until the
+    /// first write.
+    sample_y_max: i32,
 }
 
 impl Section {
@@ -146,6 +152,8 @@ impl Section {
         Self {
             key,
             samples: Chunk::default(),
+            sample_y_min: SECTION_SIZE,
+            sample_y_max: -1,
         }
     }
 
@@ -158,7 +166,38 @@ impl Section {
     }
 
     pub(crate) fn set_sample(&mut self, local: IVec3, block: Block) {
+        self.note_sample_y(local.y, block);
         self.samples.set_block(local, block);
+    }
+
+    /// Fills one column's sample layers in bulk.
+    ///
+    /// The range is clamped to the grid. This is the generation fast path for
+    /// columns without an overlapping edit.
+    fn fill_sample_column(&mut self, sx: i32, sz: i32, y_start: i32, y_end: i32, block: Block) {
+        let start = y_start.max(0);
+        let end = y_end.min(SECTION_SIZE - 1);
+        if start > end || block == Block::Air {
+            return;
+        }
+        self.samples.fill_column(sx, sz, start, end, block);
+        self.sample_y_min = self.sample_y_min.min(start);
+        self.sample_y_max = self.sample_y_max.max(end);
+    }
+
+    fn note_sample_y(&mut self, y: i32, block: Block) {
+        if block != Block::Air {
+            self.sample_y_min = self.sample_y_min.min(y);
+            self.sample_y_max = self.sample_y_max.max(y);
+        }
+    }
+
+    /// Conservative sample layers the mesher has to scan.
+    ///
+    /// One layer above and below the non-air range covers light/AO sampling,
+    /// and the result is clamped to the grid.
+    fn mesh_y_range(&self) -> std::ops::RangeInclusive<i32> {
+        (self.sample_y_min - 1).max(0)..=(self.sample_y_max + 1).min(SECTION_SIZE - 1)
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -231,6 +270,7 @@ impl Section {
             &BorderBlocks::default(),
             light,
             self.key.scale() as f32,
+            self.mesh_y_range(),
         )
     }
 
@@ -243,11 +283,18 @@ impl Section {
             &BorderBlocks::default(),
             light,
             self.key.scale() as f32,
+            self.mesh_y_range(),
         )
     }
 }
 
 /// Generates one section from the seed and the modified-chunk overlay.
+///
+/// Columns with no overlapping edit are filled in bulk: the top four depth
+/// samples use [`surface_block`] and the rest of the solid run is stone, which
+/// matches the per-sample rule for every biome. A column that may carry an
+/// edit keeps the original per-sample path so partially edited columns stay
+/// bit-identical.
 pub(crate) fn generate_section(
     generator: &Generator,
     key: SectionKey,
@@ -255,8 +302,10 @@ pub(crate) fn generate_section(
 ) -> Section {
     let scale = key.scale();
     let origin = key.origin();
+    let extent = key.extent();
     let probes = probe_offsets(scale);
     let sea_sample = (SEA_LEVEL - origin.y).div_euclid(scale);
+    let edited = edited_columns(edits, origin, scale, extent);
     let mut section = Section::new(key);
 
     for sx in 0..SECTION_SIZE {
@@ -265,28 +314,132 @@ pub(crate) fn generate_section(
                 footprint_top(generator, origin, scale, sx, sz, &probes);
             let biome = generator.biome(rep_x, rep_z);
             let top_sample = (top_height - origin.y).div_euclid(scale);
-            for sy in 0..SECTION_SIZE {
-                let base = origin + IVec3::new(sx, sy, sz) * scale;
-                let block = if sy <= top_sample {
-                    surface_block(biome, top_sample - sy)
-                } else if sy <= sea_sample {
-                    Block::Water
-                } else {
-                    Block::Air
-                };
-                let block = if edits.is_empty() || !overlaps_edits(edits, base, scale) {
-                    block
-                } else {
-                    edited_sample(generator, edits, base, scale)
-                };
-                if block != Block::Air {
-                    section.set_sample(IVec3::new(sx, sy, sz), block);
+            let column = usize::try_from(sx * SECTION_SIZE + sz).expect("column index fits");
+
+            if edited.as_ref().is_some_and(|mask| mask[column]) {
+                for sy in 0..SECTION_SIZE {
+                    set_generated_sample(
+                        &mut section,
+                        generator,
+                        edits,
+                        origin,
+                        scale,
+                        IVec3::new(sx, sy, sz),
+                        top_sample,
+                        sea_sample,
+                        biome,
+                    );
                 }
+                continue;
+            }
+
+            if top_sample >= 0 {
+                // Every block below the top four depth layers is stone in
+                // every biome, and `surface_block` returns stone there too.
+                let surface_start = (top_sample - (SURFACE_DEPTH - 1)).max(0);
+                let solid_end = top_sample.min(SECTION_SIZE - 1);
+                for sy in surface_start..=solid_end {
+                    section.set_sample(
+                        IVec3::new(sx, sy, sz),
+                        surface_block(biome, top_sample - sy),
+                    );
+                }
+                if surface_start > 0 {
+                    section.fill_sample_column(sx, sz, 0, surface_start - 1, Block::Stone);
+                }
+            }
+
+            let water_start = (top_sample + 1).max(0);
+            let water_end = sea_sample.min(SECTION_SIZE - 1);
+            if water_start <= water_end {
+                section.fill_sample_column(sx, sz, water_start, water_end, Block::Water);
             }
         }
     }
 
     section
+}
+
+/// Samples above the deepest non-stone surface layer.
+///
+/// Plains keeps grass and three dirt layers, Hills one dirt layer, and Desert
+/// three sand layers; four covers all of them.
+const SURFACE_DEPTH: i32 = 4;
+
+/// The original per-sample generation path for a column that may carry an edit.
+#[allow(clippy::too_many_arguments)]
+fn set_generated_sample(
+    section: &mut Section,
+    generator: &Generator,
+    edits: &SectionEdits,
+    origin: IVec3,
+    scale: i32,
+    local: IVec3,
+    top_sample: i32,
+    sea_sample: i32,
+    biome: Biome,
+) {
+    let sy = local.y;
+    let base = origin + local * scale;
+    let block = if sy <= top_sample {
+        surface_block(biome, top_sample - sy)
+    } else if sy <= sea_sample {
+        Block::Water
+    } else {
+        Block::Air
+    };
+    let block = if edits.is_empty() || !overlaps_edits(edits, base, scale) {
+        block
+    } else {
+        edited_sample(generator, edits, base, scale)
+    };
+    if block != Block::Air {
+        section.set_sample(local, block);
+    }
+}
+
+/// Marks sample columns whose XZ footprint touches an edited chunk.
+///
+/// Returns `None` when there are no edits, so the common case does no lookup
+/// work per column. A marked column goes through the per-sample edited path,
+/// which re-checks the exact Y overlap.
+fn edited_columns(
+    edits: &SectionEdits,
+    origin: IVec3,
+    scale: i32,
+    extent: i32,
+) -> Option<Vec<bool>> {
+    if edits.is_empty() {
+        return None;
+    }
+    let mut mask = vec![false; (SECTION_SIZE * SECTION_SIZE) as usize];
+    let section_max = origin + IVec3::splat(extent - 1);
+    for chunk in edits.keys() {
+        let min = chunk.world_origin();
+        let max = min + IVec3::splat(CHUNK_SIZE - 1);
+        if !min.cmple(section_max).all() || !origin.cmple(max).all() {
+            continue;
+        }
+        let columns_x = (min.x - origin.x)
+            .div_euclid(scale)
+            .clamp(0, SECTION_SIZE - 1)
+            ..=(max.x - origin.x)
+                .div_euclid(scale)
+                .clamp(0, SECTION_SIZE - 1);
+        let columns_z = (min.z - origin.z)
+            .div_euclid(scale)
+            .clamp(0, SECTION_SIZE - 1)
+            ..=(max.z - origin.z)
+                .div_euclid(scale)
+                .clamp(0, SECTION_SIZE - 1);
+        for sx in columns_x {
+            for sz in columns_z.clone() {
+                let column = usize::try_from(sx * SECTION_SIZE + sz).expect("column index fits");
+                mask[column] = true;
+            }
+        }
+    }
+    Some(mask)
 }
 
 /// One L0 block from the coarse seed rule: no caves and no trees.
@@ -853,6 +1006,200 @@ mod tests {
             let light = section.light();
             let mesh = section.mesh(Some(&light));
             assert_mesh_uses_section_scale(key, &mesh);
+        }
+    }
+
+    /// The per-sample generator from before the bulk fill, kept as a reference.
+    fn reference_generate_section(
+        generator: &Generator,
+        key: SectionKey,
+        edits: &SectionEdits,
+    ) -> Section {
+        let scale = key.scale();
+        let origin = key.origin();
+        let probes = probe_offsets(scale);
+        let sea_sample = (SEA_LEVEL - origin.y).div_euclid(scale);
+        let mut section = Section::new(key);
+        for sx in 0..SECTION_SIZE {
+            for sz in 0..SECTION_SIZE {
+                let (top_height, rep_x, rep_z) =
+                    footprint_top(generator, origin, scale, sx, sz, &probes);
+                let biome = generator.biome(rep_x, rep_z);
+                let top_sample = (top_height - origin.y).div_euclid(scale);
+                for sy in 0..SECTION_SIZE {
+                    let local = IVec3::new(sx, sy, sz);
+                    let base = origin + local * scale;
+                    let block = if sy <= top_sample {
+                        surface_block(biome, top_sample - sy)
+                    } else if sy <= sea_sample {
+                        Block::Water
+                    } else {
+                        Block::Air
+                    };
+                    let block = if edits.is_empty() || !overlaps_edits(edits, base, scale) {
+                        block
+                    } else {
+                        edited_sample(generator, edits, base, scale)
+                    };
+                    if block != Block::Air {
+                        section.set_sample(local, block);
+                    }
+                }
+            }
+        }
+        section
+    }
+
+    fn assert_same_samples(expected: &Section, actual: &Section) {
+        for sy in 0..SECTION_SIZE {
+            for sx in 0..SECTION_SIZE {
+                for sz in 0..SECTION_SIZE {
+                    let local = IVec3::new(sx, sy, sz);
+                    assert_eq!(
+                        actual.sample(local),
+                        expected.sample(local),
+                        "key {:?} sample {local}",
+                        actual.key()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bulk_generation_matches_the_per_sample_path() {
+        let generator = Generator::new(42);
+        let keys = [
+            SectionKey::new(1, IVec3::new(0, 0, 0)),
+            SectionKey::new(1, IVec3::new(0, 1, 0)),
+            SectionKey::new(2, IVec3::new(0, 0, 0)),
+            SectionKey::new(3, IVec3::new(0, 0, 0)),
+        ];
+
+        for key in keys {
+            let expected = reference_generate_section(&generator, key, &SectionEdits::new());
+            let actual = generate_section(&generator, key, &SectionEdits::new());
+            assert_same_samples(&expected, &actual);
+        }
+    }
+
+    #[test]
+    fn bulk_generation_matches_the_per_sample_path_on_edited_columns() {
+        let generator = Generator::new(42);
+        let keys = [
+            SectionKey::new(1, IVec3::new(0, 0, 0)),
+            SectionKey::new(1, IVec3::new(0, 1, 0)),
+            SectionKey::new(2, IVec3::new(0, 0, 0)),
+            SectionKey::new(3, IVec3::new(0, 0, 0)),
+        ];
+
+        for key in keys {
+            let world = key.origin() + IVec3::splat(12);
+            let (chunk, _) = ChunkCoord::from_world(world);
+            let mut edited = Chunk::default();
+            edited.set_block(IVec3::new(3, 4, 3), Block::Stone);
+            edited.set_block(IVec3::new(4, 5, 4), Block::Water);
+            // A second edited chunk further up exercises a column whose edit
+            // only covers part of the section's Y range.
+            let upper = world + IVec3::new(0, CHUNK_SIZE, 0);
+            let (upper_chunk, _) = ChunkCoord::from_world(upper);
+            let mut upper_edit = Chunk::default();
+            upper_edit.set_block(IVec3::new(8, 9, 8), Block::Dirt);
+            let mut edits = SectionEdits::new();
+            edits.insert(chunk, edited);
+            edits.insert(upper_chunk, upper_edit);
+
+            let expected = reference_generate_section(&generator, key, &edits);
+            let actual = generate_section(&generator, key, &edits);
+            assert_same_samples(&expected, &actual);
+        }
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    fn unbounded_mesh(section: &Section, light: Option<&LightField>, water: bool) -> MeshData {
+        let snapshot = section.snapshot();
+        let scale = section.key().scale() as f32;
+        let range = 0..=SECTION_SIZE - 1;
+        if water {
+            build_section_water_mesh(
+                &snapshot,
+                &BorderBlocks::default(),
+                light,
+                scale,
+                range.clone(),
+            )
+        } else {
+            build_section_mesh(&snapshot, &BorderBlocks::default(), light, scale, range)
+        }
+    }
+
+    fn assert_bounded_matches_unbounded(section: &Section, light: Option<&LightField>) {
+        assert_eq!(
+            section.mesh(light),
+            unbounded_mesh(section, light, false),
+            "opaque {:?}",
+            section.key()
+        );
+        assert_eq!(
+            section.water_mesh(light),
+            unbounded_mesh(section, light, true),
+            "water {:?}",
+            section.key()
+        );
+    }
+
+    #[test]
+    fn bounds_limited_meshing_matches_the_unbounded_mesh_on_generated_sections() {
+        let generator = Generator::new(42);
+        let keys = [
+            SectionKey::new(1, IVec3::new(0, 0, 0)),
+            SectionKey::new(1, IVec3::new(1, 0, 1)),
+            SectionKey::new(2, IVec3::new(0, 0, 0)),
+            SectionKey::new(3, IVec3::new(0, 0, 0)),
+        ];
+        for key in keys {
+            let section = generate_section(&generator, key, &SectionEdits::new());
+            let light = section.light();
+            assert_bounded_matches_unbounded(&section, Some(&light));
+        }
+    }
+
+    fn slab_section(key: SectionKey, top: bool) -> Section {
+        let mut section = Section::new(key);
+        for x in 0..SECTION_SIZE {
+            for z in 0..SECTION_SIZE {
+                if top {
+                    for y in (SECTION_SIZE - 6)..SECTION_SIZE {
+                        section.set_sample(IVec3::new(x, y, z), Block::Stone);
+                    }
+                    for y in (SECTION_SIZE - 3)..SECTION_SIZE {
+                        section.set_sample(IVec3::new(x, y, z), Block::Water);
+                    }
+                } else {
+                    for y in 0..=2 {
+                        section.set_sample(IVec3::new(x, y, z), Block::Stone);
+                    }
+                    for y in 3..=5 {
+                        section.set_sample(IVec3::new(x, y, z), Block::Water);
+                    }
+                }
+                section.set_sample(IVec3::new(x, 12, z), Block::Sand);
+            }
+        }
+        section
+    }
+
+    #[test]
+    fn bounds_limited_meshing_matches_the_unbounded_mesh_on_top_and_bottom_slabs() {
+        for key in [
+            SectionKey::new(1, IVec3::ZERO),
+            SectionKey::new(2, IVec3::new(-1, 0, 2)),
+        ] {
+            for top in [false, true] {
+                let section = slab_section(key, top);
+                let light = section.light();
+                assert_bounded_matches_unbounded(&section, Some(&light));
+            }
         }
     }
 

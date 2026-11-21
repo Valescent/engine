@@ -242,13 +242,30 @@ pub(crate) fn create_pool() -> Arc<dyn MeshPool> {
 pub(crate) fn build_section(job: &SectionJob) -> SectionResult {
     let started = Instant::now();
     let generator = Generator::new(job.seed);
-    let section = generate_section(&generator, job.key, &job.edits);
-    let bounds = section.bounds();
+    let section = {
+        profiling::scope!("section generate");
+        generate_section(&generator, job.key, &job.edits)
+    };
+    let bounds = {
+        profiling::scope!("section bounds");
+        section.bounds()
+    };
     let (opaque, water) = if section.is_empty() {
         (MeshData::default(), MeshData::default())
     } else {
-        let light = section.light();
-        (section.mesh(Some(&light)), section.water_mesh(Some(&light)))
+        let light = {
+            profiling::scope!("section light");
+            section.light()
+        };
+        let opaque = {
+            profiling::scope!("section mesh");
+            section.mesh(Some(&light))
+        };
+        let water = {
+            profiling::scope!("section water mesh");
+            section.water_mesh(Some(&light))
+        };
+        (opaque, water)
     };
     SectionResult {
         key: job.key,

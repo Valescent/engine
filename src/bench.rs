@@ -339,6 +339,75 @@ mod tests {
         );
     }
 
+    /// The same generation and mesh timing on a high-level surface section.
+    ///
+    /// A level-3 section spans 256 blocks vertically but its terrain occupies
+    /// only the bottom third, which is the common shape of the far hierarchy
+    /// target and the one a bounds-limited mesher should speed up most.
+    #[test]
+    #[ignore = "benchmark; run with cargo test --release --lib bench_section -- --ignored --nocapture"]
+    fn bench_section_far() {
+        let generator = Generator::new(42);
+        let (x, z, height) = generator.spawn_column();
+        let level = 3;
+        let extent = 32 * (1 << level);
+        let key = SectionKey::new(
+            level,
+            IVec3::new(
+                x.div_euclid(extent),
+                height.div_euclid(extent),
+                z.div_euclid(extent),
+            ),
+        );
+
+        let edits = SectionEdits::new();
+        for _ in 0..2 {
+            std::hint::black_box(generate_section(&generator, key, &edits));
+        }
+        let mut generation = Vec::new();
+        for _ in 0..10 {
+            let started = Instant::now();
+            let section = generate_section(&generator, key, &edits);
+            generation.push(started.elapsed().as_secs_f64() * 1e6);
+            std::hint::black_box(section);
+        }
+        generation.sort_by(f64::total_cmp);
+
+        let section = generate_section(&generator, key, &edits);
+        let light = section.light();
+        let mut mesh_times = Vec::new();
+        let mut mesh = MeshData::default();
+        for _ in 0..10 {
+            let started = Instant::now();
+            mesh = section.mesh(Some(&light));
+            mesh_times.push(started.elapsed().as_secs_f64() * 1e6);
+        }
+        mesh_times.sort_by(f64::total_cmp);
+
+        let mut water_times = Vec::new();
+        let mut water = MeshData::default();
+        for _ in 0..10 {
+            let started = Instant::now();
+            water = section.water_mesh(Some(&light));
+            water_times.push(started.elapsed().as_secs_f64() * 1e6);
+        }
+        water_times.sort_by(f64::total_cmp);
+
+        eprintln!(
+            "SECTION_FAR key={:?} gen_us={:.1} p95_us={:.1} mesh_us={:.1} p95_us={:.1} quads={} vertices={} water_us={:.1} water_quads={} light_bytes={}",
+            key,
+            generation.iter().sum::<f64>() / generation.len() as f64,
+            percentile(&generation, 0.95),
+            mesh_times.iter().sum::<f64>() / mesh_times.len() as f64,
+            percentile(&mesh_times, 0.95),
+            mesh.quads.len(),
+            mesh.vertices.len(),
+            water_times.iter().sum::<f64>() / water_times.len() as f64,
+            water.quads.len(),
+            light.resident_bytes(),
+        );
+    }
+
     #[test]
     #[ignore = "benchmark; run with cargo test --release --lib bench_light -- --ignored --nocapture"]
     fn bench_light() {

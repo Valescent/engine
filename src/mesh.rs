@@ -5,6 +5,7 @@
 //! block, LOD1 on `16` cells of `2 × 2 × 2` blocks.
 
 use std::collections::HashMap;
+use std::ops::RangeInclusive;
 use std::sync::Arc;
 
 use glam::IVec3;
@@ -176,11 +177,16 @@ impl BorderBlocks {
 }
 
 /// Builds one non-indexed greedy water mesh for a coarse section grid.
+///
+/// `y_range` limits the sample layers scanned. It must cover every water
+/// sample; callers pass a conservative range so empty ranges are skipped
+/// without changing which faces are emitted.
 pub(crate) fn build_section_water_mesh(
     snapshot: &ChunkSnapshot,
     border: &BorderBlocks,
     light: Option<&LightField>,
     scale: f32,
+    y_range: RangeInclusive<i32>,
 ) -> MeshData {
     if !snapshot.has_water() {
         return MeshData::default();
@@ -198,6 +204,7 @@ pub(crate) fn build_section_water_mesh(
         &|cell| cell,
         &corners,
         crate::quad::FLAG_WATER,
+        y_range,
     )
 }
 
@@ -205,12 +212,13 @@ pub(crate) fn build_section_water_mesh(
 ///
 /// `scale` is the section's sample spacing in blocks. Positions and UVs are in
 /// sample units multiplied by `scale`; face order, AO, and light packing match
-/// the chunk mesher.
+/// the chunk mesher. `y_range` has the same contract as the water variant.
 pub(crate) fn build_section_mesh(
     snapshot: &ChunkSnapshot,
     border: &BorderBlocks,
     light: Option<&LightField>,
     scale: f32,
+    y_range: RangeInclusive<i32>,
 ) -> MeshData {
     let full_block = |local: IVec3| full_block(snapshot, border, local);
     let matches = Block::is_solid;
@@ -225,6 +233,7 @@ pub(crate) fn build_section_mesh(
         &|cell| cell,
         &corners,
         0,
+        y_range,
     )
 }
 
@@ -255,6 +264,7 @@ pub(crate) fn build_mesh(
                 &|cell| cell,
                 &corners,
                 0,
+                0..=lod.cell_count() - 1,
             )
         }
         Lod::Lod1 | Lod::Lod2 => {
@@ -284,6 +294,7 @@ pub(crate) fn build_mesh(
                 &anchor,
                 &corners,
                 0,
+                0..=lod.cell_count() - 1,
             )
         }
     }
@@ -314,6 +325,7 @@ pub(crate) fn build_water_mesh(
         &|cell| cell,
         &corners,
         FLAG_WATER,
+        0..=CHUNK_SIZE - 1,
     )
 }
 
@@ -399,15 +411,31 @@ fn greedy(
     anchor: &impl Fn(IVec3) -> IVec3,
     corners: &impl Fn(IVec3, usize) -> [u32; 4],
     flags: u32,
+    y_range: RangeInclusive<i32>,
 ) -> MeshData {
     let cells = usize::try_from(n * n).expect("mask fits");
     let mut mesh = MeshData::default();
     let mut mask: Vec<Option<MaskKey>> = vec![None; cells];
+    let y_min = (*y_range.start()).clamp(0, n - 1);
+    let y_max = (*y_range.end()).clamp(0, n - 1);
 
     for (face, normal) in FACE_NORMALS.into_iter().enumerate() {
+        // Faces `+Y`/`-Y` slice along Y and scan the full XZ grid; every other
+        // face has Y as its `v` axis. Skipping the out-of-range layers is
+        // exact because a matching block cannot exist outside the caller's
+        // conservative range, so the mask entries stay `None`.
+        let y_is_slice = matches!(face, 2 | 3);
         for slice in 0..n {
+            if y_is_slice && !(y_min..=y_max).contains(&slice) {
+                continue;
+            }
             mask.fill(None);
-            for v in 0..n {
+            let (v_start, v_end) = if y_is_slice {
+                (0, n - 1)
+            } else {
+                (y_min, y_max)
+            };
+            for v in v_start..=v_end {
                 for u in 0..n {
                     let cell = cell_coord(face, slice, u, v);
                     let block = block_at(cell);
