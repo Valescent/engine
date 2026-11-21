@@ -76,7 +76,7 @@ jobs:
           test "$resident" -lt 200000000 || { echo "resident world data above 200 MB"; exit 1; }
 
       - name: Upload results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: headless-results
           path: |
