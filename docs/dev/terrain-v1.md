@@ -141,6 +141,19 @@ at 12 or ~46 s at 16 after the narrow border relight (`ENGINE_NO_VSYNC=1`).
   `demo_far_regions` does the same for complete `4x4` column squares with `lod::downsample4` (64
   fine sections, the same most-frequent-solid vote), `mesh_coarse` at Lod2, and Lod2 skirts (two
   cells = eight blocks).
+- **Fine sides of the transition are stitched.** A LOD0 column at ring `3` (the fine cutoff) appends
+  a skirt on each side whose column just outside it is in the active coarse band; a fine column
+  fully inside the cutoff gets none, and a fine-owned edge (for example the west side of a boundary
+  column) keeps its culled wall. The side set comes from band membership, not from the coarse set's
+  build state, so a throttled coarse pass cannot move the stitch. The depth is read from the drawn
+  LOD1 surface: the adjacent column's top face is derived with the same conservative vote as the
+  coarse mesher (air, water, and scatter cells do not count), a flush or higher coarse edge appends
+  nothing, and a lower edge appends exactly the drop, capped at `SKIRT_DEPTH`. The skirt is applied
+  to each active LOD0 clone during `select_lod`, so the stored fine mesh stays unskirted and a
+  repeated selection cannot double a strip. The fine band is the same `7x7` square at every ring
+  radius, so the stitch cost does not scale: with `ENGINE_SEED=12345` it is **+119 quads and +952
+  bytes** (about 0.014% of the 850,895 active quads at radius 12; the same absolute cost at 16,
+  where the active set is larger).
 - **LOD water is all-or-nothing.** After the solid vote, a coarse cell is water only when every
   cell in its 2x2x2 or 4x4x4 group is water; any air makes it air. A coarse cell's `+Y` face sits
   on its group's top plane, so an any-water group whose missing cells were at the top rendered a
@@ -321,9 +334,15 @@ cargo tree -p terrain-core -e normal --no-default-features
   ring column is covered once. A clipped region whose aligned base is itself inside the LOD0 band
   is anchored at one of its drawn columns instead, so its `2x2` bounds can still overlap a finer
   section (which emits the geometry there) but its section origin never does.
-- Coarse sections carry skirts on all sides, but a dedicated fine/coarse stitch (instead of the
-  extra fine transition ring and clipped LOD1 regions) and a visible loading indicator are not
-  implemented.
+- The LOD0/coarse transition is stitched on the fine side (see Meshing and LOD): a fine column at
+  the cutoff skirts each side that faces the active LOD1 band, with the step read from the drawn
+  coarse surface. The extra fine transition ring and the clipped LOD1 regions are still the
+  selection mechanism; the stitch only closes the dropped surface. A clipped LOD1 region's drawn
+  mask edge is not a section edge, so the coarse mesher still culls its boundary wall against the
+  fine-band downsample; when that downsample snaps a coarse cell above the fine top, the exposed
+  band above the fine surface is not covered by the downward fine skirt. Closing that coarse-side
+  cull needs a mask-edge skirt (a follow-up), not more fine geometry. A visible loading indicator
+  is also not implemented.
 - No normative older section record exists, so migration fixtures cannot be added yet.
 - The camera and entities are still `f32`/world-space on the CPU. Camera-relative rendering is
   applied, but the spec's `f64` camera migration is not.

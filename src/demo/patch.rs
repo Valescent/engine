@@ -19,7 +19,9 @@ use crate::section;
 use super::build::{DemoEdit, demo_rebuild};
 use super::build::{DemoPatch, DemoRebuild};
 use super::content::{demo_materials, solid_table};
-use super::lod::{coarse_bands, demo_coarse_regions_masked, demo_lod_sets};
+use super::lod::{
+    coarse_bands, demo_coarse_regions_masked, demo_lod_sets, fine_skirt_edges, skirt_fine_section,
+};
 use super::{COLUMN_SECTIONS, TERRAIN_DEMO_FINE_MARGIN, TERRAIN_DEMO_FINE_RADIUS};
 
 /// One meshed section of the demo patch.
@@ -525,12 +527,25 @@ impl TerrainDemo {
                 .abs()
                 .max((column.1 - player_column.1).abs())
         };
-        let mut active: Vec<DemoSection> = self
-            .fine
-            .iter()
-            .filter(|&(&column, _)| ring(column) <= cutoff)
-            .flat_map(|(_, sections)| sections.iter().cloned())
-            .collect();
+        let mut active: Vec<DemoSection> = Vec::new();
+        for (&column, sections) in &self.fine {
+            if ring(column) > cutoff {
+                continue;
+            }
+            let edges = fine_skirt_edges(column, player_column, self.view_radius);
+            for section in sections {
+                let mut section = section.clone();
+                skirt_fine_section(
+                    &self.columns,
+                    &self.materials,
+                    &self.pack,
+                    &mut section,
+                    column,
+                    edges,
+                );
+                active.push(section);
+            }
+        }
 
         // Far regions still draw while the player walks toward them; the next
         // throttled rebuild reclassifies them. All 16 columns must be clear of
