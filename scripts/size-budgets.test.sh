@@ -2,8 +2,10 @@
 # Self-check for scripts/size-budgets.sh.
 #
 # Builds a throwaway Git work tree with one 600-line file (on the advisory
-# boundary, so it must not be reported) and one 1,001-line file (over the
-# hard-warning budget). Asserts the annotation, the counts, and the zero exit.
+# boundary, so it must not be reported), one 1,001-line file (over the
+# hard-warning budget), and one 1,001-line file under src/v0/ (frozen legacy,
+# so it is reported as excluded but never warned or counted). Asserts the
+# annotation, the counts, the exclusion, and the zero exit.
 
 set -eu
 
@@ -20,7 +22,11 @@ awk 'BEGIN { for (i = 0; i < 600; i++) print "// advisory boundary" }' > "$tmp/a
 # 1,001 lines is over the 1,000-line budget by one.
 awk 'BEGIN { for (i = 0; i < 1001; i++) print "// over budget" }' > "$tmp/over-1000.rs"
 
-git -C "$tmp" -c core.autocrlf=false add at-600.rs over-1000.rs
+# src/v0/ is frozen legacy. This file is over budget but must stay excluded.
+mkdir -p "$tmp/src/v0"
+awk 'BEGIN { for (i = 0; i < 1001; i++) print "// frozen legacy" }' > "$tmp/src/v0/world.rs"
+
+git -C "$tmp" -c core.autocrlf=false add at-600.rs over-1000.rs src/v0/world.rs
 
 set +e
 output=$(sh "$budget" "$tmp" 2>&1)
@@ -37,6 +43,17 @@ fail() {
 
 printf '%s\n' "$output" | grep -F '::warning file=over-1000.rs,line=1::' >/dev/null ||
 	fail "missing warning annotation for over-1000.rs"
+
+# src/v0/world.rs is over budget but must not be annotated as an offender.
+if printf '%s\n' "$output" | grep -F '::warning file=src/v0/world.rs' >/dev/null; then
+	fail "src/v0/ files must not produce warning annotations"
+fi
+
+printf '%s\n' "$output" | grep -F 'excluding src/v0/ (frozen legacy, deleted when the terrain demo is the default): 1 file(s), 1 over 1,000 and 1 over 600 lines' >/dev/null ||
+	fail "missing src/v0 exclusion line with its counts"
+
+printf '%s\n' "$output" | grep -F '3 tracked Rust files (1 under src/v0/ excluded from the budgets)' >/dev/null ||
+	fail "missing tracked-file count with the v0 exclusion"
 
 printf '%s\n' "$output" | grep -F '1 file(s) over 1,000 lines' >/dev/null ||
 	fail "missing over-1,000 count"

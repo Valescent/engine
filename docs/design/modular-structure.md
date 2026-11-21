@@ -607,6 +607,11 @@ Consequences of the target tree:
 | `pub` items per module | 25 | A module with more than 25 public items is usually several modules. | `description`, `section`, `mesher2`, and `light2` until the visibility pass. |
 | Test module | no cap | Tests are data, not interface. | none |
 
+`src/v0/` is outside this budget. It is the frozen legacy path (§4.2, §8) and is deleted when the
+terrain demo becomes the default, so `scripts/size-budgets.sh` reports its files as an excluded
+count instead of annotating or counting them; refactoring code that disappears with the directory
+is churn.
+
 The numbers are deliberately not a "defect threshold". Koru et al. found a sublinear size-defect
 relationship, so a per-line defect argument would be false. The budget protects review and change
 locality, which is what the change-coupling data shows is actually failing here.

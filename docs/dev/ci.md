@@ -177,8 +177,8 @@ wall-clock counters, and the comparison rule are defined in
 
 ### Size budgets
 
-The `Terrain gates` job also runs the file-size checker, which scans tracked `*.rs` files and
-ignores `target/`, `book/`, and `world/`:
+The `Terrain gates` job also runs the file-size checker, which scans tracked `*.rs` files,
+ignores `target/`, `book/`, and `world/`, and reports `src/v0/` as excluded:
 
 ```console
 sh scripts/size-budgets.sh
@@ -187,31 +187,41 @@ sh scripts/size-budgets.sh
 The thresholds come from [Modular structure](../design/modular-structure.md#56-size-budgets)
 §5.6. Every file over **1,000 lines** is printed as a GitHub warning annotation
 (`::warning file=...,line=1::`), and files over **600 lines** are counted as the advisory tier.
+`src/v0/` is the frozen legacy stack: it remains the default run path only until the terrain demo
+becomes the default, at which point it is deleted. Its files are therefore reported as excluded
+and never annotated or counted, because splitting code that is scheduled for deletion is
+pointless churn. The output always includes one line with that exclusion and its file counts.
 The script always exits 0 on findings, and the CI step sets `continue-on-error: true`: §8 records
 the decision that size budgets are warnings, not failures, until the refactor brings the tree
-under the limits. Remove `continue-on-error` and make the checker exit non-zero once no tracked
+under the limits. Remove `continue-on-error` and make the checker exit non-zero once no counted
 Rust file exceeds 1,000 lines.
 
-On 2026-11-20 the merged tree has **21 files over 1,000 lines** and **29 files over 600 lines**
-out of 77 tracked Rust files (the 600-line count includes the 1,000-line offenders; 8 files sit
-between 601 and 1,000). The five largest are:
+On 2026-11-21 the tree has **114 tracked Rust files**, of which **8 sit under `src/v0/`**; those
+8 are excluded, including 2 over 1,000 lines and 4 over 600. The counted set is **14 files over
+1,000 lines** and **32 files over 600 lines** (the 600-line count includes the 1,000-line
+offenders; 18 files sit between 601 and 1,000). The five largest counted files are:
 
 | Lines | File |
 |---:|---|
-| 6,896 | `src/lib.rs` |
-| 2,688 | `crates/terrain-core/src/mesher2.rs` |
 | 2,681 | `src/renderer.rs` |
-| 2,129 | `crates/terrain-core/src/light2.rs` |
-| 2,089 | `crates/terrain-core/src/pipeline.rs` |
+| 1,741 | `crates/terrain-core/src/description.rs` |
+| 1,656 | `crates/terrain-core/src/section.rs` |
+| 1,633 | `crates/terrain-core/src/surface.rs` |
+| 1,553 | `crates/terrain-core/src/climate.rs` |
+
+The excluded `src/v0/` files are 8 in total; the largest offenders there are
+`src/v0/world.rs` (1,598 lines) and `src/v0/mesh.rs` (1,233), which is why the checker prints the
+exclusion count instead of hiding them.
 
 The `terrain-gen` tool now lives under `crates/terrain-core/src/bin/terrain-gen/`, one module
 per subcommand; its largest module is 969 lines, so the split removed the last 4,000-line
 offender from this list.
 
 `sh scripts/size-budgets.test.sh` builds a throwaway Git work tree with exactly 600-line and
-1,001-line fixtures and asserts the annotation, both counts, the 600-line boundary, and the zero
-exit. It runs as a separate, blocking step before the checker, because a broken checker should
-fail even while its findings stay advisory.
+1,001-line fixtures plus a 1,001-line `src/v0/` fixture, and asserts the annotation, both counts,
+the 600-line boundary, the `src/v0/` exclusion line and counts, the absence of a warning for the
+v0 file, and the zero exit. It runs as a separate, blocking step before the checker, because a
+broken checker should fail even while its findings stay advisory.
 
 `calibrate-blend` is not part of this PR job: it passes at 16 seeds against the shipped generator
 version 4, but the pair 2-3 margin is too thin to gate every pull request (p90 57.68 against 64,
