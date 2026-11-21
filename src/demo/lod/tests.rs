@@ -579,3 +579,199 @@ fn the_demo_tile_is_lod_selected_at_spawn() {
         demo.sections.len(),
     );
 }
+
+/// A column whose lowest section is a flat stone slab topped at `top`.
+/// A stone slab whose top block is at `top`.
+fn flat_slab(top: i32) -> section::Section {
+    let mut slab = section::Section::uniform(0);
+    for y in 0..=top {
+        for z in 0..32 {
+            for x in 0..32 {
+                slab.set(x, u32::try_from(y).unwrap_or(0), z, 1);
+            }
+        }
+    }
+    slab
+}
+
+/// A column whose lowest section is [`flat_slab`] and the rest is air.
+fn flat_stack(top: i32) -> Arc<[section::Section; COLUMN_SECTIONS]> {
+    let mut stack: [section::Section; COLUMN_SECTIONS] =
+        std::array::from_fn(|_| section::Section::uniform(0));
+    stack[0] = flat_slab(top);
+    Arc::new(stack)
+}
+
+/// A LOD0 section for [`flat_slab`], meshed against air on every side.
+fn flat_fine_section(top: i32, origin: [i32; 3]) -> DemoSection {
+    let slab = flat_slab(top);
+    let air = section::Section::uniform(0);
+    let owners = [Some(&air); 26];
+    let light = crate::padded::PaddedLight::new(15, 0);
+    let mesh = mesher2::mesh_from_neighbours(
+        &slab,
+        &owners,
+        &light,
+        &demo_materials(),
+        mesher2::MeshLod::Lod0,
+    );
+    DemoSection {
+        origin,
+        scale: 1,
+        mesh,
+    }
+}
+
+#[test]
+fn fine_skirt_edges_only_face_the_coarse_band() {
+    let edges = fine_skirt_edges((0, 0), (0, 0), 12);
+    assert!(
+        edges.is_empty(),
+        "a column fully inside LOD0 has no coarse side"
+    );
+
+    let east = fine_skirt_edges((3, 0), (0, 0), 12);
+    assert!(east.east() && !east.west() && !east.north() && !east.south());
+
+    let north = fine_skirt_edges((0, -3), (0, 0), 12);
+    assert!(north.north() && !north.south() && !north.east() && !north.west());
+
+    let corner = fine_skirt_edges((3, 3), (0, 0), 12);
+    assert!(corner.east() && corner.south());
+    assert!(!corner.west() && !corner.north());
+
+    // The opposite corner flips the two open sides.
+    let opposite = fine_skirt_edges((-3, -3), (0, 0), 12);
+    assert!(opposite.west() && opposite.north());
+    assert!(!opposite.east() && !opposite.south());
+
+    // A short ring has no coarse band at all.
+    assert!(fine_skirt_edges((3, 0), (0, 0), 3).is_empty());
+}
+
+#[test]
+fn a_boundary_fine_section_skirts_only_the_coarse_side() {
+    let materials = demo_materials();
+    let pack = content::v1_default();
+    let fine_top = 9;
+    let coarse_top = 8;
+    let mut columns = BTreeMap::new();
+    columns.insert((4, 0), flat_stack(coarse_top - 1));
+    let mut section = flat_fine_section(fine_top, [3 * 32, 0, 0]);
+    let before = section.mesh.opaque.len();
+    let edges = fine_skirt_edges((3, 0), (0, 0), 12);
+
+    let added = skirt_fine_section(&columns, &materials, &pack, &mut section, (3, 0), edges);
+
+    assert_eq!(added, 2, "the coarse top is two blocks below the fine edge");
+    assert_eq!(section.mesh.opaque.len(), before + 2);
+    assert!(section.mesh.skirts.east());
+    assert!(!section.mesh.skirts.west());
+    assert!(!section.mesh.skirts.north());
+    assert!(!section.mesh.skirts.south());
+    for quad in &section.mesh.opaque[before..] {
+        assert_eq!(quad.normal(), 0, "the stitch hangs on the east plane");
+    }
+}
+
+#[test]
+fn a_fine_section_inside_lod0_gets_no_skirts() {
+    let materials = demo_materials();
+    let pack = content::v1_default();
+    let mut columns = BTreeMap::new();
+    for cell in [(1, 0), (0, 1), (0, -1), (-1, 0)] {
+        columns.insert(cell, flat_stack(20));
+    }
+    let mut section = flat_fine_section(9, [32, 0, 0]);
+    let raw = section.mesh.opaque.clone();
+    let edges = fine_skirt_edges((1, 0), (0, 0), 12);
+    assert!(edges.is_empty());
+
+    let added = skirt_fine_section(&columns, &materials, &pack, &mut section, (1, 0), edges);
+
+    assert_eq!(added, 0);
+    assert!(section.mesh.skirts.is_empty());
+    assert_eq!(section.mesh.opaque, raw, "interior geometry is untouched");
+}
+
+#[test]
+fn skirt_depth_covers_the_actual_coarse_step() {
+    let materials = demo_materials();
+    let pack = content::v1_default();
+    let cases = [
+        (9, 12, 0_u32, "coarse above the fine edge"),
+        (9, 10, 0, "flush coarse edge"),
+        (8, 8, 1, "one-block step"),
+        (9, 8, 2, "two-block step"),
+        (9, 4, 2, "deeper step capped at SKIRT_DEPTH"),
+    ];
+    for (fine_top, coarse_top, expected, why) in cases {
+        let mut columns = BTreeMap::new();
+        columns.insert((4, 0), flat_stack(coarse_top - 1));
+        let mut section = flat_fine_section(fine_top, [3 * 32, 0, 0]);
+        let before = section.mesh.opaque.len();
+        let added = skirt_fine_section(
+            &columns,
+            &materials,
+            &pack,
+            &mut section,
+            (3, 0),
+            mesher2::SkirtEdges::EAST,
+        );
+        assert_eq!(added, expected, "{why}");
+        assert_eq!(
+            section.mesh.opaque.len(),
+            before + usize::try_from(expected).unwrap()
+        );
+        let lowest = section.mesh.opaque[before..]
+            .iter()
+            .map(|quad| quad.y())
+            .min();
+        if expected > 0 {
+            assert_eq!(
+                lowest,
+                Some(u8::try_from(fine_top).unwrap() - u8::try_from(expected).unwrap()),
+                "{why}: the strip starts under the step"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_demo_stitches_the_lod0_boundary_only() {
+    let demo = build_terrain_demo(0x5EED, IVec2::new(0, 0), 4).expect("the v1 terrain builds");
+    let sections = |x: i32, z: i32| {
+        demo.sections
+            .iter()
+            .filter(move |section| {
+                section.scale == 1 && section.origin[0] == x * 32 && section.origin[2] == z * 32
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let boundary = sections(3, 0);
+    assert!(
+        !boundary.is_empty(),
+        "the boundary column is active at LOD0"
+    );
+    assert!(
+        boundary.iter().any(|section| section.mesh.skirts.east()),
+        "the coarse-facing east side is stitched"
+    );
+    assert!(
+        boundary.iter().all(|section| !section.mesh.skirts.west()),
+        "the fine-owned west side keeps no skirt"
+    );
+
+    let interior = sections(1, 0);
+    assert!(
+        !interior.is_empty(),
+        "the interior column is active at LOD0"
+    );
+    assert!(
+        interior
+            .iter()
+            .all(|section| section.mesh.skirts.is_empty()),
+        "a column fully inside LOD0 has no stitch geometry"
+    );
+}

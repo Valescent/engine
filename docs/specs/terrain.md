@@ -1050,6 +1050,13 @@ covered LOD(n) columns are not resident-and-meshed, so there is no overlap and n
 3, i.e. fully open) and the coarse face's `sky`/`blk`/`tile`/`tint`; a flush edge emits no skirt, a
 one-cell drop emits one cell, and a larger drop is capped at `SKIRT_DEPTH`.
 
+The transition is stitched from **both** sides. A coarse section skirts all four section sides. A
+LOD0 section also skirts each side that faces the active coarse band (only the sides just outside
+the fine cutoff, never an interior edge). The fine skirt reads the drawn coarse surface under the
+edge, so its depth is the actual step: a flush or higher coarse edge appends nothing, a lower edge
+appends exactly the drop, and the same `SKIRT_DEPTH` cap applies. The stitch is derived, never
+saved, and is rebuilt deterministically from the band selection and the columns.
+
 Budget: `LOD_NODE_BUDGET = 3,000` emitting LOD sections (soft target ~2,000) at world centre.
 Exceeding fails CI, never a runtime clamp; runtime may lower radii but never raise them past budget.
 
@@ -1464,7 +1471,7 @@ contradict a MUST elsewhere in this document.
   water, so at a band edge the distant surface can sit up to 1 block (LOD1) or 3 blocks (LOD2)
   below the fine surface. This is deliberate: any-water groups raised translucent sheets above the
   true sea level. The step is a surface step, not an open hole; the coarse water volume and the
-  fine band's boundary skirt keep the seam closed.
+  fine band's boundary stitch (§13.2) keep the seam closed.
 - **Cold beach uses sand** for both temperature variants (§8.5).
 - **Persistence** (16): section files, one-generation backup rotation, the journal file, replay,
   prefix trimming, repair, and header migration are implemented in `src/save.rs` and

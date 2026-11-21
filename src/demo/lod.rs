@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use crate::content;
+use crate::description;
 use crate::lod;
 use crate::mesher2;
 use crate::padded;
@@ -484,6 +485,188 @@ pub(crate) fn demo_far_regions(
         out.insert((x, z), sections);
     }
     out
+}
+
+/// The sides of a fine column that face the active coarse band.
+///
+/// The fine band is the square of columns within [`TERRAIN_DEMO_FINE_CUTOFF`]
+/// of `player`. A fine column can therefore only border coarse terrain through
+/// a column one ring outside that square: the LOD1 band starts there, and LOD2
+/// is never adjacent to LOD0. A visible-ring column outside the cutoff is always
+/// claimed by a complete or clipped LOD1 region, so the band membership is the
+/// stable rule; [`skirt_fine_section`] additionally requires the neighbour to be
+/// resident before it writes geometry.
+///
+/// Sides come in the fixed `North, South, East, West` order, and the result is
+/// empty for a column fully inside LOD0. That keeps the fine band from doubling
+/// geometry on its interior edges.
+pub(crate) fn fine_skirt_edges(
+    column: (i32, i32),
+    player: (i32, i32),
+    view_radius: i32,
+) -> mesher2::SkirtEdges {
+    let ring = |cell: (i32, i32)| (cell.0 - player.0).abs().max((cell.1 - player.1).abs());
+    let mut edges = mesher2::SkirtEdges::NONE;
+    for side in SIDES {
+        let neighbour = neighbour_column(column, side);
+        let distance = ring(neighbour);
+        if distance > TERRAIN_DEMO_FINE_CUTOFF && distance <= view_radius {
+            edges = edges.with(side);
+        }
+    }
+    edges
+}
+
+/// The four horizontal sides, in the fixed skirt order.
+const SIDES: [mesher2::Side; 4] = [
+    mesher2::Side::North,
+    mesher2::Side::South,
+    mesher2::Side::East,
+    mesher2::Side::West,
+];
+
+/// The column just outside one side of `column`.
+fn neighbour_column(column: (i32, i32), side: mesher2::Side) -> (i32, i32) {
+    match side {
+        mesher2::Side::North => (column.0, column.1 - 1),
+        mesher2::Side::South => (column.0, column.1 + 1),
+        mesher2::Side::East => (column.0 + 1, column.1),
+        mesher2::Side::West => (column.0 - 1, column.1),
+    }
+}
+
+/// Appends the fine side of a LOD0/coarse stitch, or returns `0`.
+///
+/// A fine section culls its band-facing wall against the *fine* neighbour
+/// column, while a clipped or complete coarse region draws a conservative
+/// downsample that can sit a block or more away from that wall's top. Where the
+/// coarse surface is lower, the gap between the coarse top and the fine edge is
+/// open from the fine side. This appends one downward skirt on each side in
+/// `edges` that borders an active coarse column, using the drawn coarse surface
+/// as the step:
+///
+/// - the coarse column's top face is derived with the same conservative vote
+///   the LOD1 mesher uses (air, water, and scatter cells do not count);
+/// - a flush or higher coarse edge appends nothing;
+/// - a lower coarse edge appends exactly the drop, capped at `SKIRT_DEPTH`;
+/// - a missing coarse neighbour appends nothing, so the stitch never guesses.
+///
+/// The padding scratch holds only the coarse surface under the edge, so
+/// [`mesher2::add_step_skirts`] reads the coarse height rather than the fine
+/// neighbour's. The call is additive, deterministic, and marks the sides it
+/// touched; every active selection starts from the unskirted stored mesh, so a
+/// repeated selection never doubles a strip. Returns the quad count added.
+pub(crate) fn skirt_fine_section(
+    columns: &BTreeMap<(i32, i32), Arc<[section::Section; COLUMN_SECTIONS]>>,
+    materials: &mesher2::MaterialProps,
+    pack: &content::ContentPack,
+    section: &mut DemoSection,
+    column: (i32, i32),
+    edges: mesher2::SkirtEdges,
+) -> u32 {
+    if edges.is_empty() || section.mesh.opaque.is_empty() {
+        return 0;
+    }
+    let blocks_per_section = i32::try_from(description::SECTION_SIZE).unwrap_or(32);
+    let Ok(sy) = usize::try_from(section.origin[1].div_euclid(blocks_per_section)) else {
+        return 0;
+    };
+    if sy >= COLUMN_SECTIONS {
+        return 0;
+    }
+    let stone = pack.id("core:stone").unwrap_or(1);
+    let width = usize::try_from(description::SECTION_SIZE).unwrap_or(32);
+    let mut added = 0;
+    for side in SIDES {
+        if !edges.contains(side) {
+            continue;
+        }
+        let Some(stack) = columns.get(&neighbour_column(column, side)) else {
+            continue;
+        };
+        let mut blocks = padded::PaddedBlocks::new();
+        for along in 0..width {
+            let top = coarse_local_top(stack, materials, side, along, sy);
+            for y in 0..top {
+                let (x, y, z) = padded_cell(side, along, y);
+                blocks.set(x, y, z, stone);
+            }
+        }
+        added += mesher2::add_step_skirts(
+            &mut section.mesh,
+            &blocks,
+            materials,
+            mesher2::SkirtEdges::NONE.with(side),
+            mesher2::MeshLod::Lod0,
+        );
+    }
+    added
+}
+
+/// The `2x2` fine columns one coarse cell covers at a section edge.
+///
+/// A LOD1 cell is two blocks wide on every axis, so the `2x2x2` vote at a
+/// boundary always reads two adjacent blocks along the tangent and two along
+/// the normal inside the adjacent fine column. Both pairs are block-aligned
+/// because every column origin is a multiple of the section size.
+fn coarse_block_spans(side: mesher2::Side, along: usize) -> ([usize; 2], [usize; 2]) {
+    let tangent = [along & !1, (along & !1) + 1];
+    match side {
+        mesher2::Side::East => ([0, 1], tangent),
+        mesher2::Side::West => ([30, 31], tangent),
+        mesher2::Side::South => (tangent, [0, 1]),
+        mesher2::Side::North => (tangent, [30, 31]),
+    }
+}
+
+/// Padded-scratch coordinates of one outside column cell.
+fn padded_cell(side: mesher2::Side, along: usize, y: u32) -> (i32, i32, i32) {
+    let along = i32::try_from(along).unwrap_or(0);
+    let y = i32::try_from(y).unwrap_or(0);
+    match side {
+        mesher2::Side::North => (along, y, -1),
+        mesher2::Side::South => (along, y, 32),
+        mesher2::Side::East => (32, y, along),
+        mesher2::Side::West => (-1, y, along),
+    }
+}
+
+/// The coarse surface height under one boundary cell, in section cells.
+///
+/// Returns the number of cells from the section floor up to (but excluding) the
+/// coarse top face, clamped to the section. `0` means the coarse column is empty
+/// in this section, so the step is deeper than the section and the caller's
+/// `SKIRT_DEPTH` cap applies.
+fn coarse_local_top(
+    stack: &[section::Section; COLUMN_SECTIONS],
+    materials: &mesher2::MaterialProps,
+    side: mesher2::Side,
+    along: usize,
+    sy: usize,
+) -> u32 {
+    let (xs, zs) = coarse_block_spans(side, along);
+    let blocks_per_section = i32::try_from(description::SECTION_SIZE).unwrap_or(32);
+    let base = i32::try_from(sy).unwrap_or(0) * blocks_per_section;
+    for y in (0..blocks_per_section).rev() {
+        let world_y = base + y;
+        let section = &stack[usize::try_from(world_y.div_euclid(blocks_per_section)).unwrap_or(0)];
+        let solid = xs.iter().any(|&x| {
+            zs.iter().any(|&z| {
+                let id = section.get(
+                    u32::try_from(x).unwrap_or(0),
+                    u32::try_from(world_y.rem_euclid(blocks_per_section)).unwrap_or(0),
+                    u32::try_from(z).unwrap_or(0),
+                );
+                let material = materials.material(id);
+                id != 0 && !material.water && !material.cross_quad
+            })
+        });
+        if solid {
+            let top_face = (world_y & !1) + 2;
+            return u32::try_from(top_face - base).unwrap_or(0).min(32);
+        }
+    }
+    0
 }
 
 #[cfg(test)]

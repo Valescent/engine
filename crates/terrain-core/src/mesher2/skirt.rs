@@ -220,19 +220,24 @@ pub fn add_skirts(mesh: &mut SectionMesh, edges: SkirtEdges, lod: MeshLod) -> u3
 ///
 /// This is the drop-aware sibling of [`add_skirts`]. [`add_skirts`] always
 /// continues every exposed boundary top face downward; this variant reads the
-/// coarse padded scratch and fills only the vertical step to the column just
-/// outside `edges`:
+/// padded scratch and fills only the vertical step to the column just outside
+/// `edges`:
 ///
-/// - a flush edge (the adjacent coarse column reaches or passes the boundary
-///   top) appends nothing;
+/// - a flush edge (the adjacent column reaches or passes the boundary top)
+///   appends nothing;
 /// - a one-cell drop appends one cell;
 /// - a larger drop or an open neighbour appends at most `SKIRT_DEPTH` cells.
+///
+/// The scratch is normally a coarse section's padded neighbours. The demo also
+/// calls it with a fine boundary mesh whose scratch holds the drawn coarse
+/// surface, so the fine side of a LOD0/coarse seam gets the same drop-aware
+/// strip without a second rule.
 ///
 /// Cells below the section floor are never emitted. Records, edge order, the
 /// per-edge normal, fully open AO (`0xFF`, so a skirt never darkens), `sky`/`blk`
 /// from the boundary face, and [`SectionMesh::skirts`] all match [`add_skirts`];
 /// a repeated call returns `0`. The return value is the number of quads added.
-pub(crate) fn add_step_skirts(
+pub fn add_step_skirts(
     mesh: &mut SectionMesh,
     blocks: &PaddedBlocks,
     props: &MaterialProps,

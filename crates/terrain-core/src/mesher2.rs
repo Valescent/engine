@@ -50,11 +50,13 @@
 //! [`add_skirts`] appends a downward wall along selected section edges, into the
 //! opaque range, so a coarse section's lower-resolution boundary hides the gap
 //! under it instead of stitching to its finer neighbours. `add_step_skirts`
-//! is the drop-aware variant: it reads the coarse padded scratch and fills only
+//! is the drop-aware variant: it reads the padded scratch and fills only
 //! the vertical step to the adjacent column, so a flush edge appends nothing.
-//! Skirt records copy the boundary face's `tile` and `tint`, take its air-side
-//! `sky`/`blk`, and force fully open AO. [`SectionMesh::skirts`] records the
-//! sides already done, so a skirt set is never appended twice.
+//! The demo also uses it on the fine side of a LOD0/coarse seam, with a scratch
+//! that carries the drawn coarse surface. Skirt records copy the boundary
+//! face's `tile` and `tint`, take its air-side `sky`/`blk`, and force fully open
+//! AO. [`SectionMesh::skirts`] records the sides already done, so a skirt set is
+//! never appended twice.
 //!
 //! # Padded inputs (`I2.3`, `I2.4`)
 //!
@@ -98,6 +100,6 @@ pub(crate) use record::{
     NORMAL_POS_Y, NORMAL_POS_Z,
 };
 pub use record::{Quad, SectionMesh, quad_count};
-pub use skirt::{Side, SkirtEdges, add_skirts};
 #[allow(unused_imports)] // crate-private re-exports keep the flat module paths
-pub(crate) use skirt::{add_step_skirts, skirt_blocks};
+pub(crate) use skirt::skirt_blocks;
+pub use skirt::{Side, SkirtEdges, add_skirts, add_step_skirts};
