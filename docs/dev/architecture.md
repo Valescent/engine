@@ -24,6 +24,7 @@ src/
 │   ├── mod.rs              # App, ApplicationHandler, lifecycle, RunError
 │   ├── input.rs            # key/mouse mapping, capture, hotbar, edit actions
 │   ├── game.rs             # targets, break progress, drops, placement, saves
+│   ├── ui.rs               # egui input forwarding, frame build, platform output
 │   └── frame.rs            # tick/redraw order, timing, overlay, streaming
 ├── game/                   # headless gameplay: items, inventory, tools, entities, save
 │   ├── item.rs             # stable names, definitions, stacks
@@ -33,6 +34,9 @@ src/
 │   ├── entities.rs         # dropped-item physics, pickup, records
 │   ├── save.rs             # VPLY player save with CRC and atomic write
 │   └── state.rs            # fixed tick, break progress, persistence
+├── ui/                     # egui state and HUD
+│   ├── mod.rs              # UiState, capture policy, draw entry point
+│   └── hud.rs              # crosshair, hotbar, interaction prompt
 ├── demo/
 │   ├── mod.rs              # DemoRuntime seam, frame/stats, constants, re-exports
 │   ├── patch.rs            # TerrainDemo, block access, light/mesh apply, LOD apply
@@ -51,6 +55,7 @@ src/
 │   ├── pipeline.rs         # shader modules, bind group layouts, pipelines
 │   ├── terrain.rs          # packed-quad sections, quad decode, upload plan
 │   ├── items.rs            # dropped-item cube pass
+│   ├── ui.rs               # egui textures, buffers, and the color-only UI pass
 │   └── texture.rs          # procedural block texture array
 ├── camera.rs, player.rs, raycast.rs, sky.rs, overlay.rs, frustum.rs
 ├── block.rs, config.rs, headless.rs, metrics.rs
@@ -65,8 +70,10 @@ src/
 | `src/app/mod.rs` | `App` (fields and construction), the `winit` application handler and window-event dispatch, window/renderer lifecycle, `RunError`, and the module declarations. |
 | `src/app/input.rs` | Key mapping, cursor capture/release, focus and mouse-look handling, hotbar selection, movement-key helpers, repair-key mapping, and the legacy break/place actions. |
 | `src/app/game.rs` | The v1 gameplay glue: target names and hardness, hold-to-break, block removal and drops, placement rules, pickup upload, and the player save/load paths. |
+| `src/app/ui.rs` | The egui/winit bridge: event forwarding, the UI-first capture decision, `take_egui_input`, `run_pass`, platform output, tessellation, and `UiFrame` construction. |
 | `src/app/frame.rs` | Per-frame work: tick and redraw order, frame delta and timing accumulation, `FrameAccumulator`, overlay text and stats, resize, mesh request/upload and column streaming, and the demo-to-renderer upload adapter. |
 | `src/game/` | The headless gameplay core: item identity and stacks, inventory and hotbar, tool classes and break rules, drop tables, item entities, the `VPLY` save, and the fixed-tick `GameState`. It names no `winit` or `wgpu` type. |
+| `src/ui/` | The UI state and HUD: `UiState`, pointer/keyboard ownership, crosshair, nine-slot hotbar, item colours, counts, durability, and the interaction prompt. See [UI](ui.md). |
 | `src/demo/mod.rs` | `DemoRuntime`, the demo's one app-facing seam: it owns the patch, ring, save worker, repair prompt, pending rebuild, and edit queue, and exposes `open`, `tick`, `edit`, `save`, `shutdown`, `repair`, `stats`, and the read-only overlay/upload accessors. Also `DemoFrame`, `DemoStats`, shared constants, and the runtime tests. |
 | `src/demo/patch.rs` | `TerrainDemo` state, resident columns, block access and collision, light/mesh installation, LOD selection, and the light table. |
 | `src/demo/build.rs` | The incremental rebuild over a batch of edits: the 3x3 light scope, the 26-neighbour remesh, `DemoEdit`/`DemoPatch`/`DemoRebuild`, and their tests. |
@@ -98,7 +105,7 @@ src/
 | `crates/terrain-core/src/save.rs`, `crates/terrain-core/src/world_save.rs` | Section files, backup rotation, journal file, replay/trimming, `WorldSave`, save worker, repair, migration/report. See [Terrain v1 runtime](terrain-v1.md) and [Save format](save-format.md). |
 | `crates/terrain-core/src/light2.rs`, `crates/terrain-core/src/mesher2.rs`, `crates/terrain-core/src/lod.rs`, `crates/terrain-core/src/section.rs`, `src/terrain_draw.wgsl` | v1 column light, greedy mesher, coarse LOD, section storage, packed-quad shader. The shader stays with the renderer. |
 | `src/sky.rs` | Day/night cycle, sun direction, sky/ambient/sun colours, and the CPU fog formula. |
-| `src/renderer.rs`, `src/renderer/` | `renderer.rs`: `wgpu` device/surface setup, `Renderer` and its methods, re-exports, and draw submission. `renderer/chunk.rs`: legacy chunk LOD/water buffers and origin uniforms. `renderer/frame.rs`: frame uniform, camera bind group, depth texture, present mode, and stats. `renderer/origin.rs`: absolute origin uniforms and camera-relative bookkeeping. `renderer/pipeline.rs`: shader modules, bind group layouts, and pipelines. `renderer/terrain.rs`: packed-quad sections, quad decode, and the upload plan. `renderer/items.rs`: the dropped-item cube pass. `renderer/texture.rs`: the procedural block texture array. |
+| `src/renderer.rs`, `src/renderer/` | `renderer.rs`: `wgpu` device/surface setup, `Renderer` and its methods, re-exports, and draw submission. `renderer/chunk.rs`: legacy chunk LOD/water buffers and origin uniforms. `renderer/frame.rs`: frame uniform, camera bind group, depth texture, present mode, and stats. `renderer/origin.rs`: absolute origin uniforms and camera-relative bookkeeping. `renderer/pipeline.rs`: shader modules, bind group layouts, and pipelines. `renderer/terrain.rs`: packed-quad sections, quad decode, and the upload plan. `renderer/items.rs`: the dropped-item cube pass. `renderer/ui.rs`: egui textures, buffers, and the color-only UI pass. `renderer/texture.rs`: the procedural block texture array. |
 | `src/quad.rs` | The 12-byte quad record and 48-byte chunk-info layout. |
 | `src/quad_renderer.rs` | Quad-pool uploads keyed by `NodeKey`, the chunk-info table, indirect arguments, visibility, and the two draws. |
 | `src/pool.rs` | Flat 64-quad pages with a coalescing free list and frames-in-flight retirement. |
@@ -114,9 +121,10 @@ and `engine::world` resolve exactly as before. v0 is still the default run path 
 is unset; it receives fixes only, and the whole directory is removed when the terrain demo becomes
 the default. The move is behaviour-preserving and does not change the save format.
 
-`src/startup.rs`, `src/app/`, and `src/demo/` split the old crate-root logic by responsibility.
+`src/startup.rs`, `src/app/`, `src/game/`, `src/ui/`, and `src/demo/` split the old crate-root logic by responsibility.
 `lib.rs` is now a table of contents; `startup` owns environment switches and world choice, `app`
-owns `winit`/`wgpu` and the frame loop, and `demo` owns the v1 patch, ring, LOD, edits, and saves.
+owns `winit`/`wgpu` and the frame loop, `game` owns the headless gameplay state, `ui` owns the
+egui state and HUD, and `demo` owns the v1 patch, ring, LOD, edits, and saves.
 `demo` does not name `winit`, `wgpu`, or `renderer`; `app` translates its state into renderer
 submissions. These modules are private, so the public surface is unchanged.
 
@@ -168,9 +176,9 @@ See [Gameplay core](gameplay.md) for the item table, break rules, save layout, a
 
 ## Ownership
 
-- `App` owns the window handle, renderer, world, player, camera, sky clock, selected block, input state, mesh queue, worker pool, hierarchy selection and uploaded-section set, horizon bins, frame timing, one `Option<DemoRuntime>`, the cached content pack, the item registry, and the `GameState` (inventory, item entities, break progress, and the fixed tick).
+- `App` owns the window handle, renderer, world, player, camera, sky clock, selected block, input state, mesh queue, worker pool, hierarchy selection and uploaded-section set, horizon bins, frame timing, one `Option<DemoRuntime>`, the cached content pack, the item registry, the `GameState` (inventory, item entities, break progress, and the fixed tick), and the egui context, winit adapter, and `UiState`.
 - `DemoRuntime` owns the v1 patch, column ring and workers, save worker, repair prompt, pending rebuild, and edit queue. It returns a `DemoFrame` instead of holding the renderer.
-- `Renderer` owns the `wgpu` instance, surface, device, queue, surface configuration, chunk and highlight pipelines, camera uniform, the quad-pool renderer, the per-chunk fallback buffers and origin uniforms, the block texture array, and depth attachment.
+- `Renderer` owns the `wgpu` instance, surface, device, queue, surface configuration, chunk and highlight pipelines, camera uniform, the quad-pool renderer, the per-chunk fallback buffers and origin uniforms, the block texture array, the depth attachment, and the egui textures, buffers, and color-only UI pass.
 - `Camera` owns only look state; it does not read the clock or input devices.
 - `Player` owns feet position, velocity, and ground state; it does not read input devices.
 - `World` owns the packed chunk map and the cached light fields; every stored chunk is non-empty. Generated chunks are inserted through `World::insert_chunk`, and chunk snapshots for meshing share the chunk's packed `Arc<Vec<u8>>`; a write copies the storage first (copy-on-write), so a snapshot stays immutable.
@@ -185,8 +193,8 @@ The renderer holds an `Arc<Window>` and creates a `Surface<'static>` from it. Th
 1. `main` calls `engine::run`.
 2. `startup::run` initialises tracing and reads `config.toml`. It then loads `world/seed` (creating one when the world is new) and generates the spawn column; saved chunk files are applied over the generated blocks. `ENGINE_STRESS_SCENE=1` builds the in-memory stress scene instead and skips world I/O. `TERRAIN_DEMO=1` opens or creates the v1 world, replays recovered edits, and starts the column ring. Once the seed and world choice are known, a windowed run loads the player sidecar; headless and stress runs skip it.
 3. `startup::run` creates the `winit` event loop and the `App` from `app.rs`.
-4. `App::resumed` creates the window and renderer.
-5. The renderer selects an adapter, requests a device and queue, configures the surface, builds the pipelines and the texture array, and starts no chunk mesh work itself.
+4. `App::resumed` creates the window, the egui/winit adapter, and the renderer.
+5. The renderer selects an adapter, requests a device and queue, configures the surface, builds the pipelines, the egui renderer, and the texture array, and starts no chunk mesh work itself.
 6. `App` starts the micropool worker pool and queues an urgent LOD0 job for every loaded chunk. Meshes appear as workers finish.
 7. The application requests the first redraw.
 
@@ -203,6 +211,7 @@ RedrawRequested
   -> move the camera to the player eye
   -> raycast and update the block outline and break progress
   -> upload dropped-item cubes
+  -> run egui: take input, draw the HUD, tessellate, and build a UiFrame
   -> advance the day/night cycle
   -> unload columns past the margin, then stream missing columns and mark ready ones
   -> request light and mesh work only for chunks in the level work set
@@ -214,9 +223,11 @@ RedrawRequested
   -> rebuild horizon bins every 250 ms when horizon culling is enabled
   -> extract the frustum from the view-projection
   -> write camera uniform
-  -> renderer.render(&frustum, &horizon)
+  -> upload UI textures and buffers
+  -> renderer.render(&frustum, &horizon, ui_frame)
        -> acquire surface texture
        -> encode clear + depth clear + frustum/horizon-culled draws + outline
+       -> encode the color-only egui pass over the scene
        -> submit
        -> present
   -> request the next redraw
@@ -244,6 +255,8 @@ to the centre column.
 
 See [Controls](controls.md) for binding tables and capture rules.
 
+- Every window event goes to `egui_winit::State` first. `UiState::captures_pointer` and
+  `captures_keyboard` decide whether gameplay ignores it; the HUD captures nothing. See [UI](ui.md).
 - `W`, `A`, `S`, and `D` move the player horizontally using yaw only; pitch does not affect walking.
 - `Space` requests a jump for the next frame; key repeat is ignored.
 - Mouse look is applied only while the cursor is captured and the window is focused.

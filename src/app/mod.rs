@@ -6,6 +6,7 @@ mod frame;
 mod game;
 mod hierarchy;
 mod input;
+mod ui;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -38,6 +39,7 @@ use crate::save;
 use crate::section::{SectionBounds, SectionKey, overlapping_sections_for_chunk};
 use crate::sky::Sky;
 use crate::streaming::Streaming;
+use crate::ui::UiState;
 use crate::world::{ChunkCoord, DirtyChunks, SaveError, World};
 use crate::world_io::{no_vsync_requested, save_directory};
 
@@ -136,6 +138,10 @@ pub(crate) struct App {
     /// Inventory, break progress, drops, and the fixed tick.
     pub(crate) game: GameState,
     pub(crate) break_held: bool,
+    /// egui state shared by the winit adapter and the renderer upload.
+    pub(crate) egui_ctx: egui::Context,
+    pub(crate) egui_state: Option<egui_winit::State>,
+    pub(crate) ui: UiState,
     /// Whether the run restored a player save, which suppresses the demo spawn
     /// override.
     pub(crate) has_player_save: bool,
@@ -185,6 +191,8 @@ impl App {
         let pack = crate::content::v1_default();
         let items = ItemRegistry::builtin(&pack);
         let game = GameState::new(&items);
+        let egui_ctx = egui::Context::default();
+        egui_ctx.set_visuals(egui::Visuals::dark());
 
         Self {
             window: None,
@@ -231,6 +239,9 @@ impl App {
             items,
             game,
             break_held: false,
+            egui_ctx,
+            egui_state: None,
+            ui: UiState::new(),
             has_player_save: false,
             error: None,
             pressed: HashSet::new(),
@@ -389,6 +400,7 @@ impl App {
 }
 
 impl ApplicationHandler for App {
+    #[allow(clippy::cast_possible_truncation)]
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.renderer.is_some() {
             return;
@@ -404,6 +416,14 @@ impl ApplicationHandler for App {
                 return;
             }
         };
+        self.egui_state = Some(egui_winit::State::new(
+            self.egui_ctx.clone(),
+            egui::ViewportId::ROOT,
+            window.as_ref(),
+            Some(window.scale_factor() as f32),
+            None,
+            None,
+        ));
 
         let size = window.inner_size();
         self.camera.set_aspect(size.width, size.height);
@@ -451,6 +471,9 @@ impl ApplicationHandler for App {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
+        if self.handle_ui_event(&event) {
+            return;
+        }
         match event {
             WindowEvent::CloseRequested => {
                 self.save_world(true);

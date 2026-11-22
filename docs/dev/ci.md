@@ -92,7 +92,9 @@ RUSTDOCFLAGS="-D warnings" cargo doc -p terrain-core --no-deps --no-default-feat
 ```
 
 The `dependencies` job runs `EmbarkStudios/cargo-deny-action@v2`. The policy in `deny.toml`
-covers advisories, licences, duplicate and wildcard bans, and allowed sources.
+covers advisories, licences, duplicate and wildcard bans, and allowed sources. The licence
+allow-list includes `OFL-1.1` and `Ubuntu-font-1.0` for egui's default fonts; the unused `MPL-2.0`
+entry was removed when the egui stack landed.
 
 The `spelling` job runs `crate-ci/typos@v1.52.2`.
 

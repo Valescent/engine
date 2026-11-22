@@ -22,6 +22,7 @@ mod pipeline;
 mod pool;
 mod terrain;
 mod texture;
+mod ui;
 
 use std::collections::BTreeMap;
 use std::mem::size_of;
@@ -44,6 +45,7 @@ use crate::voxel::HighlightVertex;
 use crate::world::{CHUNK_SIZE, ChunkCoord};
 
 pub(crate) use frame::FrameStats;
+pub(crate) use items::item_color;
 #[allow(
     unused_imports,
     reason = "kept as the renderer::OriginChange path for callers and tests"
@@ -56,6 +58,7 @@ pub(crate) use origin::OriginChange;
 pub(crate) use terrain::{
     DecodedQuad, DuplicateOrigin, TerrainDraw, TerrainSection, UploadPlan, decode_quad, plan_upload,
 };
+pub(crate) use ui::UiFrame;
 
 use self::capture::{Capture, write_bmp};
 use self::chunk::{GpuChunk, create_shared_index_buffer};
@@ -73,6 +76,7 @@ use self::pipeline::{
 use self::pool::{PoolCapabilities, pool_supported};
 use self::terrain::section_emits;
 use self::texture::create_block_texture;
+use self::ui::UiPass;
 
 #[derive(Debug, Error)]
 pub enum RendererError {
@@ -136,6 +140,8 @@ pub(crate) struct Renderer {
     highlight_world: Vec<HighlightVertex>,
     /// Dropped-item placeholder cubes.
     items: ItemPass,
+    /// egui buffers and pipelines.
+    ui: UiPass,
     /// World block subtracted from every submitted origin this frame.
     render_origin: IVec3,
     overlay_pipeline: wgpu::RenderPipeline,
@@ -336,6 +342,7 @@ impl Renderer {
         let (depth_texture, depth_view) = create_depth_texture(&device, &config);
         let (highlight_buffer, highlight_count) = create_highlight_buffer(&device, &[]);
         let items = ItemPass::new(&device, &config, &camera_bind_group_layout)?;
+        let ui = UiPass::new(&device, config.format);
         let overlay_pipeline = create_overlay_pipeline(&device, &config)?;
         let (overlay_buffer, overlay_buffer_size) = create_overlay_buffer(&device);
 
@@ -377,6 +384,7 @@ impl Renderer {
             highlight_progress: 0.0,
             highlight_world: Vec::new(),
             items,
+            ui,
             render_origin: view.origin,
             overlay_pipeline,
             overlay_buffer,
@@ -627,7 +635,12 @@ impl Renderer {
     }
 
     #[allow(clippy::cast_precision_loss, clippy::too_many_lines)]
-    pub(crate) fn render(&mut self, frustum: &Frustum, horizon: &Horizon) -> FrameStats {
+    pub(crate) fn render(
+        &mut self,
+        frustum: &Frustum,
+        horizon: &Horizon,
+        mut ui: Option<&mut UiFrame>,
+    ) -> FrameStats {
         self.frame_index += 1;
         if let Some(quad) = self.quad.as_mut() {
             quad.begin_frame(self.frame_index);
@@ -675,6 +688,7 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("frame encoder"),
             });
+        let mut ui_commands = self.prepare_ui(ui.as_deref_mut(), &mut encoder);
 
         let mut captured = false;
         {
@@ -702,6 +716,10 @@ impl Renderer {
             }
 
             self.quad = quad;
+
+            if let Some(frame) = ui.as_deref() {
+                self.draw_ui(&mut encoder, &view, frame);
+            }
 
             if let Some(profiler) = self.profiler.as_mut() {
                 profiler.resolve_queries(&mut encoder);
@@ -737,7 +755,8 @@ impl Renderer {
 
         {
             profiling::scope!("submit");
-            self.queue.submit(Some(encoder.finish()));
+            ui_commands.push(encoder.finish());
+            self.queue.submit(ui_commands);
             self.window.pre_present_notify();
         }
         if captured {

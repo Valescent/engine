@@ -10,6 +10,7 @@ Keyboard and mouse bindings for the current engine and the scoped milestones. Se
 | Chunk boundary demo toggle | Historical (v0.0.3) |
 | Walking, interaction, hotbar, save | Current (v0.0.4, legacy) |
 | Basic mechanics: items, tools, drops, player save | Current (0.0.10.1, demo) |
+| HUD: crosshair, hotbar, interaction prompt | Current (0.0.10.2, demo) |
 | Vsync toggle | Current (v0.0.4) |
 | FPS/frame-time overlay | Current (v0.0.4) |
 | Day/night debug key (`T`) | Current (v0.0.6) |
@@ -119,10 +120,23 @@ the v0.0.4 click-to-break behaviour until the demo becomes the default.
 ### Items and hotbar
 
 - The demo starts with one wooden pickaxe in slot 1 until crafting lands in `0.0.10.3`.
-- `1`-`9` select a hotbar slot. There is no inventory screen yet, so the selected item is not drawn;
-  the choice affects the next break or place.
+- `1`-`9` select a hotbar slot. The HUD shows the nine slots, the item icon, stack count, and tool
+  durability. The selected slot has a white border.
 - Pickup radius is `1.5 m`. A full inventory leaves the remainder on the ground.
 - There is no drop key, inventory screen, crafting, health, stamina, or audio yet.
+
+## HUD (0.0.10.2, demo)
+
+- A small crosshair sits at the centre of the screen.
+- The nine-slot hotbar is anchored at the bottom centre. Empty slots show their number; occupied
+  slots show a flat-colour placeholder icon, the stack count, and a green durability bar for tools.
+- When a demo block is targeted, a prompt above the hotbar reads `Hold left: break the targeted
+  block | Right: place`.
+- The existing `F3` bitmap overlay still shows FPS and frame time. The HUD does not duplicate it.
+- Health, stamina, hunger, and oxygen bars are not drawn yet; they arrive with survival in
+  `0.0.10.4`.
+- The HUD is non-interactive. It does not capture clicks or keys, so the gameplay bindings above
+  continue to work.
 
 ### Saving
 

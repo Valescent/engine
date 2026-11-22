@@ -27,6 +27,7 @@ mod renderer;
 mod section;
 mod sky;
 mod startup;
+mod ui;
 mod v0;
 mod world_io;
 

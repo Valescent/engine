@@ -12,10 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The 0.0.10 gameplay foundation: stable item names, stacks, an inventory and hotbar, tool classes and tiers, hardness-based breaking, block drops, item entities, and a versioned `VPLY` player save. The v1 terrain demo (`TERRAIN_DEMO=1`) uses hold-to-break, pickup, and inventory-backed placement; the legacy chunk world keeps the v0.0.4 click path as a fallback.
 - A detailed [gameplay core reference](docs/dev/gameplay.md) covering item identity, inventory operations, break rules, drops, entity physics, interaction, persistence, and testing.
 - A full `VPLY` byte layout, validation order, writer policy, and versioning note in the [save format](docs/dev/save-format.md#player-save-vply).
+- An egui 0.37 HUD and UI-first event hook: a centre crosshair, nine-slot bottom hotbar with selected border, item icon, stack count, tool durability, and a targeted-block interaction prompt. The UI renders in a second color-only pass and stays non-interactive; the inventory and crafting screens are next. See [the UI reference](docs/dev/ui.md).
 
 ### Changed
 
 - The 0.0.10 scope page and ADR-0018 (egui UI), ADR-0019 (kira audio), and ADR-0020 (minimal entity runtime) record the decisions for the rest of the release.
+- `egui`, `egui-wgpu`, and `egui-winit` 0.37 join the dependency set on the existing wgpu 30 and winit 0.30.13 stack, with default features off and default fonts on.
 
 ### Fixed
 
