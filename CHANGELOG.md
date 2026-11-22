@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A full `VPLY` byte layout, validation order, writer policy, and versioning note in the [save format](docs/dev/save-format.md#player-save-vply).
 - An egui 0.37 HUD and UI-first event hook: a centre crosshair, nine-slot bottom hotbar with selected border, item icon, stack count, tool durability, and a targeted-block interaction prompt. The HUD is non-interactive and renders in a second color-only pass. See [the UI reference](docs/dev/ui.md).
 - The `0.0.10.2` inventory screen: `E` opens it, releases the cursor, and hides the HUD. It shows three rows of main slots, the hotbar, and the offhand; supports drag/drop, click, right-click, shift-click, keyboard focus with arrows and Enter, hover tooltips, and a held-stack cursor. `E`/`Escape`/the close button close it and recapture the cursor; a held stack is returned first and a full inventory keeps the screen open.
+- The phased crafting design: the universal grammar, shaped/tagged/hybrid patterns, eight disciplines, stations and tiers, quality/rarity, discovery, recipe-book states, bulk/queue/automation, Phase 1 for `0.0.10.3`, and the proposed Phase 2-7 release mapping. See [the crafting system](docs/design/crafting-system.md).
+- An engine-architecture reference mapping the source design's storage, meshing, pooled rendering, and data-oriented tables to the current code, with the remaining optimization candidates. See [the engine architecture notes](docs/dev/research/engine-architecture.md).
 
 ### Changed
 

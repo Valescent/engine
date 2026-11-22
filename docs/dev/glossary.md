@@ -89,6 +89,17 @@ something else; it does not ban the word everywhere.
 | [player save](save-format.md#player-save-vply) | The `VPLY` sidecar for position, view, inventory, hotbar, and dropped items. | Current (0.0.10.1) | world save |
 | [fixed tick](gameplay.md#frame-and-tick) | The 60 Hz gameplay step for break progress, entity physics, pickup, and despawn. Player movement is still frame-driven. | Current (0.0.10.1) | frame |
 | [starting kit](gameplay.md#starting-kit) | The single wooden pickaxe granted on a new demo run until crafting lands. | Current (0.0.10.1) | loadout |
+| [recipe grammar](../design/crafting-system.md#2-universal-recipe-grammar) | The shared `station · tier · pattern · output · cost · unlock · discipline` recipe shape. | Proposed; Phase 1 scoped | recipe format |
+| [shaped recipe](../design/crafting-system.md#3-patterns) | A recipe whose ingredient arrangement matters; the grid is trimmed and matched at any offset. | Proposed; Phase 1 scoped | pattern |
+| [tagged recipe](../design/crafting-system.md#3-patterns) | A recipe matched by an ingredient multiset and tags rather than arrangement. | Proposed; Phase 1 scoped | shapeless, when you mean the source term |
+| [item tag](../design/crafting-system.md#5-materials-tags-and-quality) | A label such as `wood`, `planks`, `stone`, or `fuel` that a recipe can require instead of one item. | Proposed; Phase 1 scoped | item group |
+| [station](../design/crafting-system.md#4-disciplines-tiers-and-stations) | A physical crafting surface; Phase 1 uses the inventory 2x2 grid and the placed workbench. | Proposed; Phase 1 scoped | bench |
+| [discipline](../design/crafting-system.md#4-disciplines-tiers-and-stations) | A crafting domain such as Construction, Smithing, or Woodworking. Phase 1 stores it as metadata only. | Proposed; Phase 4 | profession |
+| [crafting tier](../design/crafting-system.md#4-disciplines-tiers-and-stations) | The T1-T5 station/material level; Phase 1 uses T1 only. | Proposed; Phase 1 scoped | level |
+| [quality](../design/crafting-system.md#5-materials-tags-and-quality) | A 1-100 per-item-instance roll influenced by materials, station, discipline, and catalysts. | Proposed; Phase 2 | durability |
+| [recipe book](../design/crafting-system.md#6-discovery-and-the-recipe-book) | The known/glimpsed/unknown recipe view. Phase 1 is known-only. | Proposed; Phase 1 scoped | wiki |
+| [salvage](../design/crafting-system.md#10-phase-1-for-00103) | Breaking a crafted item into a reduced set of base materials. | Proposed; Phase 1 scoped | recycle |
+| [item instance](../design/crafting-system.md#5-materials-tags-and-quality) | The future side-table record for durability, quality, rarity, and affixes on gear. | Proposed; Phase 2 | item, when you mean an instance |
 | [texture array](../decisions/0007-texture-array-for-block-textures.md) | GPU `texture_2d_array` with one layer per block tile, used instead of a flat atlas. | Current (v0.0.4) | atlas |
 | [tile](textures.md) | One 16x16 RGBA8 block texture stored in a texture-array layer. | Current (v0.0.4) | atlas tile |
 | [texture pack](textures.md) | External set of block tiles; deferred, and must preserve layer indices when introduced. | Deferred | asset pack |

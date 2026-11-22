@@ -159,6 +159,17 @@ the v0.0.4 click-to-break behaviour until the demo becomes the default.
 - Hovering a slot shows its name, kind, count, and durability.
 - If the inventory is full, a held stack keeps the screen open rather than being destroyed.
 
+## Crafting (0.0.10.3, planned)
+
+- The inventory screen gains a 2x2 crafting grid and output slot.
+- Right-click a placed `core:workbench` opens the 3x3 workbench screen instead of placing a block.
+- Click the output to craft one; shift-click to craft as many as the grid and inventory allow.
+- The known-recipe book is a panel with search and one-click craft; there is no separate recipe-book
+  key yet.
+- `E`/`Escape`/the close button close the station and return the grid and cursor to the inventory.
+- Quality, rarity, disciplines, queues, and automation are not bound because they are not in
+  Phase 1.
+
 ### Saving
 
 - `Ctrl+S` flushes the terrain journal and writes `world/terrain-demo/player.dat` without stopping

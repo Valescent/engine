@@ -207,7 +207,7 @@ primitives produces no UI draws, and the headless path builds no `UiFrame` at al
 
 ## Current limitations
 
-- No crafting, pause, death, or settings screen.
+- No crafting, pause, death, or settings screen yet. Crafting Phase 1 is scoped for `0.0.10.3`.
 - No container-to-container transfer beyond the hotbar/main quick move.
 - No gamepad navigation or accessibility tree.
 - No UI scale control; egui follows the window scale factor.
@@ -218,9 +218,12 @@ primitives produces no UI draws, and the headless path builds no `UiFrame` at al
 
 ## Next
 
-The next slice is crafting in `0.0.10.3`:
+The next slice is crafting Phase 1 in `0.0.10.3`:
 
-- A data-driven recipe table with shaped and shapeless recipes.
-- A 2x2 grid in the inventory and a 3x3 workbench screen.
-- A recipe book, search, and one-click craft.
-- Tool durability repair and the wood-to-stone progression chain.
+- The universal recipe grammar: station, tier, pattern, output, cost, unlock, and discipline.
+- Shaped and tagged recipes with a small `wood`/`planks`/`stone`/`fuel` tag table.
+- A 2x2 grid in the inventory and a 3x3 placed-workbench screen.
+- A known-recipe book with search, craftable/missing state, ingredients, and one-click craft.
+- A static salvage table and the wood-to-stone progression chain.
+
+See [the crafting system](../design/crafting-system.md) for the full design and Phase 2-7 mapping.

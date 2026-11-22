@@ -39,6 +39,7 @@
 # Design
 
 - [Lighting pipeline](design/lighting-pipeline.md)
+- [Crafting system](design/crafting-system.md)
 - [Terrain pipeline](design/terrain-pipeline.md)
 - [Terrain interview notes](design/terrain-interview.md)
 - [Terrain build plan](design/terrain-build-plan.md)
@@ -86,6 +87,7 @@
   - [Scheduling and streaming](dev/research/scheduling.md)
   - [World generation](dev/research/worldgen.md)
   - [Simulation and tooling](dev/research/simulation-and-tooling.md)
+  - [Engine architecture notes](dev/research/engine-architecture.md)
 
 # Decisions
 

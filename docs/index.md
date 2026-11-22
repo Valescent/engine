@@ -50,6 +50,8 @@ This is **pre-alpha**. The current world is a walkable, editable, procedurally g
 ## Reference
 
 - [Architecture overview](dev/architecture.md) — module ownership and the frame flow.
+- [Crafting system](design/crafting-system.md) — recipe grammar, phases, and the 0.0.10.3 slice.
+- [Engine architecture notes](dev/research/engine-architecture.md) — the source optimization map.
 - [Coordinates](dev/coordinates.md) — axes, units, and voxel addresses.
 - [Controls](dev/controls.md) - current bindings and the planned ones.
 - [FAQ and troubleshooting](faq.md) - common questions and a symptom-first index.
