@@ -235,6 +235,7 @@ impl App {
         }
 
         let chunk_directory = save_directory(self.stress);
+        let generated = !finished.generations.is_empty();
         for generation in finished.generations {
             self.stats.generated_columns += 1;
             self.stats.generation_ms += generation.elapsed.as_secs_f64() * 1000.0;
@@ -255,6 +256,12 @@ impl App {
             if loaded && let Some(streaming) = &mut self.streaming {
                 streaming.mark_loaded(generation.column);
             }
+        }
+        if generated {
+            // A static player never crosses a column, so the player-chunk hook
+            // in `request_levels` cannot wake deferred light. Newly arrived
+            // columns are exactly when a deferred 3x3 neighbourhood can settle.
+            self.admit_deferred_light();
         }
 
         let Some(renderer) = &mut self.renderer else {
