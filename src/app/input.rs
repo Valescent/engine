@@ -10,7 +10,6 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::CursorGrabMode;
 
 use crate::block::Block;
-use crate::content;
 use crate::player::Player;
 use crate::raycast::{RaycastHit, raycast, raycast_where};
 use crate::save;
@@ -25,7 +24,7 @@ fn can_place(world: &World, player: &Player, position: IVec3) -> bool {
     !world.is_solid(position) && !player.aabb().intersects_block(position)
 }
 
-fn place_position(hit: RaycastHit) -> Option<IVec3> {
+pub(super) fn place_position(hit: RaycastHit) -> Option<IVec3> {
     Some(IVec3::new(
         hit.block.x.checked_add(hit.normal.x)?,
         hit.block.y.checked_add(hit.normal.y)?,
@@ -40,24 +39,6 @@ fn repair_action(code: KeyCode) -> Option<save::RepairAction> {
         KeyCode::KeyQ => Some(save::RepairAction::Quarantine),
         KeyCode::KeyS => Some(save::RepairAction::Salvage),
         _ => None,
-    }
-}
-
-/// The stable content name of a hotbar block (`A5.1`).
-///
-/// The hotbar still selects legacy [`Block`] values; the new terrain only knows
-/// names, so the mapping lives here.
-fn legacy_block_name(block: Block) -> &'static str {
-    match block {
-        Block::Air => "core:air",
-        Block::Stone => "core:stone",
-        Block::Dirt => "core:dirt",
-        Block::Grass => "core:grass",
-        Block::Wood => "core:wood",
-        Block::Leaves => "core:leaves",
-        Block::Lamp => "core:lamp",
-        Block::Water => "core:water",
-        Block::Sand => "core:sand",
     }
 }
 
@@ -83,12 +64,14 @@ impl App {
                     return;
                 }
                 if code == KeyCode::KeyS && self.modifiers.control_key() {
-                    self.save_world();
+                    self.save_world(false);
+                    self.save_game();
                 } else if code == KeyCode::Space {
                     self.jump_requested = true;
                     // Held while flying: `Space` ascends continuously.
                     self.pressed.insert(code);
                 } else if code == KeyCode::Escape {
+                    self.end_break();
                     self.release_cursor();
                 } else if code == KeyCode::KeyV {
                     self.toggle_vsync();
@@ -106,9 +89,14 @@ impl App {
                     if let Some(window) = &self.window {
                         window.request_redraw();
                     }
-                } else if let Some(block) = hotbar_block(code) {
-                    self.selected_block = block;
-                    debug!(?block, "selected block");
+                } else if let Some(slot) = hotbar_slot(code) {
+                    if self.demo.is_some() {
+                        self.game.inventory.select(slot);
+                        debug!(slot, "selected hotbar slot");
+                    } else if let Some(block) = Block::from_hotbar(slot + 1) {
+                        self.selected_block = block;
+                        debug!(?block, "selected block");
+                    }
                 } else if is_movement_key(code) {
                     self.pressed.insert(code);
                 }
@@ -140,6 +128,8 @@ impl App {
     }
 
     pub(super) fn release_cursor(&mut self) {
+        self.break_held = false;
+        self.game.cancel_break();
         if self.mouse_captured {
             debug!("cursor released");
         }
@@ -194,7 +184,6 @@ impl App {
 
     pub(super) fn break_block(&mut self) {
         if self.demo.is_some() {
-            self.demo_edit(true);
             return;
         }
         let Some(hit) = self.target_hit() else {
@@ -207,7 +196,7 @@ impl App {
 
     pub(super) fn place_block(&mut self) {
         if self.demo.is_some() {
-            self.demo_edit(false);
+            self.place_demo_block();
             return;
         }
         let Some(hit) = self.target_hit() else {
@@ -236,36 +225,6 @@ impl App {
             self.upload_demo();
         }
     }
-
-    /// Applies one break or place to the demo patch.
-    ///
-    /// The demo owns the `y = 0` rule, the empty-cell rule, the save queue, and
-    /// the rebuild; the app resolves the target and the selected block name.
-    fn demo_edit(&mut self, break_it: bool) {
-        let Some(hit) = self.target_hit() else {
-            return;
-        };
-        let (cell, id) = if break_it {
-            let Some(demo) = &self.demo else {
-                return;
-            };
-            (hit.block, demo.air())
-        } else {
-            let Some(cell) = place_position(hit) else {
-                return;
-            };
-            if self.player.aabb().intersects_block(cell) {
-                return;
-            }
-            let Some(id) = content::v1_default().id(legacy_block_name(self.selected_block)) else {
-                return;
-            };
-            (cell, id)
-        };
-        if let Some(demo) = &mut self.demo {
-            demo.edit(cell, id);
-        }
-    }
 }
 
 pub(super) fn axis(positive: bool, negative: bool) -> f32 {
@@ -283,16 +242,19 @@ fn is_movement_key(code: KeyCode) -> bool {
     )
 }
 
-fn hotbar_block(code: KeyCode) -> Option<Block> {
-    let slot = match code {
-        KeyCode::Digit1 => 1,
-        KeyCode::Digit2 => 2,
-        KeyCode::Digit3 => 3,
-        KeyCode::Digit4 => 4,
-        KeyCode::Digit5 => 5,
-        _ => return None,
-    };
-    Block::from_hotbar(slot)
+fn hotbar_slot(code: KeyCode) -> Option<usize> {
+    match code {
+        KeyCode::Digit1 => Some(0),
+        KeyCode::Digit2 => Some(1),
+        KeyCode::Digit3 => Some(2),
+        KeyCode::Digit4 => Some(3),
+        KeyCode::Digit5 => Some(4),
+        KeyCode::Digit6 => Some(5),
+        KeyCode::Digit7 => Some(6),
+        KeyCode::Digit8 => Some(7),
+        KeyCode::Digit9 => Some(8),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

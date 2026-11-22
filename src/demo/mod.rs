@@ -335,6 +335,17 @@ impl DemoRuntime {
         self.patch.air
     }
 
+    /// Queues a journal flush without stopping the save worker.
+    ///
+    /// Section writes already queued are processed in order before the flush.
+    pub(crate) fn flush(&mut self) {
+        if let Some(save) = &self.save_worker
+            && let Err(error) = save.flush()
+        {
+            error!(%error, "failed to flush the terrain journal");
+        }
+    }
+
     /// Flushes the save worker. Closing the window and `Ctrl+S` both call it.
     pub(crate) fn save(&mut self) {
         if let Some(save) = self.save_worker.take() {
@@ -408,6 +419,11 @@ impl DemoRuntime {
     }
 
     /// Whether a cell is solid for raycasts and collision.
+    /// The block id at a cell, or `None` when the column is not resident.
+    pub(crate) fn block_at(&self, cell: IVec3) -> Option<section::BlockId> {
+        self.patch.block_at(cell)
+    }
+
     pub(crate) fn is_solid(&self, cell: IVec3) -> bool {
         self.patch.is_solid(cell)
     }
