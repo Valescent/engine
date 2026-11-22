@@ -40,9 +40,9 @@ typos
 mdbook build
 ```
 
-`size-budgets.sh` reports files over 1,000 and 600 lines as warnings and always exits 0; the
-self-test checks its annotations and counts against fixed fixtures. See
-[CI](ci.md#size-budgets).
+`size-budgets.sh` fails when a counted Rust file exceeds 1,000 lines and reports the 600-line
+advisory tier without failing; the self-test checks its annotations and counts against fixed
+fixtures. See [CI](ci.md#size-budgets).
 
 CI also runs dependency licence and advisory checks, commit message checks, and the documentation build. The `pool_sim` benchmark is not part of CI. `--no-default-features` is required in CI because `tracy` is a default feature that builds a C++ client; use `cargo test --locked` locally to test the profiled build.
 
@@ -62,9 +62,11 @@ CI also runs dependency licence and advisory checks, commit message checks, and 
 
 ## Current coverage
 
-The headless suite covers **701 library tests** across `engine` and `terrain-core` (2 ignored),
-**3** `light_preview`, and **30** `terrain_gen` integration tests. The terrain integration test
-and its goldens live under `crates/terrain-core/tests/`; `light_preview` stays with `engine`.
+The headless suite covers **880 library tests** across `engine` and `terrain-core` (469 engine +
+411 terrain-core, 7 ignored), **1** `facade`, **3** `light_preview`, **4** `blend`, **30**
+`terrain_gen`, and **3** `visibility` integration tests. The terrain integration test and its
+goldens live under `crates/terrain-core/tests/`; `light_preview`, `blend`, and `visibility` stay
+with `engine`.
 
 - Camera look direction, yaw/pitch clamping, and angle wrapping.
 - Mouse-look gating on capture and focus.
@@ -85,6 +87,8 @@ and its goldens live under `crates/terrain-core/tests/`; `light_preview` stays w
 - Player AABB, gravity, jumping, ground detection, axis order, collision response, and tunnelling limits.
 - DDA ray hits, misses, range limits, tie-break order, and face normals.
 - Placement rejection for occupied cells and player intersection.
+- Gameplay core: sorted item ids, every placeable block has an item, tool stacks, liquid exclusion, inventory merge/fill/overflow/split/move, tool durability breakage, hotbar clamping, break time and tier gates, wrong-class drop rejection, content drop resolution, item gravity and landing, pickup and full-inventory behaviour, despawn, spawn merging, entity record round trips, and the `VPLY` round trip, CRC, corruption, version, oversized-count, and quarantine paths.
+- The scripted gameplay loop: spawn a stone drop from the held tool, pick it up, select the hotbar slot, consume one placeable item, save, reopen, and assert the player and inventory survived.
 - Procedural texture data size and determinism.
 - `VCHK` round-trip, negative chunks, local `0`/`31`, unmodified files left in place, empty modified chunks, missing versus empty directories, and every malformed-file error path.
 
@@ -118,6 +122,24 @@ Check:
 - Left click breaks the targeted block; right click places the selected block.
 - Number keys `1`–`5` change the placed block type.
 - Placement inside the player or an occupied cell is rejected.
+
+For the 0.0.10 demo (`TERRAIN_DEMO=1`):
+
+```console
+# PowerShell
+$env:TERRAIN_DEMO = "1"
+$env:ENGINE_STRESS_SCENE = "1"   # only when world/seed is absent
+cargo run --bin engine
+```
+
+- Hold left mouse on wood: the outline fills and the block breaks after the hardness time.
+- Walk over the drop; the item count increases, and a full inventory leaves the drop on the ground.
+- `1`-`9` select hotbar slots. Slot 1 starts with the temporary wooden pickaxe.
+- Stone with the wooden pickaxe drops stone; stone by hand breaks without a drop.
+- Right click places the selected block, rejects the player's cell, and consumes one item only on a
+  successful edit.
+- `Ctrl+S`, close the window, reopen, and confirm the position, view, inventory, selected slot,
+  dropped items, and block edits survived.
 - Block faces show the expected texture layers.
 - `Ctrl+S` and closing the window save modified chunks under `world/chunks/`; reopening restores the edits over the generated terrain.
 - `V` toggles vsync without stopping rendering and logs the resulting state.

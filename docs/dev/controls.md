@@ -8,7 +8,8 @@ Keyboard and mouse bindings for the current engine and the scoped milestones. Se
 |---|---|
 | Fly-camera bindings | Historical (v0.0.2) |
 | Chunk boundary demo toggle | Historical (v0.0.3) |
-| Walking, interaction, hotbar, save | Current (v0.0.4) |
+| Walking, interaction, hotbar, save | Current (v0.0.4, legacy) |
+| Basic mechanics: items, tools, drops, player save | Current (0.0.10.1, demo) |
 | Vsync toggle | Current (v0.0.4) |
 | FPS/frame-time overlay | Current (v0.0.4) |
 | Day/night debug key (`T`) | Current (v0.0.6) |
@@ -65,7 +66,10 @@ not a gameplay mechanic, and it is not part of any milestone's Definition of Don
 - Movement uses a frame delta clamped to `100 ms`. Collision is swept along each axis, so a
   stalled frame cannot tunnel through terrain.
 
-## Interaction (current, v0.0.4)
+## Interaction (legacy, v0.0.4)
+
+The default legacy chunk world still uses this path. The v1 demo replaces it with the 0.0.10
+interaction below.
 
 - Block interaction requires the cursor to be captured.
 - The first left click after the cursor is released captures only; it does not break or place.
@@ -91,10 +95,43 @@ the v0.0.4 click-to-break behaviour until the demo becomes the default.
 | `Escape` | Close the open screen, otherwise release the cursor | Planned (`0.0.10.2`) |
 | `Ctrl+S` | Save the world and player state | Current |
 
-Breaking requires the cursor to stay captured. Releasing the mouse cancels progress. A block whose
-minimum tool tier is above the held tool breaks without a drop. The demo starts with a wooden
-pickaxe in slot 1 until crafting lands in `0.0.10.3`; there is no inventory screen yet, so pickup
-and selection are the only item interactions.
+### Breaking
+
+- The first left click after the cursor is released only captures the cursor. A later press starts
+  a break.
+- Keep holding: the outline fills from pale yellow to hot orange as progress reaches the block's
+  hardness time. Release, lose focus, press `Escape`, or change the target to cancel.
+- The ray reaches `6 m` and only targets resident, solid cells. The demo's bottom layer at `y = 0`
+  is the world floor and cannot be broken.
+- A completed break applies one durability point to the selected tool, removes the block, spawns
+  its drops at the block centre, and lets you walk over them to pick them up.
+- A drop below the block's minimum tool tier breaks without yielding an item. A wrong tool class
+  does not satisfy the tier even when the tier number is high enough.
+
+### Placing
+
+- Right click places the selected block item in the cell on the entered face.
+- The new block must not intersect the player, must be in a resident column, and must be air or a
+  replaceable block. A non-air replaceable block is cleared first.
+- `core:plant` needs a solid block directly below. A tool, material, or food item cannot be placed.
+- One item is consumed only after the world edit succeeds.
+
+### Items and hotbar
+
+- The demo starts with one wooden pickaxe in slot 1 until crafting lands in `0.0.10.3`.
+- `1`-`9` select a hotbar slot. There is no inventory screen yet, so the selected item is not drawn;
+  the choice affects the next break or place.
+- Pickup radius is `1.5 m`. A full inventory leaves the remainder on the ground.
+- There is no drop key, inventory screen, crafting, health, stamina, or audio yet.
+
+### Saving
+
+- `Ctrl+S` flushes the terrain journal and writes `world/terrain-demo/player.dat` without stopping
+  the save worker, so later edits still persist.
+- Closing the window flushes and joins the terrain worker, then writes the player file.
+- The player file stores position, view, inventory, selected hotbar slot, and dropped items. A
+  corrupt file is moved to `player.bad`; a different seed is ignored. Stress and headless runs do
+  not use it.
 
 ## Tuning
 
@@ -114,20 +151,21 @@ and selection are the only item interactions.
 |---|---|
 | Sprint | No binding. Walk speed is fixed. |
 | Crouch | No binding. |
-| Mouse-wheel hotbar | No binding. v0.0.4 selects with `1`–`5`. |
-| Pause / menu | No binding. `Escape` only releases the cursor. |
+| Mouse-wheel hotbar | No binding. `1`-`9` select in the demo; `1`-`5` in the legacy path. |
+| Inventory (`E`), drop (`Q`) | Planned for `0.0.10.2`; no binding yet. |
+| Pause / menu | No binding. `Escape` releases the cursor and cancels a break. |
 | Gamepad | No input support today; not scheduled. |
 
 ## Terrain demo
 
-Start with `TERRAIN_DEMO=1` (and `ENGINE_STRESS_SCENE=1` when `world/seed` is absent). The demo
-keeps the normal movement bindings and adds:
+Start with `TERRAIN_DEMO=1` (and `ENGINE_STRESS_SCENE=1` when `world/seed` is absent). The
+movement, interaction, hotbar, and save bindings are the 0.0.10 table above. The demo also has the
+world-repair prompt:
 
 | Input | Effect |
 |---|---|
-| Left click | Break the targeted block |
-| Right click | Place the selected block |
 | `R` / `Q` / `S` | Restore backup / quarantine / salvage the corrupt section shown in the repair prompt |
+| Left / middle / right click | The same three repair actions, split across the window width |
 | Left/middle/right click in the repair prompt | Same three repair actions |
 
 `Ctrl+S` flushes the save worker; closing the window does the same. Tile paging, LOD selection, and

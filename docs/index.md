@@ -3,9 +3,9 @@
 
 # A world, one voxel at a time.
 
-Valescent Engine is a voxel engine written in Rust. Seven milestones are shipped - a voxel scene, a fly camera, chunked meshes, a playable world, a scaled renderer, an atmospheric one, and a procedurally generated one - and every step after that is written down before it is built.
+Valescent Engine is a voxel engine written in Rust. Nine milestones are shipped through **v0.0.9 Far View** - a voxel scene, a fly camera, chunked meshes, a playable world, a scaled renderer, an atmospheric one, a procedurally generated one, packed light, and a kilometre-scale LOD hierarchy - and every step after that is written down before it is built.
 
-This is **pre-alpha**. The current world is a walkable, editable, procedurally generated set of 32×32×32 chunks with greedy meshing, three LODs, frustum culling, seed-native streaming, voxel lighting with baked AO, fog and water, worker-thread remeshing, procedural block textures, swept collision, and `VCHK` saves. The v0.0.8 scale pass is implemented and in acceptance. The spec-driven v1 terrain stack runs as an opt-in demo with LOD1, tile streaming, and its own save format ([Terrain v1 runtime](dev/terrain-v1.md)).
+This is **pre-alpha**. The current world is a walkable, editable, procedurally generated set of 32x32x32 chunks with greedy meshing, three LODs, frustum culling, seed-native streaming, voxel lighting with baked AO, fog and water, worker-thread remeshing, procedural block textures, swept collision, and `VCHK` saves. The spec-driven v1 terrain stack runs as an opt-in demo with LOD1, tile streaming, and its own save format ([Terrain v1 runtime](dev/terrain-v1.md)). The 0.0.10 release is in progress: the first checkpoint adds hold-to-break, items, inventory, drops, and a versioned player save on that demo ([Gameplay core](dev/gameplay.md)).
 
 <div class="hero-actions">
 
@@ -15,7 +15,7 @@ This is **pre-alpha**. The current world is a walkable, editable, procedurally g
 
 <div class="hero-data">
 
-`PRE-ALPHA` <span>/</span> `v0.0.7 SHIPPED` <span>/</span> `RUST + WGPU`
+`PRE-ALPHA` <span>/</span> `v0.0.9 SHIPPED` <span>/</span> `RUST + WGPU`
 
 </div>
 
@@ -73,20 +73,20 @@ This is **pre-alpha**. The current world is a walkable, editable, procedurally g
 
 ## Next on the bench
 
-<span class="version">v0.0.8</span>
+<span class="version">v0.0.10</span>
 
-### Scale
+### Basic mechanics
 
-The generated, lit world streams at distance 24 and 32. This milestone adds LOD2, four-bit packed light, direct light snapshots, a frame budget for level work, 12-byte indexed vertices, back-face culling, and a headless performance gate.
+The v1 terrain demo becomes a playable loop: hold-to-break with hardness and tool tiers, item drops and pickup, an inventory and hotbar, crafting, health and stamina, and a versioned player save. The first checkpoint, items and interaction, is on `main`.
 
-[Read the v0.0.8 scope](dev/v0.0.8-scope.md) · [Read the v0.0.8 spec](specs/v0.0.8.md)
+[Read the v0.0.10 scope](dev/v0.0.10-scope.md) · [Read the gameplay core](dev/gameplay.md)
 
 </div>
 <div>
 
-> **Definition of done.** 60 FPS at `render_distance_chunks = 24` on the reference machine, resident light memory at most half of v0.0.7, no per-frame world scan for light work, and no main-thread frame above 33 ms once the first ring is ready.
+> **Definition of done.** A new player can spawn, gather wood and stone, craft a tool, place blocks, survive a fall, and reopen the run with inventory, player state, dropped items, and edits intact.
 
-The work after that is already drawn up: lighting in [v0.0.9](design/lighting-pipeline.md) and terrain in v0.0.10, with the long-range [seed-native LOD hierarchy](design/lod-hierarchy.md) behind them.
+The work after that is already drawn up: the target slice and terrain scale in [v0.0.11](dev/roadmap-0.0.10-0.0.19.md), then water, lighting, creatures, caves, environment, and fishing.
 
 </div>
 </section>
@@ -95,7 +95,7 @@ The work after that is already drawn up: lighting in [v0.0.9](design/lighting-pi
 
 ## Decisions, on the record
 
-Fourteen records explain the stack, including the alternatives that lost and the reasons they lost. They are superseded, never rewritten.
+Twenty records explain the stack, including the alternatives that lost and the reasons they lost. They are superseded, never rewritten.
 
 | ID | Decision | Status |
 |---|---|---|
@@ -113,6 +113,12 @@ Fourteen records explain the stack, including the alternatives that lost and the
 | [0012](decisions/0012-fastnoise-lite-and-opensimplex2.md) | fastnoise-lite with OpenSimplex2 | Accepted |
 | [0013](decisions/0013-player-centred-chunk-streaming.md) | Finite player-centred streaming | Accepted |
 | [0014](decisions/0014-seed-native-lod-hierarchy.md) | Seed-native multi-level LOD sections | Accepted |
+| [0015](decisions/0015-texture-references-are-presentation.md) | Per-face texture references are presentation-only | Accepted |
+| [0016](decisions/0016-block-texture-mipmap-policy.md) | Block texture mipmap and sampling policy | Accepted |
+| [0017](decisions/0017-quad-pool-and-indirect-draws.md) | Quad pool with vertex pulling and indirect draws | Accepted; implemented in v0.0.9 |
+| [0018](decisions/0018-egui-for-game-ui.md) | egui for the gameplay UI | Accepted; scoped for v0.0.10 |
+| [0019](decisions/0019-kira-for-game-audio.md) | kira with procedural placeholders for audio | Accepted; scoped for v0.0.10 |
+| [0020](decisions/0020-minimal-entity-runtime.md) | Minimal entity runtime instead of an ECS | Accepted; scoped for v0.0.10 |
 
 </section>
 
