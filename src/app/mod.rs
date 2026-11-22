@@ -3,6 +3,7 @@
 //! [`frame`]; key and mouse handling lives in [`input`].
 
 mod frame;
+mod game;
 mod hierarchy;
 mod input;
 
@@ -24,7 +25,9 @@ use winit::window::{Window, WindowId};
 use crate::block::Block;
 use crate::camera::Camera;
 use crate::config::{Config, ConfigError};
+use crate::content::ContentPack;
 use crate::demo::DemoRuntime;
+use crate::game::{GameState, ItemRegistry};
 use crate::hierarchy::{DEFAULT_DETAIL_CHUNKS, Hierarchy};
 use crate::horizon;
 use crate::mesh::Lod;
@@ -126,6 +129,16 @@ pub(crate) struct App {
     pub(crate) sky: Sky,
     pub(crate) unlit: bool,
     pub(crate) selected_block: Block,
+    /// The built-in content pack, used to resolve block names and hardness.
+    pub(crate) pack: ContentPack,
+    /// Stable item ids for the built-in pack.
+    pub(crate) items: ItemRegistry,
+    /// Inventory, break progress, drops, and the fixed tick.
+    pub(crate) game: GameState,
+    pub(crate) break_held: bool,
+    /// Whether the run restored a player save, which suppresses the demo spawn
+    /// override.
+    pub(crate) has_player_save: bool,
     pub(crate) error: Option<RunError>,
     pub(crate) pressed: HashSet<KeyCode>,
     pub(crate) mouse_captured: bool,
@@ -169,6 +182,10 @@ impl App {
             queue.mark_light_built(chunk);
         }
 
+        let pack = crate::content::v1_default();
+        let items = ItemRegistry::builtin(&pack);
+        let game = GameState::new(&items);
+
         Self {
             window: None,
             renderer: None,
@@ -210,6 +227,11 @@ impl App {
             sky: Sky::new(),
             unlit: false,
             selected_block: Block::Stone,
+            pack,
+            items,
+            game,
+            break_held: false,
+            has_player_save: false,
             error: None,
             pressed: HashSet::new(),
             mouse_captured: false,
@@ -336,9 +358,13 @@ impl App {
         }
     }
 
-    fn save_world(&mut self) {
+    fn save_world(&mut self, final_save: bool) {
         if let Some(demo) = &mut self.demo {
-            demo.shutdown();
+            if final_save {
+                demo.shutdown();
+            } else {
+                demo.flush();
+            }
         }
         let Some(directory) = &self.save_directory else {
             debug!("stress scene is not saved");
@@ -427,7 +453,8 @@ impl ApplicationHandler for App {
     ) {
         match event {
             WindowEvent::CloseRequested => {
-                self.save_world();
+                self.save_world(true);
+                self.save_game();
                 self.release_cursor();
                 event_loop.exit();
             }
@@ -465,10 +492,17 @@ impl ApplicationHandler for App {
                     return;
                 }
                 if self.mouse_captured {
-                    self.break_block();
+                    self.begin_break();
                 } else {
                     self.capture_cursor();
                 }
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Left,
+                ..
+            } => {
+                self.end_break();
             }
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,

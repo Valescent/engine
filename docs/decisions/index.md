@@ -21,6 +21,9 @@ One file per decision. Each record states the context, the decision, the alterna
 | [0015](0015-texture-references-are-presentation.md) | Per-face texture references are presentation-only | Accepted |
 | [0016](0016-block-texture-mipmap-policy.md) | Block texture mipmap and sampling policy | Accepted |
 | [0017](0017-quad-pool-and-indirect-draws.md) | Quad pool with vertex pulling and indirect draws | Accepted; implemented in v0.0.9 slice 4 |
+| [0018](0018-egui-for-game-ui.md) | egui for the gameplay UI | Accepted; scoped for v0.0.10 |
+| [0019](0019-kira-for-game-audio.md) | kira with procedural placeholders for audio | Accepted; scoped for v0.0.10 |
+| [0020](0020-minimal-entity-runtime.md) | Minimal entity runtime instead of an ECS | Accepted; scoped for v0.0.10 |
 
 ## Conventions
 

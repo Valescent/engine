@@ -16,6 +16,7 @@
 mod capture;
 mod chunk;
 mod frame;
+mod items;
 mod origin;
 mod pipeline;
 mod pool;
@@ -63,6 +64,7 @@ use self::frame::{
     create_highlight_buffer, create_overlay_buffer, device_limits, preferred_present_mode,
     timer_features,
 };
+use self::items::ItemPass;
 use self::origin::{origin_change, wave_anchor};
 use self::pipeline::{
     create_camera_bind_group_layout, create_chunk_bind_group_layout, create_highlight_pipeline,
@@ -127,8 +129,13 @@ pub(crate) struct Renderer {
     highlight_pipeline: wgpu::RenderPipeline,
     highlight_buffer: wgpu::Buffer,
     highlight_count: u32,
+    /// Break progress in `0..=1`, passed to the highlight shader through the
+    /// spare `camera_position.w` lane.
+    highlight_progress: f32,
     /// World-space highlight vertices, rebased whenever the render origin moves.
     highlight_world: Vec<HighlightVertex>,
+    /// Dropped-item placeholder cubes.
+    items: ItemPass,
     /// World block subtracted from every submitted origin this frame.
     render_origin: IVec3,
     overlay_pipeline: wgpu::RenderPipeline,
@@ -328,6 +335,7 @@ impl Renderer {
             create_highlight_pipeline(&device, &config, &camera_bind_group_layout)?;
         let (depth_texture, depth_view) = create_depth_texture(&device, &config);
         let (highlight_buffer, highlight_count) = create_highlight_buffer(&device, &[]);
+        let items = ItemPass::new(&device, &config, &camera_bind_group_layout)?;
         let overlay_pipeline = create_overlay_pipeline(&device, &config)?;
         let (overlay_buffer, overlay_buffer_size) = create_overlay_buffer(&device);
 
@@ -366,7 +374,9 @@ impl Renderer {
             highlight_pipeline,
             highlight_buffer,
             highlight_count,
+            highlight_progress: 0.0,
             highlight_world: Vec::new(),
+            items,
             render_origin: view.origin,
             overlay_pipeline,
             overlay_buffer,
@@ -418,7 +428,12 @@ impl Renderer {
         self.frame.settings[1] = view.far_plane;
         self.frame.settings[3] = view.fog_end;
         let camera_position = view.camera_position;
-        self.frame.camera_position = [camera_position.x, camera_position.y, camera_position.z, 0.0];
+        self.frame.camera_position = [
+            camera_position.x,
+            camera_position.y,
+            camera_position.z,
+            self.highlight_progress,
+        ];
         self.frame.render_origin = [view.origin.x, view.origin.y, view.origin.z, 0];
         self.frame.wave_anchor = wave_anchor(view.origin);
         if view.origin != self.render_origin {
@@ -481,6 +496,19 @@ impl Renderer {
         self.highlight_world.clear();
         self.highlight_world.extend_from_slice(mesh);
         self.upload_highlight();
+    }
+
+    /// Sets break progress in `0..=1` for the highlight colour.
+    pub(crate) fn set_highlight_progress(&mut self, progress: f32) {
+        self.highlight_progress = progress.clamp(0.0, 1.0);
+        self.frame.camera_position[3] = self.highlight_progress;
+        self.write_frame();
+    }
+
+    /// Replaces the dropped-item cubes for this frame.
+    pub(crate) fn set_items(&mut self, items: &[(Vec3, &str)]) {
+        self.items
+            .set_items(&self.device, &self.queue, self.render_origin, items);
     }
 
     /// Uploads the world-space highlight mesh in the frame's relative space.
@@ -909,6 +937,8 @@ impl Renderer {
                 );
             }
         }
+
+        self.items.draw(pass, &self.camera_bind_group);
 
         if self.highlight_count > 0 {
             pass.set_pipeline(&self.highlight_pipeline);

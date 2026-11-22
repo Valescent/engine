@@ -23,7 +23,16 @@ src/
 ├── app/
 │   ├── mod.rs              # App, ApplicationHandler, lifecycle, RunError
 │   ├── input.rs            # key/mouse mapping, capture, hotbar, edit actions
+│   ├── game.rs             # targets, break progress, drops, placement, saves
 │   └── frame.rs            # tick/redraw order, timing, overlay, streaming
+├── game/                   # headless gameplay: items, inventory, tools, entities, save
+│   ├── item.rs             # stable names, definitions, stacks
+│   ├── inventory.rs        # hotbar/main/offhand slots and operations
+│   ├── tools.rs            # tool classes, tiers, break rules
+│   ├── drops.rs            # content-pack drop tables
+│   ├── entities.rs         # dropped-item physics, pickup, records
+│   ├── save.rs             # VPLY player save with CRC and atomic write
+│   └── state.rs            # fixed tick, break progress, persistence
 ├── demo/
 │   ├── mod.rs              # DemoRuntime seam, frame/stats, constants, re-exports
 │   ├── patch.rs            # TerrainDemo, block access, light/mesh apply, LOD apply
@@ -41,6 +50,7 @@ src/
 │   ├── origin.rs           # absolute origin uniforms, camera-relative bookkeeping
 │   ├── pipeline.rs         # shader modules, bind group layouts, pipelines
 │   ├── terrain.rs          # packed-quad sections, quad decode, upload plan
+│   ├── items.rs            # dropped-item cube pass
 │   └── texture.rs          # procedural block texture array
 ├── camera.rs, player.rs, raycast.rs, sky.rs, overlay.rs, frustum.rs
 ├── block.rs, config.rs, headless.rs, metrics.rs
@@ -53,8 +63,10 @@ src/
 | `src/lib.rs` | Crate table of contents: crate docs, `mod` declarations, the `pub(crate)` terrain re-exports, and the public surface (`run`, `RunError`, `RendererError`, `ChunkCoord`, `SaveError`, `v0`, and the `terrain` facade). No logic. See [Public API](public-api.md). |
 | `src/startup.rs` | `run`, tracing setup, configuration and seed loading, world choice (saved, generated, or stress), the `DemoRuntime::open` hand-off, and the headless hand-off. |
 | `src/app/mod.rs` | `App` (fields and construction), the `winit` application handler and window-event dispatch, window/renderer lifecycle, `RunError`, and the module declarations. |
-| `src/app/input.rs` | Key mapping, cursor capture/release, focus and mouse-look handling, hotbar selection, movement-key helpers, repair-key mapping, and the break/place/demo-edit actions. |
+| `src/app/input.rs` | Key mapping, cursor capture/release, focus and mouse-look handling, hotbar selection, movement-key helpers, repair-key mapping, and the legacy break/place actions. |
+| `src/app/game.rs` | The v1 gameplay glue: target names and hardness, hold-to-break, block removal and drops, placement rules, pickup upload, and the player save/load paths. |
 | `src/app/frame.rs` | Per-frame work: tick and redraw order, frame delta and timing accumulation, `FrameAccumulator`, overlay text and stats, resize, mesh request/upload and column streaming, and the demo-to-renderer upload adapter. |
+| `src/game/` | The headless gameplay core: item identity and stacks, inventory and hotbar, tool classes and break rules, drop tables, item entities, the `VPLY` save, and the fixed-tick `GameState`. It names no `winit` or `wgpu` type. |
 | `src/demo/mod.rs` | `DemoRuntime`, the demo's one app-facing seam: it owns the patch, ring, save worker, repair prompt, pending rebuild, and edit queue, and exposes `open`, `tick`, `edit`, `save`, `shutdown`, `repair`, `stats`, and the read-only overlay/upload accessors. Also `DemoFrame`, `DemoStats`, shared constants, and the runtime tests. |
 | `src/demo/patch.rs` | `TerrainDemo` state, resident columns, block access and collision, light/mesh installation, LOD selection, and the light table. |
 | `src/demo/build.rs` | The incremental rebuild over a batch of edits: the 3x3 light scope, the 26-neighbour remesh, `DemoEdit`/`DemoPatch`/`DemoRebuild`, and their tests. |
@@ -86,7 +98,7 @@ src/
 | `crates/terrain-core/src/save.rs`, `crates/terrain-core/src/world_save.rs` | Section files, backup rotation, journal file, replay/trimming, `WorldSave`, save worker, repair, migration/report. See [Terrain v1 runtime](terrain-v1.md) and [Save format](save-format.md). |
 | `crates/terrain-core/src/light2.rs`, `crates/terrain-core/src/mesher2.rs`, `crates/terrain-core/src/lod.rs`, `crates/terrain-core/src/section.rs`, `src/terrain_draw.wgsl` | v1 column light, greedy mesher, coarse LOD, section storage, packed-quad shader. The shader stays with the renderer. |
 | `src/sky.rs` | Day/night cycle, sun direction, sky/ambient/sun colours, and the CPU fog formula. |
-| `src/renderer.rs`, `src/renderer/` | `renderer.rs`: `wgpu` device/surface setup, `Renderer` and its methods, re-exports, and draw submission. `renderer/chunk.rs`: legacy chunk LOD/water buffers and origin uniforms. `renderer/frame.rs`: frame uniform, camera bind group, depth texture, present mode, and stats. `renderer/origin.rs`: absolute origin uniforms and camera-relative bookkeeping. `renderer/pipeline.rs`: shader modules, bind group layouts, and pipelines. `renderer/terrain.rs`: packed-quad sections, quad decode, and the upload plan. `renderer/texture.rs`: the procedural block texture array. |
+| `src/renderer.rs`, `src/renderer/` | `renderer.rs`: `wgpu` device/surface setup, `Renderer` and its methods, re-exports, and draw submission. `renderer/chunk.rs`: legacy chunk LOD/water buffers and origin uniforms. `renderer/frame.rs`: frame uniform, camera bind group, depth texture, present mode, and stats. `renderer/origin.rs`: absolute origin uniforms and camera-relative bookkeeping. `renderer/pipeline.rs`: shader modules, bind group layouts, and pipelines. `renderer/terrain.rs`: packed-quad sections, quad decode, and the upload plan. `renderer/items.rs`: the dropped-item cube pass. `renderer/texture.rs`: the procedural block texture array. |
 | `src/quad.rs` | The 12-byte quad record and 48-byte chunk-info layout. |
 | `src/quad_renderer.rs` | Quad-pool uploads keyed by `NodeKey`, the chunk-info table, indirect arguments, visibility, and the two draws. |
 | `src/pool.rs` | Flat 64-quad pages with a coalescing free list and frames-in-flight retirement. |

@@ -120,6 +120,14 @@ impl Camera {
         self.yaw
     }
 
+    pub(crate) fn pitch(&self) -> f32 {
+        self.pitch
+    }
+
+    pub(crate) fn set_pitch(&mut self, pitch: f32) {
+        self.pitch = pitch.clamp(-MAX_PITCH_RADIANS, MAX_PITCH_RADIANS);
+    }
+
     pub(crate) fn set_yaw(&mut self, yaw: f32) {
         self.yaw = wrap_angle(yaw);
     }

@@ -344,7 +344,7 @@ impl App {
             .as_mut()
             .map(|demo| demo.tick(Instant::now(), player_column, focused))
             .unwrap_or_default();
-        if let Some(spawn) = frame.spawn {
+        if let Some(spawn) = frame.spawn.filter(|_| !self.has_player_save) {
             self.set_spawn(spawn);
             info!(?spawn, "standing on the centre terrain column");
         }
@@ -382,13 +382,19 @@ impl App {
         }
         profiling::scope!("highlight");
         let hit = self.target_hit().map(|hit| hit.block);
-        if self.highlighted_block == hit {
-            return;
+        if self.highlighted_block != hit {
+            self.highlighted_block = hit;
+            let mesh = hit.map_or_else(Vec::new, build_highlight_mesh);
+            if let Some(renderer) = &mut self.renderer {
+                renderer.set_highlight(&mesh);
+            }
         }
-        self.highlighted_block = hit;
-        let mesh = hit.map_or_else(Vec::new, build_highlight_mesh);
+        let progress = self
+            .game
+            .break_fraction()
+            .map_or(0.0, |(_, fraction)| fraction);
         if let Some(renderer) = &mut self.renderer {
-            renderer.set_highlight(&mesh);
+            renderer.set_highlight_progress(progress);
         }
     }
 
@@ -462,9 +468,11 @@ impl App {
         if self.focused {
             let delta_seconds = elapsed.min(MAX_FRAME_DELTA).as_secs_f32();
             self.step_player(delta_seconds);
+            self.tick_game(delta_seconds);
             self.sky.advance(delta_seconds);
             self.camera.set_position(self.player.eye_position());
             self.update_highlight();
+            self.upload_items();
         }
 
         let slow0 = Instant::now();

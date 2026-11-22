@@ -13,7 +13,7 @@ Milestones move from **planned** to **in progress** to **shipped**. Each one nam
 | 0.0.7   | Advanced Horizons              | Shipped     |
 | 0.0.8   | Scale                          | In progress |
 | 0.0.9   | Far View                       | Shipped     |
-| 0.0.10  | Basic mechanics                | Planned     |
+| 0.0.10  | Basic mechanics                | In progress |
 | 0.0.11  | Target slice and terrain scale | Planned     |
 | 0.0.12  | Terrain and vegetation         | Planned     |
 | 0.0.13  | Water and ponds                | Planned     |
@@ -352,6 +352,51 @@ manual walk-through was replaced by captures and automated tests, so it is not c
 - Hi-Z, GPU traversal, and the voxel visibility graph
 - Shadows, sub-voxels, and console backends
 - Save-format changes
+
+## v0.0.10: Basic mechanics
+
+**Status:** In progress - checkpoint `0.0.10.1` is the first implementation slice.
+
+**Goal:** Turn the v1 terrain demo into a complete first playable loop: break, collect, craft, place, survive, and save.
+
+**Summary:** Terrain becomes a game. Blocks take time and the right tool, drops become items, items live in an inventory, recipes turn them into tools, and the player and the run persist.
+
+See [v0.0.10 scope](dev/v0.0.10-scope.md) for the deliverables and acceptance criteria.
+
+### Milestones
+
+#### 1. Interaction and items (`0.0.10.1`)
+- [x] Hold-to-break with block hardness, tool classes, tier multipliers, and a minimum-tier rule
+- [x] Stable item names, stacks, durability, inventory, hotbar, and offhand
+- [x] Data-driven block drops and item entities with gravity, pickup, merging, and despawn
+- [x] Placement rules for occupied cells, the player box, support, and replaceable blocks
+- [x] Versioned player save for position, view, inventory, hotbar, and dropped items
+
+#### 2. UI and crafting (`0.0.10.2`, `0.0.10.3`)
+- [ ] egui HUD, inventory, crafting, pause, and death screens
+- [ ] Shaped and shapeless recipes, 2x2 and 3x3 surfaces, recipe book
+- [ ] Tool durability and the wood-to-stone progression chain
+
+#### 3. Survival and presentation (`0.0.10.4`, `0.0.10.5`)
+- [ ] Health, stamina, fall damage, drowning hooks, death, and respawn
+- [ ] kira audio, placeholder sounds, settings, and keybinds
+
+#### 4. Persistence and acceptance (`0.0.10.6`)
+- [ ] Save migrations and corruption tests
+- [ ] Scripted gather-craft-place-damage-respawn-save run
+- [ ] Manual acceptance, docs, changelog, version bump, and release PR
+
+### Definition of Done
+- A new player can spawn, gather wood and stone, craft a tool, place blocks, and survive a fall.
+- Breaking respects hardness and tool tier; placement rejects occupied or unsupported cells.
+- Inventory, hotbar, crafting, health, stamina, and respawn work without the debug overlay.
+- The run survives quit and reopen with inventory, player state, dropped items, and edits intact.
+- UI, audio, fixed-tick state, and the player save format are documented.
+
+### Non-Goals
+- The hero scene, the final voxel scale, and production vegetation (`0.0.11`, `0.0.12`)
+- Water bodies, swimming, and water life (`0.0.13`)
+- Shadows, GI, clouds, creatures, caves, temperature, tides, and fishing (`0.0.14`-`0.0.19`)
 
 ## Post-0.0.9: the road to 1.0
 

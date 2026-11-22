@@ -222,6 +222,29 @@ A torn tail is truncated at the last complete record. On resume, a section whose
 `new_crc` is skipped; one whose CRC equals `old_crc` is still pending. The journal is deleted only
 after the header's `migration_state` is cleared.
 
+## Player save (VPLY)
+
+The player save is a sidecar to the terrain store, not a section record. `TERRAIN_DEMO=1` writes
+`world/terrain-demo/player.dat`; the legacy world writes `world/player.dat`.
+
+| Offset | Width | Field |
+|---|---|---|
+| `0..4` | 4 | magic `"VPLY"` |
+| `4..6` | 2 | `format_version: u16` (currently `1`) |
+| `6..8` | 2 | reserved, zero |
+| `8..16` | 8 | `seed: u64` |
+| `16..20` | 4 | `crc32` over the payload |
+| `20..` | n | payload |
+
+The payload is little-endian and starts with the player position (`f32 x 3`), view yaw and pitch
+(`f32 x 2`), the selected hotbar slot (`u8`), and a slot count (`u16`). Each slot is a presence byte,
+then the stable item name (length-prefixed UTF-8), count (`u16`), and durability (`u16`). A second
+count lists dropped item entities with the same item fields plus position, velocity, and age.
+
+Writes go to a temporary file and rename. A file with a bad magic, an unknown version, or a failing
+CRC is moved aside with a `.bad` suffix and the run starts fresh. The seed is checked on load; a
+mismatch is treated as a different world and the player file is ignored.
+
 ## Implementation status
 
 The format above is complete; this table is about code, not design. No open format questions remain.
@@ -249,3 +272,9 @@ generation and over a saved section, prefix trimming, the three `world-repair` o
 header upgrading to version 2, migration records/resume, section canonicalisation, and a demo edit
 round-tripping through the journal and a section file. Corruption fuzzing covers section records,
 headers, and journal truncation at every byte. Migration reports and a repeated crash/save/reopen loop are covered; migration fixtures for older record formats are not.
+
+The `VPLY` player sidecar is implemented in `src/game/save.rs`: magic, version, seed, CRC32,
+little-endian payload, write-temp and rename, and quarantine on a bad magic, version, or checksum.
+Tests cover a full round trip, a corrupt payload, a bad magic, an unknown version, the file-system
+path, and a seed mismatch. The inventory slot records are covered by the scripted gather, place,
+save, and reopen test in `src/game/state.rs`.

@@ -72,6 +72,9 @@ pub fn run() -> Result<(), RunError> {
     app.config = config;
     app.streaming = setup.streaming;
     app.seed = setup.seed;
+    if headless::options().is_none() {
+        app.load_game();
+    }
     app.detail_chunks = detail_chunks;
     app.hierarchy = hierarchy && app.demo.is_none();
     if let Some(directory) = app.save_directory.clone() {

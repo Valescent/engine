@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- The 0.0.10 gameplay foundation: stable item names, stacks, an inventory and hotbar, tool classes and tiers, hardness-based breaking, block drops, item entities, and a versioned `VPLY` player save. The v1 terrain demo (`TERRAIN_DEMO=1`) uses hold-to-break, pickup, and inventory-backed placement; the legacy chunk world keeps the v0.0.4 click path as a fallback.
+
+### Changed
+
+- The 0.0.10 scope page and ADR-0018 (egui UI), ADR-0019 (kira audio), and ADR-0020 (minimal entity runtime) record the decisions for the rest of the release.
+
 ## [0.0.9] - 2026-11-21
 
 ### Added

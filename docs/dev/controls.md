@@ -76,6 +76,26 @@ not a gameplay mechanic, and it is not part of any milestone's Definition of Don
 - Placement is rejected when the cell is occupied or the new block would intersect the player.
 - There is no pause menu. `Escape` still only releases the cursor.
 
+## Interaction (0.0.10, in progress)
+
+The v1 terrain demo (`TERRAIN_DEMO=1`) uses the new interaction path. The legacy chunk world keeps
+the v0.0.4 click-to-break behaviour until the demo becomes the default.
+
+| Input | Effect | Status |
+|---|---|---|
+| Hold left mouse | Break the targeted block after its hardness time | Current (demo) |
+| Right mouse | Place the selected item in the adjacent cell | Current (demo) |
+| `1`-`9` | Select a hotbar slot | Current (demo) |
+| `E` | Open or close the inventory | Planned (`0.0.10.2`) |
+| `Q` | Drop one item from the selected slot | Planned (`0.0.10.2`) |
+| `Escape` | Close the open screen, otherwise release the cursor | Planned (`0.0.10.2`) |
+| `Ctrl+S` | Save the world and player state | Current |
+
+Breaking requires the cursor to stay captured. Releasing the mouse cancels progress. A block whose
+minimum tool tier is above the held tool breaks without a drop. The demo starts with a wooden
+pickaxe in slot 1 until crafting lands in `0.0.10.3`; there is no inventory screen yet, so pickup
+and selection are the only item interactions.
+
 ## Tuning
 
 | Parameter | Value | Status |
