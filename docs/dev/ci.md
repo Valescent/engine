@@ -27,8 +27,9 @@ them.
 | Dependabot | `.github/dependabot.yml` | Weekly schedule | Grouped Cargo and Actions updates |
 
 `Docs` builds on pull requests but deploys only on non-pull-request events. `Release` does not
-run on pull requests. `Perf` does not run on pull requests; it runs on `main` pushes and on a
-nightly schedule (03:17 UTC).
+run on pull requests. `Perf` does not run on pull requests; it runs on code-changing `main`
+pushes and on a nightly schedule (03:17 UTC). A docs-only `main` push skips the release build and
+headless measurement.
 
 ## CI workflow
 
