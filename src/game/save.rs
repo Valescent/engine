@@ -6,6 +6,7 @@
 
 use std::fs;
 use std::io;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use glam::Vec3;
@@ -20,6 +21,9 @@ pub(crate) const MAGIC: [u8; 4] = *b"VPLY";
 /// Current player-save version.
 pub(crate) const VERSION: u16 = 1;
 const HEADER_BYTES: usize = 20;
+/// Upper bound on dropped entities in one save. A corrupt count must not
+/// trigger a huge allocation.
+const MAX_ENTITIES: usize = 4096;
 
 /// A player save failure.
 #[derive(Debug, Error)]
@@ -156,6 +160,9 @@ impl PlayerSave {
 
         let entity_count =
             usize::try_from(reader.u32()?).map_err(|_| PlayerSaveError::Malformed)?;
+        if entity_count > MAX_ENTITIES {
+            return Err(PlayerSaveError::Malformed);
+        }
         let mut entities = Vec::with_capacity(entity_count);
         for _ in 0..entity_count {
             let id = reader.u64()?;
@@ -228,16 +235,26 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), PlayerSaveError> {
         fs::create_dir_all(parent)?;
     }
     let temporary = path.with_extension("tmp");
-    fs::write(&temporary, bytes)?;
+    {
+        let mut file = fs::File::create(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+    }
     match fs::rename(&temporary, path) {
-        Ok(()) => Ok(()),
+        Ok(()) => {}
         Err(_) if path.exists() => {
             fs::remove_file(path)?;
             fs::rename(&temporary, path)?;
-            Ok(())
         }
-        Err(error) => Err(PlayerSaveError::Io(error)),
+        Err(error) => return Err(PlayerSaveError::Io(error)),
     }
+    #[cfg(unix)]
+    if let Some(parent) = path.parent()
+        && let Ok(directory) = fs::File::open(parent)
+    {
+        let _ = directory.sync_all();
+    }
+    Ok(())
 }
 
 struct Reader<'a> {
@@ -343,7 +360,7 @@ mod tests {
 
     use super::*;
     use crate::game::entities::EntityRecord;
-    use crate::game::inventory::Inventory;
+    use crate::game::inventory::{Inventory, TOTAL_SLOTS};
 
     fn registry() -> ItemRegistry {
         ItemRegistry::builtin(&content::v1_default())
@@ -429,6 +446,35 @@ mod tests {
         assert!(matches!(
             PlayerSave::decode(&bytes, &registry),
             Err(PlayerSaveError::UnsupportedVersion(9))
+        ));
+    }
+
+    #[test]
+    fn an_oversized_entity_count_is_rejected() {
+        let registry = registry();
+        let mut payload = Vec::new();
+        for value in [0.0_f32; 5] {
+            put_f32(&mut payload, value);
+        }
+        payload.push(0);
+        put_u16(
+            &mut payload,
+            u16::try_from(TOTAL_SLOTS).expect("slot count fits"),
+        );
+        payload.extend(std::iter::repeat_n(0, TOTAL_SLOTS));
+        put_u32(&mut payload, u32::MAX);
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&MAGIC);
+        put_u16(&mut bytes, VERSION);
+        put_u16(&mut bytes, 0);
+        put_u64(&mut bytes, 1);
+        put_u32(&mut bytes, crc32(&payload));
+        bytes.extend_from_slice(&payload);
+
+        assert!(matches!(
+            PlayerSave::decode(&bytes, &registry),
+            Err(PlayerSaveError::Malformed)
         ));
     }
 

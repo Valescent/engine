@@ -14,7 +14,9 @@ use crate::player::{BlockSource, GRAVITY};
 /// How long a dropped item survives before it is removed.
 pub(crate) const DESPAWN_SECONDS: f32 = 300.0;
 /// Half the item cube's edge, used by the landing probe.
-const ITEM_HALF: f32 = 0.125;
+const ITEM_HALF: f32 = 0.15;
+/// Distance within which identical drops merge on spawn.
+const MERGE_RADIUS: f32 = 0.75;
 
 /// A stable entity identifier.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -59,7 +61,48 @@ pub(crate) struct EntityStore {
 
 impl EntityStore {
     /// Spawns one item at `position` (its centre) with `velocity`.
-    pub(crate) fn spawn(&mut self, stack: ItemStack, position: Vec3, velocity: Vec3) -> EntityId {
+    ///
+    /// Identical items within [`MERGE_RADIUS`] merge first, up to their stack
+    /// limit. A partial merge leaves the remainder as a new entity.
+    pub(crate) fn spawn(
+        &mut self,
+        mut stack: ItemStack,
+        position: Vec3,
+        velocity: Vec3,
+        registry: &ItemRegistry,
+    ) -> EntityId {
+        debug_assert!(stack.count > 0, "a drop must carry at least one item");
+        let max = registry.def(stack.item).max_stack;
+        let merge_squared = MERGE_RADIUS * MERGE_RADIUS;
+        let mut merged = None;
+        for entity in &mut self.items {
+            if stack.count == 0 {
+                break;
+            }
+            if entity.stack.item != stack.item
+                || entity.stack.durability != stack.durability
+                || entity.position.distance_squared(position) > merge_squared
+            {
+                continue;
+            }
+            let room = max.saturating_sub(entity.stack.count);
+            if room == 0 {
+                continue;
+            }
+            let moved = room.min(stack.count);
+            entity.stack.count += moved;
+            stack.count -= moved;
+            merged = Some(entity.id);
+        }
+        if stack.count == 0
+            && let Some(id) = merged
+        {
+            return id;
+        }
+        self.create(stack, position, velocity)
+    }
+
+    fn create(&mut self, stack: ItemStack, position: Vec3, velocity: Vec3) -> EntityId {
         let id = EntityId(self.next_id);
         self.next_id += 1;
         let index = self.items.len();
@@ -311,6 +354,7 @@ mod tests {
             registry.stack("core:stone", 1).unwrap(),
             Vec3::new(0.5, 4.0, 0.5),
             Vec3::ZERO,
+            &registry,
         );
         let world = floor();
 
@@ -320,7 +364,7 @@ mod tests {
 
         let entity = store.iter().next().unwrap();
         assert!(
-            (entity.position.y - 1.125).abs() < 1e-3,
+            (entity.position.y - 1.15).abs() < 1e-3,
             "{:?}",
             entity.position
         );
@@ -332,7 +376,7 @@ mod tests {
         let registry = registry();
         let mut store = EntityStore::default();
         let item = registry.stack("core:stone", 5).unwrap();
-        store.spawn(item, Vec3::new(0.5, 1.0, 0.5), Vec3::ZERO);
+        store.spawn(item, Vec3::new(0.5, 1.0, 0.5), Vec3::ZERO, &registry);
         let mut inventory = Inventory::new();
 
         let picked = store.pickup(Vec3::new(0.5, 1.0, 0.5), 1.5, &mut inventory, &registry);
@@ -347,7 +391,7 @@ mod tests {
         let registry = registry();
         let item = registry.stack("core:stone", 5).unwrap();
         let mut store = EntityStore::default();
-        store.spawn(item, Vec3::new(0.5, 1.0, 0.5), Vec3::ZERO);
+        store.spawn(item, Vec3::new(0.5, 1.0, 0.5), Vec3::ZERO, &registry);
         let mut inventory = Inventory::new();
         for index in 0..super::super::inventory::TOTAL_SLOTS {
             inventory.set_slot(index, registry.stack("core:dirt", 64));
@@ -367,6 +411,7 @@ mod tests {
             registry.stack("core:stone", 1).unwrap(),
             Vec3::new(0.5, 2.0, 0.5),
             Vec3::ZERO,
+            &registry,
         );
         store.items[0].age = DESPAWN_SECONDS;
 
@@ -383,6 +428,7 @@ mod tests {
             registry.stack("core:stone", 3).unwrap(),
             Vec3::new(1.0, 2.0, 3.0),
             Vec3::new(0.5, 0.0, -0.5),
+            &registry,
         );
         let records = store.records(&registry);
         let restored = EntityStore::from_records(records, &registry);
@@ -390,5 +436,53 @@ mod tests {
         assert_eq!(restored.len(), 1);
         assert_eq!(restored.iter().next().unwrap().id, id);
         assert_eq!(restored.iter().next().unwrap().stack.count, 3);
+    }
+
+    #[test]
+    fn nearby_identical_drops_merge_up_to_the_stack_limit() {
+        let registry = registry();
+        let mut store = EntityStore::default();
+        let first = registry.stack("core:stone", 10).unwrap();
+        let second = registry.stack("core:stone", 20).unwrap();
+        let third = registry.stack("core:stone", 60).unwrap();
+
+        store.spawn(first, Vec3::new(0.5, 1.0, 0.5), Vec3::ZERO, &registry);
+        let merged = store.spawn(second, Vec3::new(0.6, 1.0, 0.5), Vec3::ZERO, &registry);
+
+        assert_eq!(store.len(), 1);
+        assert_eq!(store.iter().next().unwrap().stack.count, 30);
+        assert_eq!(store.iter().next().unwrap().id, merged);
+
+        store.spawn(third, Vec3::new(0.5, 1.0, 0.5), Vec3::ZERO, &registry);
+        assert_eq!(store.len(), 2);
+        let mut counts: Vec<u16> = store.iter().map(|entity| entity.stack.count).collect();
+        counts.sort_unstable();
+        assert_eq!(counts, vec![26, 64]);
+    }
+
+    #[test]
+    fn distant_or_different_drops_do_not_merge() {
+        let registry = registry();
+        let mut store = EntityStore::default();
+        store.spawn(
+            registry.stack("core:stone", 1).unwrap(),
+            Vec3::new(0.5, 1.0, 0.5),
+            Vec3::ZERO,
+            &registry,
+        );
+        store.spawn(
+            registry.stack("core:stone", 1).unwrap(),
+            Vec3::new(4.5, 1.0, 0.5),
+            Vec3::ZERO,
+            &registry,
+        );
+        store.spawn(
+            registry.stack("core:dirt", 1).unwrap(),
+            Vec3::new(0.5, 1.0, 0.5),
+            Vec3::ZERO,
+            &registry,
+        );
+
+        assert_eq!(store.len(), 3);
     }
 }

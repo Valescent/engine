@@ -72,7 +72,21 @@ something else; it does not ban the word everywhere.
 | [DDA](v0.0.4-scope.md) | Digital differential analyzer; grid traversal used for voxel raycasts. | Current (v0.0.4) | raymarching |
 | [targeted block](v0.0.4-scope.md) | Solid voxel hit by the view ray and outlined before interaction. | Current (v0.0.4) | selected block, when you mean the hotbar |
 | [highlight](v0.0.4-scope.md) | Wireframe cube drawn around the targeted block. | Current (v0.0.4) | selection box |
-| [hotbar](v0.0.4-scope.md) | Selected block slot; number keys `1`-`5` choose it. There is no inventory UI. | Current (v0.0.4) | inventory |
+| [hotbar](gameplay.md#inventory) | Selected item slot. The demo has nine slots selected with `1`-`9`; the legacy path has five hard-coded block slots selected with `1`-`5`. No inventory screen yet. | Current (0.0.10.1) | inventory, when you mean the selected row |
+| [item](gameplay.md#items) | A stable `namespace:name` identity with a kind, stack limit, and optional durability. | Current (0.0.10.1) | block, when you mean an inventory item |
+| [item id](gameplay.md#identity) | In-memory `u16` index derived by sorting item names at load; never saved. | Current (0.0.10.1) | UUID |
+| [stack](gameplay.md#stacks-and-durability) | An item id, count, and durability in one inventory slot or dropped entity. | Current (0.0.10.1) | item, when you mean a count |
+| [inventory](gameplay.md#inventory) | Nine hotbar slots, twenty-seven main slots, and one offhand slot with stack operations. | Current (0.0.10.1) | hotbar, when you mean all slots |
+| [tool class](gameplay.md#break-rules) | The block family a tool matches: hand, pickaxe, axe, shovel, or sword. | Current (0.0.10.1) | tool type |
+| [tool tier](gameplay.md#break-rules) | The harvest level of a tool (wood 1, stone 2, iron 3); also gates drops. | Current (0.0.10.1) | level |
+| [hardness](gameplay.md#hardness-and-time) | Content-pack resistance in seconds before the tool speed multiplier. | Current (0.0.10.1) | durability |
+| [break progress](gameplay.md#breaking) | Accumulated fixed-tick time toward a block's break duration, shown by the outline colour. | Current (0.0.10.1) | damage |
+| [drop](gameplay.md#drops) | The item stack a broken block yields; empty when the tool tier or class fails. | Current (0.0.10.1) | loot |
+| [item entity](gameplay.md#item-entities) | A dropped item with a stable id, position, velocity, and age, simulated on the fixed tick. | Current (0.0.10.1) | drop, when you mean the entity |
+| [pickup](gameplay.md#pickup-and-despawn) | Moving item entities within `1.5 m` into the inventory, leaving overflow on the ground. | Current (0.0.10.1) | collect |
+| [player save](save-format.md#player-save-vply) | The `VPLY` sidecar for position, view, inventory, hotbar, and dropped items. | Current (0.0.10.1) | world save |
+| [fixed tick](gameplay.md#frame-and-tick) | The 60 Hz gameplay step for break progress, entity physics, pickup, and despawn. Player movement is still frame-driven. | Current (0.0.10.1) | frame |
+| [starting kit](gameplay.md#starting-kit) | The single wooden pickaxe granted on a new demo run until crafting lands. | Current (0.0.10.1) | loadout |
 | [texture array](../decisions/0007-texture-array-for-block-textures.md) | GPU `texture_2d_array` with one layer per block tile, used instead of a flat atlas. | Current (v0.0.4) | atlas |
 | [tile](textures.md) | One 16x16 RGBA8 block texture stored in a texture-array layer. | Current (v0.0.4) | atlas tile |
 | [texture pack](textures.md) | External set of block tiles; deferred, and must preserve layer indices when introduced. | Deferred | asset pack |

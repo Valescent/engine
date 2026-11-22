@@ -104,7 +104,8 @@ src/
 | `src/pool.rs` | Flat 64-quad pages with a coalescing free list and frames-in-flight retirement. |
 | `src/shader.wgsl` | Chunk vertex transform, lit/fogged opaque shading, and the animated water fragment. See [Shader authoring](shaders.md). |
 | `src/quad.wgsl` | Vertex pulling, indexed quads, and the pooled opaque/water fragment shaders. |
-| `src/highlight.wgsl` | Line-list block outline. |
+| `src/highlight.wgsl` | Line-list block outline with break-progress colour. |
+| `src/items.wgsl` | Flat-coloured dropped-item cubes. |
 | `src/overlay.wgsl` | Screen-space overlay quads. |
 
 `src/v0/` groups the frozen legacy stack. `src/lib.rs` declares `mod v0;` and re-exports
@@ -130,7 +131,9 @@ submissions. These modules are private, so the public surface is unchanged.
 | `open(seed, column, view_radius)` | Open or create the saved world, replay recovered edits, start the worker pool and ring. |
 | `tick(now, player_column, focused)` | Poll the rebuild, drain ring jobs, plan the bounded generate/build/evict batch, run the coarse and upload throttles, and return a `DemoFrame`. |
 | `edit(cell, id)` | Apply one block change, queue its journal/section save, and start the coalescing rebuild. |
-| `shutdown()` | Flush the save worker on `Ctrl+S` and window close. |
+| `flush()` | Queue a terrain journal flush without stopping the save worker. `Ctrl+S` uses it. |
+| `shutdown()` | Flush and join the save worker on window close. |
+| `block_at(cell)` | The resident block id at a cell, or `None` when the column is not loaded. |
 | `repair(action, player_column)` | Apply the repair choice, reload sections, and restart the save worker. |
 | `stats()` | The once-per-second overlay counters and the ring-complete edge. |
 | `is_ready`, `is_solid`, `sections`, `air`, `repair_key`, `advance_lod` | Read-only or LOD accessors for movement, raycasts, the overlay, and the upload adapter. |
@@ -153,9 +156,19 @@ player's `BlockSource`, and the content pack.
 | `editlog.rs`, `save.rs`, `world_save.rs` | Edit journal, section store, backup/repair, migration, and save workers. |
 | `src/terrain_gen.rs` (binary `terrain-gen`) | Headless acceptance harness; goldens live in `crates/terrain-core/tests/golden/`. |
 
+### Gameplay core
+
+`src/game/` is a headless state machine: items, inventory, tools, drops, item entities, the fixed
+tick, and the `VPLY` player save. It names no `winit` or `wgpu` type. `App` holds a cached
+`ContentPack`, an `ItemRegistry`, a `GameState`, and a `break_held` flag. `src/app/game.rs` is the
+only world-aware glue: it resolves a raycast to a stable block name and hardness, drives the break
+target, applies the completed edit through `DemoRuntime::edit`, spawns drops, places items, and
+loads or saves the player file. The renderer reads only the entity list and the break fraction.
+See [Gameplay core](gameplay.md) for the item table, break rules, save layout, and edge cases.
+
 ## Ownership
 
-- `App` owns the window handle, renderer, world, player, camera, sky clock, selected block, input state, mesh queue, worker pool, hierarchy selection and uploaded-section set, horizon bins, frame timing, and one `Option<DemoRuntime>`.
+- `App` owns the window handle, renderer, world, player, camera, sky clock, selected block, input state, mesh queue, worker pool, hierarchy selection and uploaded-section set, horizon bins, frame timing, one `Option<DemoRuntime>`, the cached content pack, the item registry, and the `GameState` (inventory, item entities, break progress, and the fixed tick).
 - `DemoRuntime` owns the v1 patch, column ring and workers, save worker, repair prompt, pending rebuild, and edit queue. It returns a `DemoFrame` instead of holding the renderer.
 - `Renderer` owns the `wgpu` instance, surface, device, queue, surface configuration, chunk and highlight pipelines, camera uniform, the quad-pool renderer, the per-chunk fallback buffers and origin uniforms, the block texture array, and depth attachment.
 - `Camera` owns only look state; it does not read the clock or input devices.
@@ -170,7 +183,7 @@ The renderer holds an `Arc<Window>` and creates a `Surface<'static>` from it. Th
 ## Startup
 
 1. `main` calls `engine::run`.
-2. `startup::run` initialises tracing and reads `config.toml`. It then loads `world/seed` (creating one when the world is new) and generates the spawn column; saved chunk files are applied over the generated blocks. `ENGINE_STRESS_SCENE=1` builds the in-memory stress scene instead and skips world I/O. `TERRAIN_DEMO=1` opens or creates the v1 world, replays recovered edits, and starts the column ring.
+2. `startup::run` initialises tracing and reads `config.toml`. It then loads `world/seed` (creating one when the world is new) and generates the spawn column; saved chunk files are applied over the generated blocks. `ENGINE_STRESS_SCENE=1` builds the in-memory stress scene instead and skips world I/O. `TERRAIN_DEMO=1` opens or creates the v1 world, replays recovered edits, and starts the column ring. Once the seed and world choice are known, a windowed run loads the player sidecar; headless and stress runs skip it.
 3. `startup::run` creates the `winit` event loop and the `App` from `app.rs`.
 4. `App::resumed` creates the window and renderer.
 5. The renderer selects an adapter, requests a device and queue, configures the surface, builds the pipelines and the texture array, and starts no chunk mesh work itself.
@@ -186,8 +199,10 @@ RedrawRequested
   -> read frame delta
   -> build walking input from held keys and camera yaw
   -> player.update() with gravity, jump, and swept collision
+  -> resolve the demo break target and run the fixed gameplay tick
   -> move the camera to the player eye
-  -> raycast and update the block outline
+  -> raycast and update the block outline and break progress
+  -> upload dropped-item cubes
   -> advance the day/night cycle
   -> unload columns past the margin, then stream missing columns and mark ready ones
   -> request light and mesh work only for chunks in the level work set
@@ -213,6 +228,12 @@ through `residency::RingBudget::v1`, then runs the coarse (250 ms) and upload (1
 reports the spawn and upload through a `DemoFrame`; the app performs `set_spawn` and
 `upload_terrain_demo`. The v0 world still streams underneath, but the demo path is what draws.
 
+The demo also runs `tick_game` while focused: it resolves the target, sets the break duration,
+advances the fixed tick, applies a completed break through `DemoRuntime::edit`, spawns drops,
+picks up nearby entities, and passes the break fraction and item list to the renderer. A loaded
+player save suppresses the demo's initial spawn override, so a restored position is not moved back
+to the centre column.
+
 - Continuous redraw runs while the window is visible, including when it is unfocused, so profilers and external tools keep receiving frames. Input stays gated on focus.
 - The loop pauses only when the window is occluded.
 - Frame time is logged at debug level about once per second.
@@ -226,11 +247,18 @@ See [Controls](controls.md) for binding tables and capture rules.
 - `W`, `A`, `S`, and `D` move the player horizontally using yaw only; pitch does not affect walking.
 - `Space` requests a jump for the next frame; key repeat is ignored.
 - Mouse look is applied only while the cursor is captured and the window is focused.
-- A left click captures the cursor. Later left clicks break the targeted block; right clicks place the selected block.
-- Number keys `1`–`5` select Stone, Dirt, Grass, Wood, or Leaves.
-- `Ctrl+S` saves the world; closing the window saves before exit.
-- `Escape` releases the cursor; losing focus clears held keys and releases the cursor.
-- Breaking and placing call `World::set_block`, then invalidate the owning chunk, its 3x3x3 neighbourhood, and every loaded chunk below it. Urgent light jobs run first; each chunk is remeshed only after its new light field is accepted. The dirty count, total vertices, and enqueue time are logged.
+- A left click captures the cursor. Later left presses break in the legacy path and start a
+  hold-to-break in the demo. Right click places the selected item.
+- Number keys `1`-`9` select a demo hotbar slot; the legacy path accepts `1`-`5` for its block
+  list.
+- `Ctrl+S` saves the world and the player file. Closing the window performs a final terrain flush
+  and then writes the player file.
+- `Escape` releases the cursor and cancels a break; losing focus clears held keys, releases the
+  cursor, and cancels a break.
+- In the demo, breaking and placing go through `GameState` and `DemoRuntime::edit`, so inventory,
+  drops, and the player save stay consistent. The legacy path calls `World::set_block`, then
+  invalidates the owning chunk, its 3x3x3 neighbourhood, and every loaded chunk below it. Urgent
+  light jobs run first; each chunk is remeshed only after its new light field is accepted.
 
 ## Coordinates and data
 

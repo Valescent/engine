@@ -262,6 +262,7 @@ mod tests {
             registry.stack("core:dirt", 2).unwrap(),
             Vec3::new(1.0, 2.0, 3.0),
             Vec3::ZERO,
+            &registry,
         );
         state
             .save(&path, 42, Vec3::new(4.0, 5.0, 6.0), 0.5, -0.25, &registry)
@@ -300,7 +301,7 @@ mod tests {
     }
 
     #[test]
-    fn gather_place_save_and_reopen() {
+    fn gather_use_save_and_reopen() {
         let registry = registry();
         let pack = content::v1_default();
         let directory =
@@ -316,7 +317,7 @@ mod tests {
             .expect("a wooden pickaxe drops stone");
         state
             .entities
-            .spawn(stone, Vec3::new(0.5, 1.0, 0.5), Vec3::ZERO);
+            .spawn(stone, Vec3::new(0.5, 1.0, 0.5), Vec3::ZERO, &registry);
         let picked = state.pickup(Vec3::new(0.5, 1.0, 0.5), &registry);
         assert_eq!(picked, 1);
 
@@ -334,8 +335,8 @@ mod tests {
             registry.def(stone_id).kind,
             ItemKind::Block { .. }
         ));
-        let placed = state.inventory.remove(stone_slot, 1).unwrap();
-        assert_eq!(placed.count, 1);
+        let removed = state.inventory.remove(stone_slot, 1).unwrap();
+        assert_eq!(removed.count, 1);
         assert_eq!(state.inventory.count(stone_id), 0);
 
         state

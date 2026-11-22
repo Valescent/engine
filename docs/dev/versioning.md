@@ -22,8 +22,8 @@ out of scope; see [Out of scope](#out-of-scope).
 window title embeds the version at compile time through `CARGO_PKG_VERSION`.
 
 - Git tags are `vX.Y.Z`. The `v` prefix comes from `cog.toml`.
-- `v0.0.1` through `v0.0.7` are the current release tags. `v0.0.8` is implemented and awaiting
-  release.
+- `v0.0.1` through `v0.0.9` are the current release tags. `v0.0.10` is in progress with
+  checkpoint `0.0.10.1` on `main`.
 - Release from the script rather than tagging by hand, so the tag and manifest stay in sync.
 - The package has `publish = false`. No crates.io releases are part of the versioning scheme.
 - Version numbers in the roadmap, scope pages, and README are updated manually during release;

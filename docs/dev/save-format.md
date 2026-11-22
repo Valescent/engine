@@ -227,6 +227,13 @@ after the header's `migration_state` is cleared.
 The player save is a sidecar to the terrain store, not a section record. `TERRAIN_DEMO=1` writes
 `world/terrain-demo/player.dat`; the legacy world writes `world/player.dat`.
 
+The file is written on `Ctrl+S` and on window close. The terrain store owns block edits and its own
+journal; this file owns the player and dropped-item state. Stress scenes and headless runs skip it.
+
+### Header
+
+All integers are little-endian.
+
 | Offset | Width | Field |
 |---|---|---|
 | `0..4` | 4 | magic `"VPLY"` |
@@ -236,14 +243,82 @@ The player save is a sidecar to the terrain store, not a section record. `TERRAI
 | `16..20` | 4 | `crc32` over the payload |
 | `20..` | n | payload |
 
-The payload is little-endian and starts with the player position (`f32 x 3`), view yaw and pitch
-(`f32 x 2`), the selected hotbar slot (`u8`), and a slot count (`u16`). Each slot is a presence byte,
-then the stable item name (length-prefixed UTF-8), count (`u16`), and durability (`u16`). A second
-count lists dropped item entities with the same item fields plus position, velocity, and age.
+The CRC is the IEEE polynomial (`0xEDB8_8320`), initial value `0xFFFF_FFFF`, final inversion. The
+header itself is not covered: magic, version, and seed are parsed before the payload is verified.
 
-Writes go to a temporary file and rename. A file with a bad magic, an unknown version, or a failing
-CRC is moved aside with a `.bad` suffix and the run starts fresh. The seed is checked on load; a
-mismatch is treated as a different world and the player file is ignored.
+### Payload
+
+| Order | Width | Field |
+|---|---|---|
+| 1 | 12 | player feet position: `f32 x`, `f32 y`, `f32 z` |
+| 2 | 4 | view yaw, radians |
+| 3 | 4 | view pitch, radians |
+| 4 | 1 | selected hotbar slot (`0..8`) |
+| 5 | 2 | slot count (must be `37`) |
+| 6 | variable | 37 slot records |
+| 7 | 4 | dropped-entity count (`u32`, at most `4,096`) |
+| 8 | variable | entity records |
+
+A slot record is:
+
+| Width | Field |
+|---|---|
+| 1 | presence: `0` empty, `1` occupied |
+| 2 | item-name byte length (`u16`) |
+| n | item name, UTF-8 |
+| 2 | count (`u16`) |
+| 2 | remaining durability (`u16`) |
+
+An entity record is:
+
+| Width | Field |
+|---|---|
+| 8 | entity id (`u64`) |
+| 2 | item-name byte length (`u16`) |
+| n | item name, UTF-8 |
+| 2 | count (`u16`) |
+| 2 | remaining durability (`u16`) |
+| 12 | position: `f32 x`, `f32 y`, `f32 z` |
+| 12 | velocity: `f32 x`, `f32 y`, `f32 z` |
+| 4 | age in seconds (`f32`) |
+
+Items are stored by stable name, never by numeric id. Adding an item to the registry does not
+change the format; the decoder resolves the name against the current registry and rejects an
+unknown name as `UnknownItem`.
+
+### Validation
+
+`PlayerSave::decode` checks, in order:
+
+1. At least 20 bytes and the `VPLY` magic.
+2. Version exactly `1`; anything else is `UnsupportedVersion`.
+3. The payload CRC.
+4. A slot count of exactly `37`.
+5. Presence bytes of `0` or `1`.
+6. Every present item name resolves in the registry.
+7. Every float is finite.
+8. An entity count of at most `4,096`, checked before the vector is allocated.
+9. No trailing payload bytes.
+
+The reserved header bytes are ignored. The caller treats a seed mismatch as another world and does
+not load the file; that is not a format error.
+
+### Writer and recovery
+
+The writer creates the parent directory, writes `<stem>.tmp`, calls `sync_all` on the file, and
+renames it over `player.dat`. On Windows, where rename cannot replace an existing file, it removes
+the old file and retries. On Unix it also fsyncs the parent directory after the rename. There is no
+backup rotation or journal for this file; the atomic rename leaves either the old or the new
+complete file.
+
+If loading fails, the app moves the file aside to `player.bad` (replacing an older `.bad`) and
+starts a fresh run. It never applies a partial file.
+
+### Versioning
+
+`VERSION` is `1`. The release ships no older player format, so there is no migration function yet;
+an unknown version is rejected and quarantined. The slot count and field order are part of the
+version. A future change adds a new version and a `decode_v1` path before the current decoder.
 
 ## Implementation status
 
@@ -257,7 +332,8 @@ The format above is complete; this table is about code, not design. No open form
 | Backup rotation | Design above; implemented in `save::SectionStore::write` and `read` | — |
 | Engine wiring | `TERRAIN_DEMO=1` opens `world/terrain-demo`, layers saved sections over generation by `baseline_hash`, replays recovered journal frames newer than the header revision, saves those sections, then advances the header | Streaming/LOD world integration |
 | Migration | Header version 1 upgrades to version 2 on open; `MigrationState::InProgress`, `migration.journal` records/resume, section canonicalisation, `terrain-gen migrate --world <dir>`, and the `migration-report-<date>.json` bundle are implemented | A decoder for a genuine older section record format |
-| `world-repair` | `SectionStore::repair` implements restore-backup, quarantine, and salvage; `terrain-gen repair --world <dir> --section <cx,cz,sy> --action restore\|quarantine\|salvage` is the CLI; `TERRAIN_DEMO=1` shows an in-app prompt with `R`/`Q`/`S` or left/middle/right click and resumes saves after the choice | — |
+| `world-repair` | `SectionStore::repair` implements restore-backup, quarantine, and salvage; `terrain-gen repair --world <dir> --section <cx,cz,sy> --action restore\|quarantine\|salvage` is the CLI; `TERRAIN_DEMO=1` shows an in-app prompt with `R`/`Q`/`S` or left/middle/right click and resumes saves after the choice | - |
+| Player save (`VPLY`) | Version 1 header and payload, CRC32, file/directory fsync, atomic rename, quarantine, 4,096-entity cap | Version migration |
 
 `save::SectionStore` writes and reads section files with write-temp, fsync, verify, rotation to
 `.bak`, and a directory fsync where the platform supports one (Windows has none). Opening promotes a
@@ -274,7 +350,9 @@ round-tripping through the journal and a section file. Corruption fuzzing covers
 headers, and journal truncation at every byte. Migration reports and a repeated crash/save/reopen loop are covered; migration fixtures for older record formats are not.
 
 The `VPLY` player sidecar is implemented in `src/game/save.rs`: magic, version, seed, CRC32,
-little-endian payload, write-temp and rename, and quarantine on a bad magic, version, or checksum.
-Tests cover a full round trip, a corrupt payload, a bad magic, an unknown version, the file-system
-path, and a seed mismatch. The inventory slot records are covered by the scripted gather, place,
-save, and reopen test in `src/game/state.rs`.
+little-endian payload, file and directory fsync, write-temp and rename, and quarantine on a bad
+magic, version, checksum, malformed payload, unknown item, or oversized entity count. Tests cover
+the standard CRC check value, a full round trip, a corrupt payload, a bad magic, an unknown version,
+an oversized entity count, the file-system write/load/quarantine path, and a seed mismatch. The
+inventory slot records and dropped entities are covered by the scripted gather, consume, save, and
+reopen test in `src/game/state.rs`.

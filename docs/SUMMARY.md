@@ -52,6 +52,7 @@
 # Development
 
 - [Architecture overview](dev/architecture.md)
+- [Gameplay core](dev/gameplay.md)
 - [Terrain v1 runtime](dev/terrain-v1.md)
 - [Terrain tools](dev/terrain-tools.md)
 - [Shader authoring](dev/shaders.md)

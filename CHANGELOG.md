@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - The 0.0.10 gameplay foundation: stable item names, stacks, an inventory and hotbar, tool classes and tiers, hardness-based breaking, block drops, item entities, and a versioned `VPLY` player save. The v1 terrain demo (`TERRAIN_DEMO=1`) uses hold-to-break, pickup, and inventory-backed placement; the legacy chunk world keeps the v0.0.4 click path as a fallback.
+- A detailed [gameplay core reference](docs/dev/gameplay.md) covering item identity, inventory operations, break rules, drops, entity physics, interaction, persistence, and testing.
+- A full `VPLY` byte layout, validation order, writer policy, and versioning note in the [save format](docs/dev/save-format.md#player-save-vply).
 
 ### Changed
 
@@ -17,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A block drop now requires the matching tool class as well as the minimum tier, so a wooden axe no longer mines stone for a drop.
+- Nearby identical ground drops merge on spawn up to the stack limit, with the remainder kept as a second entity.
+- The item physics probe uses the same `0.3 m` cube as the placeholder renderer instead of a slightly smaller box.
+- The player save fsyncs the file, fsyncs the parent directory on Unix, and rejects an oversized entity count before allocating.
 - A static headless run no longer stalls at five ready columns. Newly generated columns re-admit deferred light even when the player never crosses a chunk, so the distance-12 static settle returns to 625 of 625 ready columns in about 470 frames instead of timing out after 41,000.
 
 ## [0.0.9] - 2026-11-21
