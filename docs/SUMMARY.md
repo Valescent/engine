@@ -11,6 +11,7 @@
 # Roadmap
 
 - [Roadmap](roadmap.md)
+- [0.0.10–0.0.19 plan](dev/roadmap-0.0.10-0.0.19.md)
 - [Progress](progress.md)
   - [v0.0.1 — The Foundation](dev/v0.0.1-scope.md)
   - [v0.0.2 — Camera](dev/v0.0.2-scope.md)

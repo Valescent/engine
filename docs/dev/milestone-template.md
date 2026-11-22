@@ -2,6 +2,9 @@
 
 Copy this into `docs/dev/vX.Y.Z-scope.md`, fill it in, link it from the roadmap section, and add it to `docs/SUMMARY.md`. Scope the milestone before writing code; update status and checkboxes as the work lands.
 
+A scope page may label internal review checkpoints as `0.0.x.y` (for example `0.0.10.1`); the
+release version and Git tag remain `X.Y.Z`.
+
 ## Scoping questions
 
 - What is the smallest demonstrable outcome that proves the milestone is done?

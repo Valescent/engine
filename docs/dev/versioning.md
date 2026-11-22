@@ -8,6 +8,7 @@ out of scope; see [Out of scope](#out-of-scope).
 | Semantic Versioning 2.0.0 | Current |
 | Keep a Changelog 1.1.0 | Current |
 | `0.0.x` milestone releases | Decided policy |
+| Four-part planning checkpoints | Internal only; not versions or tags |
 | Prerelease and build suffixes | Not supported |
 | Public API stability | None before 1.0 |
 | `1.0.0` target | Not set |
@@ -48,6 +49,19 @@ convention, not an automated check.
 Prerelease and build-metadata versions are not supported. `scripts/release.sh` accepts only
 `X.Y.Z`; it rejects versions such as `0.0.3-alpha`, `0.0.3-rc.1`, and `0.0.3+build`. Adding
 prerelease support requires changing the release script and its version validation.
+
+## Planning checkpoints
+
+A release plan may split one release into reviewable checkpoints labelled with four components,
+such as `0.0.10.1` and `0.0.10.2`; see the
+[0.0.10–0.0.19 roadmap](roadmap-0.0.10-0.0.19.md). These are internal planning and review markers,
+not versions.
+
+- Releases remain `MAJOR.MINOR.PATCH`; the current line stays `0.0.x`.
+- A four-part identifier is never a published version or a Git tag. Tags remain `vX.Y.Z`.
+- Checkpoints do not change `Cargo.toml`, the release script, changelog headings, or Git tags.
+- A release ships only when all of its checkpoints are complete or explicitly deferred in its
+  scope page and the roadmap.
 
 ## Tags and release commits
 

@@ -2,17 +2,27 @@
 
 Milestones move from **planned** to **in progress** to **shipped**. Each one names what it delivers, how it is verified, and what it deliberately leaves out.
 
-| Version | Name                  | Status   |
-|---------|-----------------------|----------|
-| 0.0.1   | The Foundation        | Shipped  |
-| 0.0.2   | Camera                | Shipped  |
-| 0.0.3   | Chunks and Meshes     | Shipped  |
-| 0.0.4   | Playable              | Shipped  |
-| 0.0.5   | Scale and Performance | Shipped  |
-| 0.0.6   | Atmosphere            | Shipped  |
-| 0.0.7   | Advanced Horizons     | Shipped  |
-| 0.0.8   | Scale                 | In progress |
-| 0.0.9   | Far View              | In progress |
+| Version | Name                           | Status      |
+|---------|--------------------------------|-------------|
+| 0.0.1   | The Foundation                 | Shipped     |
+| 0.0.2   | Camera                         | Shipped     |
+| 0.0.3   | Chunks and Meshes              | Shipped     |
+| 0.0.4   | Playable                       | Shipped     |
+| 0.0.5   | Scale and Performance          | Shipped     |
+| 0.0.6   | Atmosphere                     | Shipped     |
+| 0.0.7   | Advanced Horizons              | Shipped     |
+| 0.0.8   | Scale                          | In progress |
+| 0.0.9   | Far View                       | Shipped     |
+| 0.0.10  | Basic mechanics                | Planned     |
+| 0.0.11  | Target slice and terrain scale | Planned     |
+| 0.0.12  | Terrain and vegetation         | Planned     |
+| 0.0.13  | Water and ponds                | Planned     |
+| 0.0.14  | Lighting and atmosphere        | Planned     |
+| 0.0.15  | Raytraced clouds               | Planned     |
+| 0.0.16  | Creatures                      | Planned     |
+| 0.0.17  | Caves                          | Planned     |
+| 0.0.18  | Heat/cold and tides            | Planned     |
+| 0.0.19  | Fishing                        | Planned     |
 
 ## v0.0.1: The Foundation
 
@@ -283,7 +293,7 @@ See [v0.0.8 scope](dev/v0.0.8-scope.md) for the deliverables and the
 
 ## v0.0.9: Far View
 
-**Status:** In progress - implementation complete; the manual acceptance run and release remain.
+**Status:** Shipped - implementation, manual acceptance, and the v0.0.9 release are complete.
 
 **Goal:** Hold resident memory, VRAM, and frame cost roughly flat while the visible distance grows to kilometres.
 
@@ -321,9 +331,10 @@ See [v0.0.9 scope](dev/v0.0.9-scope.md) for the deliverables and acceptance crit
 - [x] 370 tests pass (ignored benchmarks run separately); fmt, clippy, doc, typos, and mdbook pass
 
 #### 5. Acceptance and release
-- [ ] Manual definition-of-done run
-- [ ] `Cargo.toml` version bump, release split, changelog, and tag
-- [ ] Pull request
+- [ ] Manual definition-of-done run — replaced by the in-engine captures and the automated edit/LOD
+      tests in the shipped release; the interactive reviewer pass remains unverified.
+- [x] `Cargo.toml` version bump, release split, changelog, and tag
+- [x] Pull request
 
 ### Definition of Done
 - 60 FPS at distance 32 with a working set at or below 350 MB and geometry VRAM at or below 40 MB
@@ -333,11 +344,27 @@ See [v0.0.9 scope](dev/v0.0.9-scope.md) for the deliverables and acceptance crit
 - Headless counts unchanged for the same world, proving storage packing is not a content change
 
 **Measured:** the distance-32 and 2 km gates are recorded above. The 8 km frame/draw gate is recorded;
-its total working set is unverified, so the 500 MB half is not claimed. The manual run, release
-decision, and version bump remain.
+its total working set is unverified, so the 500 MB half is not claimed. The release is complete; the
+manual walk-through was replaced by captures and automated tests, so it is not claimed as run.
 
 ### Non-Goals
 - The compute mesher, GPU-resident voxel and light pools, and readback-driven allocation
 - Hi-Z, GPU traversal, and the voxel visibility graph
 - Shadows, sub-voxels, and console backends
 - Save-format changes
+
+## Post-0.0.9: the road to 1.0
+
+The next ten releases stay on the `0.0.x` line. Four-part identifiers such as `0.0.10.1` are internal
+planning checkpoints, not releases or tags.
+
+- **Basic mechanics first.** 0.0.10 turns the terrain demo into a complete first playable loop: break, collect, craft, place, survive, and save.
+- **Target slice and terrain scale, then dense vegetation.** 0.0.11 fixes the hero pond look and chooses the voxel scale before simulation is built on it; 0.0.12 makes that scale production terrain with dense, data-driven vegetation.
+- **Water and ponds as the vertical slice.** 0.0.13 adds ponds and rivers with convincing water, swimming, aquatic flora, and water life.
+- **Lighting, atmosphere, and clouds.** 0.0.14 adds shadows, AO, fog, light shafts, and post-processing; 0.0.15 adds raytraced clouds, weather, and cloud shadows.
+- **Creatures, then caves.** 0.0.16 adds ambient creatures with navigation, animation, and ecology; 0.0.17 makes caves explorable with entrances, underground content, and lighting.
+- **Heat/cold and tides share one environment state.** 0.0.18 runs temperature and tides on the same clock and save block instead of duplicating updates, UI, and persistence.
+- **Fishing last.** 0.0.19 is the capstone because it needs water bodies, creatures, items, UI, and persistence in place.
+- **1.0 needs its own decision.** Reaching 0.0.19 completes the planned single-player sandbox but does not declare 1.0; API, save-format, performance, and content stability must be decided separately.
+
+See [the detailed 0.0.10-0.0.19 plan](dev/roadmap-0.0.10-0.0.19.md) for checkpoints, release gates, and open decisions.
