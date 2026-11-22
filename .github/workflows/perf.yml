@@ -3,6 +3,19 @@ name: Perf
 on:
   push:
     branches: [main]
+    # A docs-only push does not change runtime behaviour; skip the release
+    # build and headless runs until the next code push or nightly schedule.
+    paths:
+      - '**/*.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'crates/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'benches/**'
+      - '.cargo/**'
+      - '.github/workflows/perf.yml'
   # Nightly, not per-PR. The blend calibration is a measurement with thin
   # margins (pair 2-3 has 36 transects and p90 63.32 against a 64-block
   # ceiling), so a small platform-level float difference could fail an

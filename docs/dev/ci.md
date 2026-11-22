@@ -19,7 +19,7 @@ them.
 
 | Workflow | File | Triggers | Jobs |
 |---|---|---|---|
-| `CI` | `.github/workflows/ci.yml` | Push to `main`, pull request | Test matrix, dependencies, spelling, terrain gates |
+| `CI` | `.github/workflows/ci.yml` | Push to `main`, pull request | Changes, test matrix, dependencies, spelling, terrain gates |
 | `Docs` | `.github/workflows/docs.yml` | Push to `main`, pull request, manual dispatch | mdBook build, GitHub Pages deploy |
 | `Commits` | `.github/workflows/commits.yml` | Push to `main`, pull request | Conventional Commits, changelog gate |
 | `Release` | `.github/workflows/release.yml` | `v*` tag push, manual dispatch | Version bump, GitHub release |
@@ -27,14 +27,34 @@ them.
 | Dependabot | `.github/dependabot.yml` | Weekly schedule | Grouped Cargo and Actions updates |
 
 `Docs` builds on pull requests but deploys only on non-pull-request events. `Release` does not
-run on pull requests. `Perf` does not run on pull requests; it runs on `main` pushes and on a
-nightly schedule (03:17 UTC).
+run on pull requests. `Perf` does not run on pull requests; it runs on code-changing `main`
+pushes and on a nightly schedule (03:17 UTC). A docs-only `main` push skips the release build and
+headless measurement.
 
 ## CI workflow
 
-`CI` declares `contents: read` permissions, sets `CARGO_TERM_COLOR=always`, and cancels a
-superseded run in the same ref group. The `test` job uses `fail-fast: false` so every operating
-system reports a result.
+`CI` declares `contents: read` and `pull-requests: read` permissions, sets
+`CARGO_TERM_COLOR=always`, and cancels a superseded run in the same ref group. The `test` job uses
+`fail-fast: false` so every operating system reports a result.
+
+### Change filters
+
+The `changes` job runs `dorny/paths-filter@v3` and classifies the diff before any Rust work starts.
+The dependent jobs are skipped when their inputs did not change:
+
+| Output | Paths | Gates |
+|---|---|---|
+| `code` | `**/*.rs`, Cargo manifests/lock, toolchain, clippy/deny config, `crates/**`, `tests/**`, `benches/**`, `scripts/**`, `build.rs`, `.cargo/**`, workflows | Test matrix and terrain gates |
+| `cargo` | Cargo manifests/lock, `deny.toml`, `rust-toolchain.toml` | Dependencies |
+
+A docs-only pull request therefore builds and spell-checks the docs but does not compile Rust, run
+clippy, run Cargo tests, or run the terrain generator. The required check names still appear as
+skipped, which branch protection treats as successful. Changes to `.github/workflows/**` are
+counted as code so a CI edit exercises the full pipeline before it lands. If the filter job itself
+fails, the Rust jobs run anyway rather than silently skipping the gates.
+
+The `spelling` job always runs; it is cheap and covers docs and source. The `Docs` workflow also
+always runs because `Build` is a required check and mdBook catches broken `SUMMARY.md` entries.
 
 | OS | Format | Clippy | Test | Rustdoc |
 |---|---|---|---|---|
@@ -93,8 +113,9 @@ is not published.
 
 `Commits` declares `contents: read` and cancels superseded runs.
 
-- **Conventional Commits:** `cocogitto/cocogitto-action@v4` runs `check` on the PR head or the
-  pushed commit range.
+- **Conventional Commits:** `cocogitto/cocogitto-action@v4` runs `check` on the pull request's
+  `base..HEAD` range, or on the pushed `before..HEAD` range. It does not re-lint historical
+  squash commits that are already on `main`.
 - **Changelog gate:** compares the base to `HEAD`. If the range contains a `feat`, `fix`,
   `perf`, `refactor`, or `revert` commit, `CHANGELOG.md` must also change. Otherwise the job
   passes.
