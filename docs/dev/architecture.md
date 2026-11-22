@@ -34,9 +34,11 @@ src/
 │   ├── entities.rs         # dropped-item physics, pickup, records
 │   ├── save.rs             # VPLY player save with CRC and atomic write
 │   └── state.rs            # fixed tick, break progress, persistence
-├── ui/                     # egui state and HUD
-│   ├── mod.rs              # UiState, capture policy, draw entry point
-│   └── hud.rs              # crosshair, hotbar, interaction prompt
+├── ui/                     # egui state and screens
+│   ├── mod.rs              # UiState, capture policy, screen dispatch
+│   ├── hud.rs              # crosshair, hotbar, interaction prompt
+│   ├── inventory.rs        # inventory grid, drag/drop, quick move, tooltips
+│   └── item_icon.rs        # shared icon, count, and durability drawing
 ├── demo/
 │   ├── mod.rs              # DemoRuntime seam, frame/stats, constants, re-exports
 │   ├── patch.rs            # TerrainDemo, block access, light/mesh apply, LOD apply
@@ -70,10 +72,10 @@ src/
 | `src/app/mod.rs` | `App` (fields and construction), the `winit` application handler and window-event dispatch, window/renderer lifecycle, `RunError`, and the module declarations. |
 | `src/app/input.rs` | Key mapping, cursor capture/release, focus and mouse-look handling, hotbar selection, movement-key helpers, repair-key mapping, and the legacy break/place actions. |
 | `src/app/game.rs` | The v1 gameplay glue: target names and hardness, hold-to-break, block removal and drops, placement rules, pickup upload, and the player save/load paths. |
-| `src/app/ui.rs` | The egui/winit bridge: event forwarding, the UI-first capture decision, `take_egui_input`, `run_pass`, platform output, tessellation, and `UiFrame` construction. |
+| `src/app/ui.rs` | The egui/winit bridge: event forwarding, the UI-first capture decision, `take_egui_input`, `run_pass`, platform output, tessellation, `UiFrame` construction, and inventory open/close. |
 | `src/app/frame.rs` | Per-frame work: tick and redraw order, frame delta and timing accumulation, `FrameAccumulator`, overlay text and stats, resize, mesh request/upload and column streaming, and the demo-to-renderer upload adapter. |
 | `src/game/` | The headless gameplay core: item identity and stacks, inventory and hotbar, tool classes and break rules, drop tables, item entities, the `VPLY` save, and the fixed-tick `GameState`. It names no `winit` or `wgpu` type. |
-| `src/ui/` | The UI state and HUD: `UiState`, pointer/keyboard ownership, crosshair, nine-slot hotbar, item colours, counts, durability, and the interaction prompt. See [UI](ui.md). |
+| `src/ui/` | The UI state and screens: `UiState`, pointer/keyboard ownership, crosshair, nine-slot hotbar, item colours, counts, durability, interaction prompt, and the inventory grid with drag/drop, shift-click, tooltips, and keyboard focus. See [UI](ui.md). |
 | `src/demo/mod.rs` | `DemoRuntime`, the demo's one app-facing seam: it owns the patch, ring, save worker, repair prompt, pending rebuild, and edit queue, and exposes `open`, `tick`, `edit`, `save`, `shutdown`, `repair`, `stats`, and the read-only overlay/upload accessors. Also `DemoFrame`, `DemoStats`, shared constants, and the runtime tests. |
 | `src/demo/patch.rs` | `TerrainDemo` state, resident columns, block access and collision, light/mesh installation, LOD selection, and the light table. |
 | `src/demo/build.rs` | The incremental rebuild over a batch of edits: the 3x3 light scope, the 26-neighbour remesh, `DemoEdit`/`DemoPatch`/`DemoRebuild`, and their tests. |
@@ -211,7 +213,7 @@ RedrawRequested
   -> move the camera to the player eye
   -> raycast and update the block outline and break progress
   -> upload dropped-item cubes
-  -> run egui: take input, draw the HUD, tessellate, and build a UiFrame
+  -> run egui: take input, draw the HUD or inventory, tessellate, and build a UiFrame
   -> advance the day/night cycle
   -> unload columns past the margin, then stream missing columns and mark ready ones
   -> request light and mesh work only for chunks in the level work set
@@ -256,7 +258,10 @@ to the centre column.
 See [Controls](controls.md) for binding tables and capture rules.
 
 - Every window event goes to `egui_winit::State` first. `UiState::captures_pointer` and
-  `captures_keyboard` decide whether gameplay ignores it; the HUD captures nothing. See [UI](ui.md).
+  `captures_keyboard` decide whether gameplay ignores it; the HUD captures nothing and the
+  inventory captures both. See [UI](ui.md).
+- `E` opens the inventory, releases the cursor, and clears held movement keys. `E`, `Escape`, or
+  the close button closes it and recaptures the cursor. The cursor stack is returned first.
 - `W`, `A`, `S`, and `D` move the player horizontally using yaw only; pitch does not affect walking.
 - `Space` requests a jump for the next frame; key repeat is ignored.
 - Mouse look is applied only while the cursor is captured and the window is focused.

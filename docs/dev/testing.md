@@ -62,7 +62,7 @@ CI also runs dependency licence and advisory checks, commit message checks, and 
 
 ## Current coverage
 
-The headless suite covers **882 library tests** across `engine` and `terrain-core` (471 engine +
+The headless suite covers **888 library tests** across `engine` and `terrain-core` (477 engine +
 411 terrain-core, 7 ignored), **1** `facade`, **3** `light_preview`, **4** `blend`, **30**
 `terrain_gen`, and **3** `visibility` integration tests. The terrain integration test and its
 goldens live under `crates/terrain-core/tests/`; `light_preview`, `blend`, and `visibility` stay
@@ -89,7 +89,7 @@ with `engine`.
 - Placement rejection for occupied cells and player intersection.
 - Gameplay core: sorted item ids, every placeable block has an item, tool stacks, liquid exclusion, inventory merge/fill/overflow/split/move, tool durability breakage, hotbar clamping, break time and tier gates, wrong-class drop rejection, content drop resolution, item gravity and landing, pickup and full-inventory behaviour, despawn, spawn merging, entity record round trips, and the `VPLY` round trip, CRC, corruption, version, oversized-count, and quarantine paths.
 - The scripted gameplay loop: spawn a stone drop from the held tool, pick it up, select the hotbar slot, consume one placeable item, save, reopen, and assert the player and inventory survived.
-- UI: the HUD produces egui shapes headlessly with an empty inventory and a target, and the current capture policy is pinned to non-interactive.
+- UI: the HUD produces egui shapes headlessly with an empty inventory and a target, and the current capture policy is pinned to non-interactive. Inventory tests cover click pickup/place, right-click split/place-one, shift-click quick move, the drawing pass, and the two-frame `E` open/close suppression.
 - Procedural texture data size and determinism.
 - `VCHK` round-trip, negative chunks, local `0`/`31`, unmodified files left in place, empty modified chunks, missing versus empty directories, and every malformed-file error path.
 
@@ -145,6 +145,12 @@ cargo run --bin engine
   the temporary pickaxe icon and durability bar, and the hold/place prompt when a block is targeted.
 - Click and drag over the HUD; the camera must still capture and the block actions must still work,
   because the HUD is non-interactive.
+- Press `E`: the cursor appears, the HUD hides, and the inventory panel opens. Click a stack, then
+  click another slot to move it. Right-click splits or places one. Shift-click moves between the
+  hotbar and the main grid. Use the arrow keys and `Enter` on another slot. Hover a slot to read
+  its tooltip.
+- Press `E` or `Escape` to close the inventory; the cursor should recapture and the HUD return.
+  `ENGINE_UI_INVENTORY=1` opens the screen on the first frame for a repeatable capture.
 - Block faces show the expected texture layers.
 - `Ctrl+S` and closing the window save modified chunks under `world/chunks/`; reopening restores the edits over the generated terrain.
 - `V` toggles vsync without stopping rendering and logs the resulting state.

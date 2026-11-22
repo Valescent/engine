@@ -42,6 +42,7 @@ environment variables.
 | `ENGINE_DETAIL_CHUNKS` | Engine (`run`) | L0 detail radius with the hierarchy, default `16` (512 m), clamped `4..32`. |
 | `ENGINE_CAPTURE` | Renderer (`Renderer::new`) | Set to the output path, such as `capture.bmp`; writes one 24-bit BMP of the presented surface after the delay. |
 | `ENGINE_CAPTURE_DELAY` | Renderer (`Capture::new`) | Seconds before the capture, default `20`. |
+| `ENGINE_UI_INVENTORY` | Engine (`App::with_world`) | `1` opens the demo inventory on the first frame, for repeatable UI captures. The demo path only. |
 | `ENGINE_AUTO_WALK` / `ENGINE_AUTO_STRAFE` | Engine (`App::move_axes`) | Dev hooks that hold forward/strafe for repeatable moving captures. |
 | `ENGINE_YAW` | Engine (`App::with_world`) | Dev hook that sets the initial camera yaw in degrees, for repeatable viewpoint captures. |
 | `WGPU_BACKEND` | `wgpu` | Forces a backend such as `dx12`, `vulkan`, or `metal`, depending on the platform. Unset lets `wgpu` choose. The engine does not parse it. |
