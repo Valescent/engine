@@ -481,6 +481,7 @@ impl App {
             self.update_highlight();
             self.upload_items();
         }
+        let mut ui_frame = self.build_ui_frame();
 
         let slow0 = Instant::now();
         if let Some(pool) = self.mesher.clone() {
@@ -548,7 +549,7 @@ impl App {
             renderer.set_camera(&view);
             renderer.set_sky(&self.sky.sample(), self.unlit);
             renderer.set_overlay(overlay.as_deref());
-            self.stats.totals = renderer.render(&frustum, &self.horizon);
+            self.stats.totals = renderer.render(&frustum, &self.horizon, ui_frame.as_mut());
         }
         if slow_render.elapsed().as_millis() > 5 {
             debug!(

@@ -196,7 +196,7 @@ fn push_cube(vertices: &mut Vec<ItemVertex>, centre: Vec3, color: [f32; 3]) {
 }
 
 /// Placeholder colour for an item's dropped cube.
-fn item_color(name: &str) -> [f32; 3] {
+pub(crate) fn item_color(name: &str) -> [f32; 3] {
     match name {
         "core:dirt" | "core:clay" => [0.45, 0.31, 0.20],
         "core:grass" => [0.30, 0.62, 0.24],
