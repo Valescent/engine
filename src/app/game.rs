@@ -30,6 +30,9 @@ impl App {
 
     /// Restores the player save when it belongs to this seed.
     pub(crate) fn load_game(&mut self) {
+        if self.stress {
+            return;
+        }
         let path = self.game_save_path();
         let seed = self.seed.unwrap_or(0);
         match self.game.load(&path, seed, &self.items) {
@@ -53,6 +56,9 @@ impl App {
 
     /// Writes the player and dropped-item state.
     pub(super) fn save_game(&mut self) {
+        if self.stress {
+            return;
+        }
         let path = self.game_save_path();
         let seed = self.seed.unwrap_or(0);
         match self.game.save(
