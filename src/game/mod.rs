@@ -13,8 +13,8 @@ mod state;
 mod tools;
 
 pub(crate) use drops::drops_for;
-pub(crate) use inventory::{HOTBAR_SLOTS, Inventory};
-pub(crate) use item::{ItemKind, ItemRegistry};
+pub(crate) use inventory::{HOTBAR_SLOTS, Inventory, OFFHAND_SLOT, TOTAL_SLOTS};
+pub(crate) use item::{ItemKind, ItemRegistry, ItemStack};
 pub(crate) use save::quarantine;
 pub(crate) use state::GameState;
 pub(crate) use tools::break_seconds;

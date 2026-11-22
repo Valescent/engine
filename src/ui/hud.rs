@@ -1,12 +1,9 @@
 //! The non-interactive HUD: crosshair, hotbar, and interaction prompt.
 
-use egui::{
-    Align2, Color32, Context, FontId, Id, LayerId, Order, Pos2, Rect, Sense, Stroke, StrokeKind,
-    vec2,
-};
+use egui::{Align2, Color32, Context, FontId, Id, LayerId, Order, Sense, Stroke, StrokeKind, vec2};
 
-use crate::game::{HOTBAR_SLOTS, Inventory, ItemKind, ItemRegistry};
-use crate::renderer::item_color;
+use super::item_icon::draw_stack;
+use crate::game::{HOTBAR_SLOTS, Inventory, ItemRegistry};
 
 /// The data one HUD frame reads.
 #[derive(Clone, Copy)]
@@ -75,42 +72,7 @@ fn slot(ui: &mut egui::Ui, index: usize, inventory: &Inventory, registry: &ItemR
         return;
     };
 
-    let icon = Rect::from_min_max(rect.min + vec2(7.0, 7.0), rect.max - vec2(7.0, 7.0));
-    let [red, green, blue] = item_color(registry.name(stack.item));
-    painter.rect_filled(
-        icon,
-        2.0,
-        Color32::from_rgb(channel(red), channel(green), channel(blue)),
-    );
-    painter.rect_stroke(
-        icon,
-        2.0,
-        Stroke::new(1.0, Color32::from_rgba_unmultiplied(0, 0, 0, 90)),
-        StrokeKind::Inside,
-    );
-
-    if stack.count > 1 {
-        painter.text(
-            rect.right_bottom() - vec2(4.0, 2.0),
-            Align2::RIGHT_BOTTOM,
-            stack.count.to_string(),
-            FontId::proportional(13.0),
-            Color32::WHITE,
-        );
-    }
-
-    if let ItemKind::Tool {
-        durability: maximum,
-        ..
-    } = registry.def(stack.item).kind
-    {
-        let fraction = f32::from(stack.durability) / f32::from(maximum.max(1));
-        let bar = Rect::from_min_size(
-            Pos2::new(rect.left() + 4.0, rect.bottom() - 6.0),
-            vec2((rect.width() - 8.0) * fraction, 3.0),
-        );
-        painter.rect_filled(bar, 1.0, Color32::from_rgb(80, 220, 90));
-    }
+    draw_stack(painter, rect, stack, registry);
 }
 
 fn prompt(ctx: &Context, target: Option<&str>) {
@@ -133,9 +95,4 @@ fn prompt(ctx: &Context, target: Option<&str>) {
                     .size(14.0),
             );
         });
-}
-
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn channel(value: f32) -> u8 {
-    (value.clamp(0.0, 1.0) * 255.0).round() as u8
 }
