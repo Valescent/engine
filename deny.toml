@@ -14,7 +14,9 @@ allow = [
     "ISC",
     "Zlib",
     "Unicode-3.0",
-    "MPL-2.0",
+    # egui's default fonts: Ubuntu Font Licence 1.0 and SIL OFL 1.1.
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
 ]
 confidence-threshold = 0.8
 
