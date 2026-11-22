@@ -1,5 +1,7 @@
 //! Inventory slots and stack operations.
 
+use std::ops::Range;
+
 use super::item::{ItemId, ItemRegistry, ItemStack};
 
 /// Number of hotbar slots.
@@ -215,6 +217,64 @@ impl Inventory {
         }
     }
 
+    /// Moves a stack into `range`, merging into existing stacks first and then
+    /// filling empty slots. The source must be outside the destination range.
+    ///
+    /// Returns `true` when the source slot is empty afterwards.
+    pub(crate) fn quick_move(
+        &mut self,
+        index: usize,
+        range: Range<usize>,
+        registry: &ItemRegistry,
+    ) -> bool {
+        if range.contains(&index) || index >= TOTAL_SLOTS {
+            return false;
+        }
+        let Some(mut stack) = self.slots[index] else {
+            return false;
+        };
+        let max = registry.def(stack.item).max_stack;
+
+        for slot_index in range.clone() {
+            if stack.count == 0 {
+                break;
+            }
+            let Some(existing) = self.slots[slot_index].as_mut() else {
+                continue;
+            };
+            if existing.item != stack.item || existing.durability != stack.durability {
+                continue;
+            }
+            let room = max.saturating_sub(existing.count);
+            let moved = room.min(stack.count);
+            existing.count += moved;
+            stack.count -= moved;
+        }
+
+        for slot_index in range {
+            if stack.count == 0 {
+                break;
+            }
+            if self.slots[slot_index].is_some() {
+                continue;
+            }
+            let placed = max.min(stack.count);
+            self.slots[slot_index] = Some(ItemStack {
+                count: placed,
+                ..stack
+            });
+            stack.count -= placed;
+        }
+
+        if stack.count == 0 {
+            self.slots[index] = None;
+            true
+        } else {
+            self.slots[index] = Some(stack);
+            false
+        }
+    }
+
     /// Applies durability damage to a slot. Returns whether the item broke.
     pub(crate) fn damage(&mut self, index: usize, amount: u16) -> bool {
         let Some(stack) = self.slots.get_mut(index).and_then(Option::as_mut) else {
@@ -328,6 +388,33 @@ mod tests {
             inventory.slot(3).unwrap().item,
             registry.id("core:dirt").unwrap()
         );
+    }
+
+    #[test]
+    fn quick_move_merges_then_fills_the_target_range() {
+        let registry = registry();
+        let mut inventory = Inventory::new();
+        inventory.set_slot(0, registry.stack("core:stone", 70));
+        inventory.set_slot(HOTBAR_SLOTS, registry.stack("core:stone", 10));
+
+        assert!(inventory.quick_move(0, HOTBAR_SLOTS..OFFHAND_SLOT, &registry));
+
+        assert!(inventory.slot(0).is_none());
+        assert_eq!(inventory.slot(HOTBAR_SLOTS).unwrap().count, 64);
+        assert_eq!(inventory.slot(HOTBAR_SLOTS + 1).unwrap().count, 10);
+    }
+
+    #[test]
+    fn quick_move_leaves_the_remainder_when_the_range_is_full() {
+        let registry = registry();
+        let mut inventory = Inventory::new();
+        inventory.set_slot(0, registry.stack("core:stone", 10));
+        for index in HOTBAR_SLOTS..OFFHAND_SLOT {
+            inventory.set_slot(index, registry.stack("core:dirt", 64));
+        }
+
+        assert!(!inventory.quick_move(0, HOTBAR_SLOTS..OFFHAND_SLOT, &registry));
+        assert_eq!(inventory.slot(0).unwrap().count, 10);
     }
 
     #[test]

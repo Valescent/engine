@@ -11,6 +11,7 @@ Keyboard and mouse bindings for the current engine and the scoped milestones. Se
 | Walking, interaction, hotbar, save | Current (v0.0.4, legacy) |
 | Basic mechanics: items, tools, drops, player save | Current (0.0.10.1, demo) |
 | HUD: crosshair, hotbar, interaction prompt | Current (0.0.10.2, demo) |
+| Inventory screen | Current (0.0.10.2, demo) |
 | Vsync toggle | Current (v0.0.4) |
 | FPS/frame-time overlay | Current (v0.0.4) |
 | Day/night debug key (`T`) | Current (v0.0.6) |
@@ -91,9 +92,14 @@ the v0.0.4 click-to-break behaviour until the demo becomes the default.
 | Hold left mouse | Break the targeted block after its hardness time | Current (demo) |
 | Right mouse | Place the selected item in the adjacent cell | Current (demo) |
 | `1`-`9` | Select a hotbar slot | Current (demo) |
-| `E` | Open or close the inventory | Planned (`0.0.10.2`) |
-| `Q` | Drop one item from the selected slot | Planned (`0.0.10.2`) |
-| `Escape` | Close the open screen, otherwise release the cursor | Planned (`0.0.10.2`) |
+| `E` | Open or close the inventory | Current (demo) |
+| `Escape` | Close the inventory if open, otherwise release the cursor | Current (demo) |
+| Arrow keys | Move the inventory focus | Current (demo) |
+| `Enter` / `Space` | Activate the focused inventory slot | Current (demo) |
+| Left click | Pick up, place, or swap a stack while the inventory is open | Current (demo) |
+| Right click | Take half a stack, or place one item | Current (demo) |
+| Shift-click | Move a stack between the hotbar and the main grid | Current (demo) |
+| `Q` | Drop one item from the selected slot | Planned (`0.0.10.2`/`0.0.10.3`) |
 | `Ctrl+S` | Save the world and player state | Current |
 
 ### Breaking
@@ -138,6 +144,21 @@ the v0.0.4 click-to-break behaviour until the demo becomes the default.
 - The HUD is non-interactive. It does not capture clicks or keys, so the gameplay bindings above
   continue to work.
 
+## Inventory (0.0.10.2, demo)
+
+- `E` opens the inventory, releases the cursor, and clears held movement keys. The HUD is hidden.
+- `E`, `Escape`, or the `Close [E]` button closes it. The first `E` press only opens it; the next
+  press closes it. Closing returns a held stack to the inventory and recaptures the cursor.
+- Layout: three rows of nine main slots, a nine-slot hotbar row, and the offhand slot.
+- Left click picks up a whole stack, places it, merges it, or swaps it. Right click takes half a
+  stack, or places one item.
+- Shift-click moves a stack between the hotbar and the main grid.
+- Drag a stack to another slot and release to place it; release outside the grid to return it.
+- Arrow keys move the focus. `Enter` or `Space` activates the focused slot. `Shift` with activation
+  quick-moves.
+- Hovering a slot shows its name, kind, count, and durability.
+- If the inventory is full, a held stack keeps the screen open rather than being destroyed.
+
 ### Saving
 
 - `Ctrl+S` flushes the terrain journal and writes `world/terrain-demo/player.dat` without stopping
@@ -166,7 +187,7 @@ the v0.0.4 click-to-break behaviour until the demo becomes the default.
 | Sprint | No binding. Walk speed is fixed. |
 | Crouch | No binding. |
 | Mouse-wheel hotbar | No binding. `1`-`9` select in the demo; `1`-`5` in the legacy path. |
-| Inventory (`E`), drop (`Q`) | Planned for `0.0.10.2`; no binding yet. |
+| Inventory (`E`), drop (`Q`) | `E` opens the inventory. `Q` is planned; no drop binding yet. |
 | Pause / menu | No binding. `Escape` releases the cursor and cancels a break. |
 | Gamepad | No input support today; not scheduled. |
 

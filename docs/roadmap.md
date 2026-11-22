@@ -355,7 +355,7 @@ manual walk-through was replaced by captures and automated tests, so it is not c
 
 ## v0.0.10: Basic mechanics
 
-**Status:** In progress - the `0.0.10.1` gameplay core and the `0.0.10.2` HUD foundation are implemented.
+**Status:** In progress - the `0.0.10.1` gameplay core and the `0.0.10.2` UI slice (HUD and inventory) are implemented.
 
 **Goal:** Turn the v1 terrain demo into a complete first playable loop: break, collect, craft, place, survive, and save.
 
@@ -374,7 +374,8 @@ See [v0.0.10 scope](dev/v0.0.10-scope.md) for the deliverables and acceptance cr
 
 #### 2. UI and crafting (`0.0.10.2`, `0.0.10.3`)
 - [x] egui foundation, HUD, and UI-first input hook
-- [ ] Inventory, crafting, pause, and death screens
+- [x] Inventory screen with drag/drop, shift-click, tooltips, and keyboard navigation
+- [ ] Crafting, pause, and death screens
 - [ ] Shaped and shapeless recipes, 2x2 and 3x3 surfaces, recipe book
 - [ ] Tool durability and the wood-to-stone progression chain
 
@@ -393,10 +394,12 @@ pipelines with no validation errors; the static distance-12 headless run settles
 ready columns in 470 frames. The manual definition-of-done pass and the full save migration set
 remain open.
 
-**Measured after the `0.0.10.2` HUD foundation:** 471 engine library tests and 411 terrain-core
-library tests pass; a captured windowed frame shows the crosshair, nine-slot hotbar, selected
-border, temporary pickaxe icon, durability bar, and the existing FPS overlay; the HUD captures no
-pointer or keyboard input. The inventory and crafting screens are still open.
+**Measured after the `0.0.10.2` UI slice:** 477 engine library tests and 411 terrain-core library
+tests pass; captured windowed frames show the crosshair, nine-slot hotbar, selected border,
+temporary pickaxe icon, durability bar, existing FPS overlay, and the full inventory screen with
+main grid, hotbar row, offhand, close button, and dimmed world. The inventory captures pointer and
+keyboard input; the HUD does not. Headless tests cover click, right-click, shift-click, quick move,
+and the two-frame `E` close behavior.
 
 ### Definition of Done
 - A new player can spawn, gather wood and stone, craft a tool, place blocks, and survive a fall.

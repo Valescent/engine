@@ -193,6 +193,10 @@ impl App {
         let game = GameState::new(&items);
         let egui_ctx = egui::Context::default();
         egui_ctx.set_visuals(egui::Visuals::dark());
+        let mut ui = UiState::new();
+        if std::env::var("ENGINE_UI_INVENTORY").is_ok_and(|value| value == "1") {
+            ui.open_inventory(0);
+        }
 
         Self {
             window: None,
@@ -241,7 +245,7 @@ impl App {
             break_held: false,
             egui_ctx,
             egui_state: None,
-            ui: UiState::new(),
+            ui,
             has_player_save: false,
             error: None,
             pressed: HashSet::new(),

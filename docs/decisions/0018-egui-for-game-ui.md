@@ -1,7 +1,7 @@
 # Why I Chose egui for the Game UI
 
 **Document type:** Architecture Decision Record / Devlog Entry
-**Status:** Accepted; HUD foundation implemented in `0.0.10.2` (inventory and crafting screens pending)
+**Status:** Accepted; HUD and inventory screen implemented in `0.0.10.2` (crafting and settings pending)
 **Date:** 2026-11-22
 **Project:** Valescent Engine
 **Owner:** Project Owner

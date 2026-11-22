@@ -126,6 +126,7 @@ exist for the 0.0.10.2 inventory screen.
 | `take_one(slot)` | `remove(slot, 1)`. |
 | `split(slot)` | Move half (rounded down) into the first empty slot. Returns the moved stack, or `None` when the stack is smaller than two or no slot is free. |
 | `move_stack(from, to)` | Move to an empty slot, merge same-item stacks up to the limit, or swap different stacks. |
+| `quick_move(index, range)` | Merge into the destination range, then fill empty slots. Returns `true` when the source slot is empty. |
 | `damage(slot, amount)` | Subtract durability. Returns `true` when the item breaks and the slot is cleared. |
 | `count(item)` | Total count across every slot, as `u32`. |
 | `is_full()` | True only when all 37 slots are occupied. |
@@ -315,9 +316,9 @@ exists.
 
 ### Hotbar
 
-`1` through `9` select a hotbar slot. There is no inventory screen yet, so the selection is not
-drawn; the item affects the next break or place. The legacy path still uses `1` through `5` for
-its hard-coded block list.
+`1` through `9` select a hotbar slot. `E` opens the inventory screen, which shows the hotbar, main
+grid, and offhand; it is documented in [UI](ui.md#inventory). The legacy path still uses `1`
+through `5` for its hard-coded block list.
 
 ## Persistence
 
@@ -420,7 +421,7 @@ quit/reopen persistence. The full manual pass belongs to `0.0.10.6`.
 | Starting kit grants a wooden pickaxe | Crafting lands in 0.0.10.3 |
 | Ground merging happens on spawn and pickup, not continuously | The 0.0.10.2 UI needs merged ground stacks |
 | Placeholder item cubes use flat colours | The 0.0.11 art pipeline lands |
-| No inventory, crafting, health, stamina, or audio screens | `0.0.10.2`-`0.0.10.5` |
+| No crafting, health, stamina, or audio screens | `0.0.10.3`-`0.0.10.5` |
 | No autosave | `0.0.10.6` acceptance decides the cadence |
 | No hand or held-item rendering | The 0.0.11 art pass |
 

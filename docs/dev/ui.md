@@ -1,15 +1,16 @@
 # UI
 
-**Status:** HUD foundation implemented in `0.0.10.2`; the inventory, crafting, pause, death, and
-settings screens remain.
+**Status:** HUD and inventory implemented in `0.0.10.2`; the crafting, pause, death, and settings
+screens remain.
 
-**Scope:** The egui integration, input routing, the HUD, and the render pass. Gameplay state lives
-in [Gameplay core](gameplay.md); this page covers presentation and event ownership.
+**Scope:** The egui integration, input routing, the HUD, the inventory screen, and the render pass.
+Gameplay state lives in [Gameplay core](gameplay.md); this page covers presentation and event
+ownership.
 
 | Area | Status |
 |---|---|
 | HUD foundation | Current (`0.0.10.2`) |
-| Inventory screen | Planned (`0.0.10.2`) |
+| Inventory screen | Current (`0.0.10.2`) |
 | Crafting screen | Planned (`0.0.10.3`) |
 | Pause, death, settings | Planned (`0.0.10.4`-`0.0.10.5`) |
 
@@ -33,9 +34,11 @@ platform backends the engine already needs.
 
 | Path | Responsibility |
 |---|---|
-| `src/ui/mod.rs` | `UiState`, the HUD draw entry point, and the pointer/keyboard ownership queries. |
-| `src/ui/hud.rs` | Crosshair, hotbar slots, item colour, count, durability, and interaction prompt. |
-| `src/app/ui.rs` | `egui_winit` forwarding, `take_egui_input`, `run_pass`, platform output, tessellation, and `UiFrame` construction. |
+| `src/ui/mod.rs` | `UiState`, screen ownership, the HUD/inventory draw entry point, and the pointer/keyboard capture queries. |
+| `src/ui/hud.rs` | Crosshair, hotbar slots, and interaction prompt. |
+| `src/ui/inventory.rs` | The inventory panel, grid, cursor stack, drag/drop, shift-click, tooltips, keyboard navigation, and close handling. |
+| `src/ui/item_icon.rs` | Shared slot icon, stack count, and tool durability drawing. |
+| `src/app/ui.rs` | `egui_winit` forwarding, `take_egui_input`, `run_pass`, platform output, tessellation, `UiFrame` construction, and inventory open/close. |
 | `src/renderer/ui.rs` | `UiPass`, `UiFrame`, texture and buffer upload, the second color-only render pass, and texture-delta cleanup. |
 
 `egui` types appear only in these modules plus `App`'s context/state fields. `src/game/` remains
@@ -79,10 +82,14 @@ The policy is **UI first, gameplay second**:
 
 - Every window event goes to `egui_winit::State` before the engine match.
 - `UiState::captures_pointer` and `captures_keyboard` decide whether gameplay must ignore the
-  event. Both return `false` for the HUD.
-- The inventory screen will return `true` while it is open. The screen must handle `Escape` itself
-  through `egui` input, because the event is skipped before `App::handle_key`.
-- Opening a screen must release the cursor. The HUD does not change capture.
+  event. Both return `false` for the HUD and `true` while the inventory is open.
+- `E` opens the inventory from gameplay. The opening frame suppresses the same key press so the
+  screen does not close immediately.
+- While the inventory is open, `E`, `Escape`, the close button, or the screen losing a held stack
+  to a full inventory determine whether it closes. `Escape` is handled through `egui` input
+  because keyboard events are skipped before `App::handle_key`.
+- Opening releases the cursor and clears held movement keys. Closing returns any cursor stack to
+  the inventory and recaptures the cursor.
 - The first left click after a release still only captures; it does not break or place.
 - The cursor grab, focus loss, break cancellation, and `Ctrl+S` paths are unchanged.
 
@@ -108,6 +115,62 @@ The HUD does not show health, stamina, hunger, or oxygen yet. Those arrive with 
 `0.0.10.4`. The existing bitmap debug overlay (`F3`) remains separate and is drawn in the scene
 pass before the egui pass.
 
+## Inventory
+
+`E` opens the inventory on the demo path. It dims the world, releases the cursor, and draws a
+centred panel with the same 37 slots as `Inventory`:
+
+| Area | Slots |
+|---|---|
+| Main grid, three rows of nine | `9..36` |
+| Hotbar row | `0..9` |
+| Offhand | `36` |
+
+The panel header shows `E / Esc close   Shift-click move   Arrows + Enter`. The footer has a
+`Close [E]` button and the slot count. The HUD is hidden while the inventory is open.
+
+Slot borders encode state:
+
+| State | Border |
+|---|---|
+| Keyboard focus | Blue |
+| Hovered | Pale blue |
+| Selected hotbar slot | White |
+| Valid drop target while holding a stack | Green |
+
+Each occupied slot uses the shared item icon: a flat colour, the stack count when above one, and a
+green durability bar for tools. Empty slots show their 1-based number.
+
+### Mouse interactions
+
+- **Left click, empty cursor:** pick up the whole stack.
+- **Left click, holding a stack:** place into an empty slot, merge into a matching stack up to the
+  limit, or swap with a different stack.
+- **Right click, empty cursor:** take half a stack, rounded up.
+- **Right click, holding a stack:** place one item.
+- **Shift-click:** move the stack between the hotbar and the main grid. Hotbar stacks go to
+  `9..36`; main and offhand stacks go to `0..9`. The destination range is merged first, then
+  filled. A full range leaves the remainder in the source slot.
+- **Drag:** start dragging a slot to pick up its stack. The held stack follows the pointer. Release
+  over a slot to place it; release elsewhere to return it to the first free slot. A held stack from
+  a previous click can also be dragged and dropped.
+- **Close:** a held stack is returned to the inventory first. If the inventory is full, the screen
+  stays open with the stack still on the cursor, so closing can never destroy an item.
+
+### Keyboard
+
+- Arrow keys move the focus by one slot left or right, or by a row up or down. The focus is clamped
+  to `0..=36`.
+- `Enter` or `Space` activates the focused slot with the same left-click rules.
+- Holding `Shift` while activating uses the shift-click quick move.
+- `E` or `Escape` closes the screen. The opening `E` press is suppressed so it does not close the
+  screen in its first frame.
+
+### Tooltips
+
+Hovering a slot shows its display name, kind, stack count, and tool durability. It also shows
+`Click to pick up · Shift-click to move`, or `Click to place` while holding a stack.
+
 ## Rendering details
 
 `UiPass` uses `egui_wgpu::Renderer::new` with `RendererOptions::default()`:
@@ -127,30 +190,37 @@ primitives produces no UI draws, and the headless path builds no `UiFrame` at al
 
 - `ui::tests::the_hud_draws_without_a_window` runs `egui::Context::run_pass` with a 1280x720 raw
   input, draws an empty inventory with a stone target, and asserts that shapes were produced.
-- `ui::tests::the_hud_does_not_capture_input` pins the current ownership policy.
+- `ui::tests::the_inventory_draws_and_captures_input` opens the screen and pins the pointer and
+  keyboard capture policy.
+- `ui::tests::click_picks_up_and_places_a_stack`, `right_click_splits_and_places_one`, and
+  `shift_click_moves_between_the_hotbar_and_main_inventory` cover the interaction rules without a
+  window.
+- `ui::tests::the_opening_key_is_suppressed_and_the_next_press_closes` pins the two-frame `E`
+  behavior.
 - The windowed smoke run captured a frame with the nine-slot hotbar, selected border, wooden
   pickaxe icon, durability bar, crosshair, and the existing FPS overlay.
+- `ENGINE_UI_INVENTORY=1` opens the inventory on the first frame for repeatable captures. The
+  captured inventory shows the main grid, hotbar row, offhand, selected slot, durability bar,
+  close button, and dimmed world.
 - GPU validation is exercised by `Renderer::new` and the windowed run; the default test suite
   remains headless.
 
 ## Current limitations
 
-- No inventory or crafting screen; `E` is not bound yet.
-- No pause, death, or settings screen.
+- No crafting, pause, death, or settings screen.
+- No container-to-container transfer beyond the hotbar/main quick move.
 - No gamepad navigation or accessibility tree.
 - No UI scale control; egui follows the window scale factor.
 - No text input, clipboard, or link handling; those features are disabled.
 - Item icons are flat colours, not the block texture array.
-- The HUD is not captured in golden terrain images; captures are manual QA, not comparison tests.
+- The HUD and inventory are not captured in golden terrain images; captures are manual QA, not
+  comparison tests.
 
 ## Next
 
-The next slice adds the inventory screen:
+The next slice is crafting in `0.0.10.3`:
 
-- `E` opens and `Escape` closes; the cursor is released while it is open.
-- 9 hotbar, 27 main, and one offhand slot, using the existing `Inventory` operations.
-- Drag and drop, shift-click, tooltips, keyboard focus, and a selected-item cursor stack.
-- UI-first routing becomes real: `captures_pointer` and `captures_keyboard` return `true` while
-  the screen is open.
-
-Crafting, the recipe book, and the workbench follow in `0.0.10.3`.
+- A data-driven recipe table with shaped and shapeless recipes.
+- A 2x2 grid in the inventory and a 3x3 workbench screen.
+- A recipe book, search, and one-click craft.
+- Tool durability repair and the wood-to-stone progression chain.

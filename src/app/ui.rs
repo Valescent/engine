@@ -4,11 +4,34 @@ use egui_wgpu::ScreenDescriptor;
 use winit::event::WindowEvent;
 
 use crate::renderer::UiFrame;
-use crate::ui::HudData;
 
 use super::App;
 
 impl App {
+    /// Opens the inventory on the demo path.
+    pub(super) fn open_inventory(&mut self) {
+        if self.demo.is_none() || self.ui.inventory_open() {
+            return;
+        }
+        self.end_break();
+        self.release_cursor();
+        self.pressed.clear();
+        self.jump_requested = false;
+        self.ui.open_inventory(self.game.inventory.selected_index());
+    }
+
+    /// Closes the inventory, returning a held stack first.
+    pub(super) fn close_inventory(&mut self) {
+        if let Some(held) = self.ui.take_held()
+            && let Some(leftover) = self.game.inventory.add(held, &self.items)
+        {
+            self.ui.set_held(Some(leftover));
+            return;
+        }
+        self.ui.close_inventory();
+        self.capture_cursor();
+    }
+
     /// Forwards one window event to egui and reports whether gameplay must
     /// ignore it.
     pub(super) fn handle_ui_event(&mut self, event: &WindowEvent) -> bool {
@@ -34,6 +57,7 @@ impl App {
 
     /// Runs egui for this frame and returns its tessellated output.
     pub(super) fn build_ui_frame(&mut self) -> Option<UiFrame> {
+        self.demo.as_ref()?;
         let window = self.window.clone()?;
         let target = self.hud_target();
         let raw_input = {
@@ -41,18 +65,11 @@ impl App {
             state.take_egui_input(&window)
         };
 
-        let inventory = &self.game.inventory;
+        let inventory = &mut self.game.inventory;
         let registry = &self.items;
         let ui = &mut self.ui;
         let output = self.egui_ctx.run_pass(raw_input, |ctx| {
-            ui.draw(
-                ctx,
-                HudData {
-                    inventory,
-                    registry,
-                    target: target.as_deref(),
-                },
-            );
+            ui.draw(ctx, inventory, registry, target.as_deref());
         });
 
         let egui::FullOutput {
@@ -72,6 +89,9 @@ impl App {
         } else {
             1.0
         };
+        if self.ui.take_close_requested() {
+            self.close_inventory();
+        }
         Some(UiFrame {
             textures_delta,
             primitives,

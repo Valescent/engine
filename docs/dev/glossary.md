@@ -72,7 +72,8 @@ something else; it does not ban the word everywhere.
 | [DDA](v0.0.4-scope.md) | Digital differential analyzer; grid traversal used for voxel raycasts. | Current (v0.0.4) | raymarching |
 | [targeted block](v0.0.4-scope.md) | Solid voxel hit by the view ray and outlined before interaction. | Current (v0.0.4) | selected block, when you mean the hotbar |
 | [highlight](v0.0.4-scope.md) | Wireframe cube drawn around the targeted block. | Current (v0.0.4) | selection box |
-| [hotbar](gameplay.md#inventory) | Selected item slot. The demo has nine slots selected with `1`-`9`; the legacy path has five hard-coded block slots selected with `1`-`5`. No inventory screen yet. | Current (0.0.10.1) | inventory, when you mean the selected row |
+| [hotbar](gameplay.md#inventory) | Selected item slot. The demo has nine slots selected with `1`-`9`; the legacy path has five hard-coded block slots selected with `1`-`5`. The demo inventory screen shows all 37 slots. | Current (0.0.10.2) | inventory, when you mean the selected row |
+| [inventory screen](ui.md#inventory) | The `E` screen with 27 main slots, 9 hotbar slots, and the offhand; supports drag/drop, shift-click, and keyboard navigation. | Current (0.0.10.2) | backpack |
 | [HUD](ui.md) | The egui crosshair, nine-slot hotbar, item/durability display, and interaction prompt. Non-interactive in `0.0.10.2`. | Current (0.0.10.2) | overlay, when you mean the debug text |
 | [item](gameplay.md#items) | A stable `namespace:name` identity with a kind, stack limit, and optional durability. | Current (0.0.10.1) | block, when you mean an inventory item |
 | [item id](gameplay.md#identity) | In-memory `u16` index derived by sorting item names at load; never saved. | Current (0.0.10.1) | UUID |

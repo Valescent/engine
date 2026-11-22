@@ -70,9 +70,15 @@ impl App {
                     self.jump_requested = true;
                     // Held while flying: `Space` ascends continuously.
                     self.pressed.insert(code);
+                } else if code == KeyCode::KeyE {
+                    self.open_inventory();
                 } else if code == KeyCode::Escape {
-                    self.end_break();
-                    self.release_cursor();
+                    if self.ui.inventory_open() {
+                        self.close_inventory();
+                    } else {
+                        self.end_break();
+                        self.release_cursor();
+                    }
                 } else if code == KeyCode::KeyV {
                     self.toggle_vsync();
                 } else if code == KeyCode::F3 {

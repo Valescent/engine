@@ -77,7 +77,7 @@ This is **pre-alpha**. The current world is a walkable, editable, procedurally g
 
 ### Basic mechanics
 
-The v1 terrain demo becomes a playable loop: hold-to-break with hardness and tool tiers, item drops and pickup, an inventory and hotbar, crafting, health and stamina, and a versioned player save. The first checkpoint, items and interaction, is on `main`.
+The v1 terrain demo becomes a playable loop: hold-to-break with hardness and tool tiers, item drops and pickup, an inventory and hotbar, crafting, health and stamina, and a versioned player save. The items, HUD, and inventory are on `main`; crafting, survival, and audio follow.
 
 [Read the v0.0.10 scope](dev/v0.0.10-scope.md) · [Read the gameplay core](dev/gameplay.md)
 
