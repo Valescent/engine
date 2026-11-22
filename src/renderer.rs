@@ -1,63 +1,73 @@
 //! Minimal `wgpu` renderer for chunk meshes, textures, and the block outline.
+//!
+//! [`TerrainDraw`] is a second, opt-in path for `mesher2`'s packed `u64` quad
+//! records. It vertex-pulls from a read-only storage buffer, so it needs no
+//! index buffer and no per-vertex data, and it leaves the legacy [`MeshData`]
+//! path untouched.
+//!
+//! The implementation is split into [`chunk`] (the legacy per-chunk meshes and
+//! their origin uniforms), [`frame`] (the frame uniform, camera bind group,
+//! depth attachment, present mode, and stats), [`origin`] (absolute origin
+//! uniforms and the camera-relative bookkeeping), [`pipeline`] (shader modules,
+//! bind group layouts, and pipelines), [`terrain`] (the packed-quad section
+//! path), and [`texture`] (the procedural block texture array). Every item is
+//! re-exported here, so `renderer::<item>` paths are unchanged.
+
+mod chunk;
+mod frame;
+mod origin;
+mod pipeline;
+mod terrain;
+mod texture;
 
 use std::collections::BTreeMap;
 use std::mem::size_of;
 use std::sync::Arc;
 
-use bytemuck::{Pod, Zeroable};
-use glam::Vec3;
+use glam::{IVec3, Vec3};
 use thiserror::Error;
 #[cfg(feature = "tracy")]
 use tracing::warn;
-use tracing::{error, info};
-use wgpu::util::DeviceExt;
+use tracing::{debug, error, info};
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
-use crate::block::{TEXTURE_LAYERS, TEXTURE_SIZE};
-use crate::camera::Camera;
+use crate::camera::{Camera, RenderView, relative_origin};
 use crate::frustum::Frustum;
 use crate::mesh::{Lod, MeshData};
-use crate::overlay::{OverlayVertex, build_overlay_mesh};
+use crate::overlay::build_overlay_mesh;
 use crate::sky::SkySample;
-use crate::voxel::{HighlightVertex, Vertex};
+use crate::voxel::HighlightVertex;
 use crate::world::{CHUNK_SIZE, ChunkCoord};
 
-const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-const CLEAR_COLOR: wgpu::Color = wgpu::Color {
-    r: 0.45,
-    g: 0.65,
-    b: 0.90,
-    a: 1.0,
+pub(crate) use frame::FrameStats;
+#[allow(
+    unused_imports,
+    reason = "kept as the renderer::OriginChange path for callers and tests"
+)]
+pub(crate) use origin::OriginChange;
+#[allow(
+    unused_imports,
+    reason = "kept as the renderer::<item> paths for callers and tests"
+)]
+pub(crate) use terrain::{
+    DecodedQuad, DuplicateOrigin, TerrainDraw, TerrainSection, UploadPlan, decode_quad, plan_upload,
 };
 
-/// Per-frame uniform: camera, sky colours, sun, and fog settings.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
-struct FrameUniform {
-    view_projection: [f32; 16],
-    sky_colour: [f32; 4],
-    ambient_colour: [f32; 4],
-    sun_colour: [f32; 4],
-    sun_direction: [f32; 4],
-    /// Unlit flag, camera far plane, time of day, fog end distance.
-    settings: [f32; 4],
-    camera_position: [f32; 4],
-}
-
-impl Default for FrameUniform {
-    fn default() -> Self {
-        Self {
-            view_projection: [0.0; 16],
-            sky_colour: [0.45, 0.65, 0.90, 1.0],
-            ambient_colour: [0.65, 0.70, 0.75, 0.0],
-            sun_colour: [1.00, 0.95, 0.85, 0.0],
-            sun_direction: [0.0, 1.0, 0.0, 0.0],
-            settings: [0.0, 100.0, 0.25, 100.0],
-            camera_position: [0.0; 4],
-        }
-    }
-}
+use self::chunk::{GpuChunk, GpuMesh, create_index_buffer, create_vertex_buffer};
+use self::frame::{
+    CLEAR_COLOR, FrameUniform, create_camera_bind_group, create_depth_texture,
+    create_highlight_buffer, create_overlay_buffer, device_limits, preferred_present_mode,
+    timer_features,
+};
+use self::origin::{create_origin_buffer, origin_change, wave_anchor};
+use self::pipeline::{
+    create_camera_bind_group_layout, create_chunk_bind_group, create_chunk_bind_group_layout,
+    create_highlight_pipeline, create_overlay_pipeline, create_pipeline,
+    create_texture_bind_group_layout,
+};
+use self::terrain::section_emits;
+use self::texture::create_block_texture;
 
 #[derive(Debug, Error)]
 pub enum RendererError {
@@ -71,59 +81,8 @@ pub enum RendererError {
     UnsupportedSurface,
     #[error("GPU validation failed: {0}")]
     Validation(String),
-}
-
-struct GpuMesh {
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    index_format: wgpu::IndexFormat,
-    index_count: u32,
-}
-
-struct GpuChunk {
-    _origin_buffer: wgpu::Buffer,
-    bind_group: wgpu::BindGroup,
-    lod0: Option<(u64, GpuMesh)>,
-    lod1: Option<(u64, GpuMesh)>,
-    lod2: Option<(u64, GpuMesh)>,
-    water: Option<(u64, GpuMesh)>,
-    active: Option<Lod>,
-}
-
-impl GpuChunk {
-    fn mesh(&self, lod: Lod) -> Option<&GpuMesh> {
-        let slot = match lod {
-            Lod::Lod0 => &self.lod0,
-            Lod::Lod1 => &self.lod1,
-            Lod::Lod2 => &self.lod2,
-        };
-        slot.as_ref().map(|(_, mesh)| mesh)
-    }
-
-    fn slot(&mut self, lod: Lod) -> &mut Option<(u64, GpuMesh)> {
-        match lod {
-            Lod::Lod0 => &mut self.lod0,
-            Lod::Lod1 => &mut self.lod1,
-            Lod::Lod2 => &mut self.lod2,
-        }
-    }
-
-    fn active_mesh(&self) -> Option<&GpuMesh> {
-        self.active.and_then(|lod| self.mesh(lod))
-    }
-
-    fn is_empty(&self) -> bool {
-        self.lod0.is_none() && self.lod1.is_none() && self.lod2.is_none() && self.water.is_none()
-    }
-}
-
-/// Counts for one drawn frame.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct FrameStats {
-    pub(crate) total_chunks: u32,
-    pub(crate) visible_chunks: u32,
-    pub(crate) visible_vertices: u64,
-    pub(crate) draw_calls: u32,
+    #[error("terrain section origin {0:?} appears more than once")]
+    DuplicateTerrainSection([i32; 3]),
 }
 
 pub(crate) struct Renderer {
@@ -139,8 +98,13 @@ pub(crate) struct Renderer {
     frame: FrameUniform,
     clear_colour: wgpu::Color,
     camera_bind_group: wgpu::BindGroup,
+    camera_bind_group_layout: wgpu::BindGroupLayout,
     chunk_bind_group_layout: wgpu::BindGroupLayout,
+    textures_layout: wgpu::BindGroupLayout,
     chunks: BTreeMap<ChunkCoord, GpuChunk>,
+    terrain: Option<TerrainDraw>,
+    /// Sections created or rewritten since the last [`Renderer::render`].
+    pending_terrain_uploads: u32,
     present_modes: Vec<wgpu::PresentMode>,
     vsync: bool,
     _block_texture: wgpu::Texture,
@@ -148,6 +112,10 @@ pub(crate) struct Renderer {
     highlight_pipeline: wgpu::RenderPipeline,
     highlight_buffer: wgpu::Buffer,
     highlight_count: u32,
+    /// World-space highlight vertices, rebased whenever the render origin moves.
+    highlight_world: Vec<HighlightVertex>,
+    /// World block subtracted from every submitted origin this frame.
+    render_origin: IVec3,
     overlay_pipeline: wgpu::RenderPipeline,
     overlay_buffer: wgpu::Buffer,
     overlay_buffer_size: u64,
@@ -189,8 +157,7 @@ impl Renderer {
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("engine device"),
                 required_features: timer_features(&adapter),
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults()
-                    .using_resolution(adapter.limits()),
+                required_limits: device_limits(&adapter),
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
                 memory_hints: wgpu::MemoryHints::Performance,
                 trace: wgpu::Trace::Off,
@@ -224,9 +191,18 @@ impl Renderer {
         config.present_mode = wgpu::PresentMode::Fifo;
         surface.configure(&device, &config);
 
+        let view = camera.render_view();
         let frame = FrameUniform {
-            view_projection: camera.view_projection().to_cols_array(),
+            view_projection: view.view_projection.to_cols_array(),
             settings: [0.0, camera.far_plane(), 0.25, camera.fog_end()],
+            camera_position: [
+                view.camera_position.x,
+                view.camera_position.y,
+                view.camera_position.z,
+                0.0,
+            ],
+            render_origin: [view.origin.x, view.origin.y, view.origin.z, 0],
+            wave_anchor: wave_anchor(view.origin),
             ..FrameUniform::default()
         };
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -288,8 +264,12 @@ impl Renderer {
             frame,
             clear_colour: CLEAR_COLOR,
             camera_bind_group,
+            camera_bind_group_layout,
             chunk_bind_group_layout,
+            textures_layout: texture_bind_group_layout,
             chunks: BTreeMap::new(),
+            terrain: None,
+            pending_terrain_uploads: 0,
             present_modes,
             vsync: true,
             _block_texture: block_texture,
@@ -297,6 +277,8 @@ impl Renderer {
             highlight_pipeline,
             highlight_buffer,
             highlight_count,
+            highlight_world: Vec::new(),
+            render_origin: view.origin,
             overlay_pipeline,
             overlay_buffer,
             overlay_buffer_size,
@@ -329,15 +311,40 @@ impl Renderer {
         let (depth_texture, depth_view) = create_depth_texture(&self.device, &self.config);
         self.depth_texture = depth_texture;
         self.depth_view = depth_view;
-        self.set_camera(camera);
+        self.set_camera(&camera.render_view());
     }
 
-    pub(crate) fn set_camera(&mut self, camera: &Camera) {
-        self.frame.view_projection = camera.view_projection().to_cols_array();
-        self.frame.settings[1] = camera.far_plane();
-        self.frame.settings[3] = camera.fog_end();
-        let position = camera.position();
-        self.frame.camera_position = [position.x, position.y, position.z, 0.0];
+    /// Applies one frame's render origin and camera-relative transform.
+    ///
+    /// Both draw paths and the highlight use the same origin. Origin uniforms
+    /// store absolute world-block integers, so moving the origin rewrites no
+    /// chunk or section buffer at all; only the small relative highlight buffer
+    /// is re-uploaded.
+    pub(crate) fn set_camera(&mut self, view: &RenderView) {
+        self.frame.view_projection = view.view_projection.to_cols_array();
+        self.frame.settings[1] = view.far_plane;
+        self.frame.settings[3] = view.fog_end;
+        let camera_position = view.camera_position;
+        self.frame.camera_position = [camera_position.x, camera_position.y, camera_position.z, 0.0];
+        self.frame.render_origin = [view.origin.x, view.origin.y, view.origin.z, 0];
+        self.frame.wave_anchor = wave_anchor(view.origin);
+        if view.origin != self.render_origin {
+            let sections = self.terrain.as_ref().map_or(0, TerrainDraw::resident_count);
+            let change =
+                origin_change(self.render_origin, view.origin, self.chunks.len(), sections);
+            self.render_origin = view.origin;
+            self.upload_highlight();
+            debug!(
+                from = ?change.from,
+                to = ?change.to,
+                origin_buffer_writes = change.origin_buffer_writes,
+                avoided_origin_writes = change.avoided_origin_writes,
+                resident_chunks = self.chunks.len(),
+                resident_sections = sections,
+                highlight_vertices = self.highlight_world.len(),
+                "render origin moved"
+            );
+        }
         self.write_frame();
     }
 
@@ -408,12 +415,8 @@ impl Renderer {
         let device = &self.device;
         let layout = &self.chunk_bind_group_layout;
         self.chunks.entry(chunk).or_insert_with(|| {
-            let origin = chunk.origin();
-            let origin_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("chunk origin"),
-                contents: bytemuck::cast_slice(&[origin.x, origin.y, origin.z, 0.0]),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
+            let world_origin = chunk.world_origin().to_array();
+            let origin_buffer = create_origin_buffer(device, "chunk origin", world_origin, 0);
             GpuChunk {
                 bind_group: create_chunk_bind_group(device, layout, &origin_buffer),
                 _origin_buffer: origin_buffer,
@@ -484,7 +487,26 @@ impl Renderer {
     }
 
     pub(crate) fn set_highlight(&mut self, mesh: &[HighlightVertex]) {
-        let (highlight_buffer, highlight_count) = create_highlight_buffer(&self.device, mesh);
+        self.highlight_world.clear();
+        self.highlight_world.extend_from_slice(mesh);
+        self.upload_highlight();
+    }
+
+    /// Uploads the world-space highlight mesh in the frame's relative space.
+    fn upload_highlight(&mut self) {
+        let origin = self.render_origin.as_vec3();
+        let relative: Vec<HighlightVertex> = self
+            .highlight_world
+            .iter()
+            .map(|vertex| HighlightVertex {
+                position: [
+                    vertex.position[0] - origin.x,
+                    vertex.position[1] - origin.y,
+                    vertex.position[2] - origin.z,
+                ],
+            })
+            .collect();
+        let (highlight_buffer, highlight_count) = create_highlight_buffer(&self.device, &relative);
         self.highlight_buffer = highlight_buffer;
         self.highlight_count = highlight_count;
     }
@@ -511,9 +533,86 @@ impl Renderer {
         self.overlay_count = count;
     }
 
-    #[allow(clippy::cast_precision_loss)]
+    /// Enables the packed-quad terrain path, creating its pipelines on first
+    /// use. The legacy chunk-mesh path keeps drawing alongside it.
+    #[allow(
+        dead_code,
+        reason = "opt-in API: the lead wires it in; the demo must not change"
+    )]
+    pub(crate) fn enable_terrain(&mut self) -> Result<&mut TerrainDraw, RendererError> {
+        if self.terrain.is_none() {
+            let terrain = TerrainDraw::new(
+                &self.device,
+                &self.queue,
+                self.config.format,
+                &self.camera_bind_group_layout,
+                &self.textures_layout,
+            )?;
+            self.terrain = Some(terrain);
+        }
+        Ok(self
+            .terrain
+            .as_mut()
+            .expect("terrain draw was created above"))
+    }
+
+    /// Replaces the complete list of packed-quad sections to draw.
+    ///
+    /// The call is a diff against the resident sections: only origins that are
+    /// new or whose content changed allocate and upload. Build one
+    /// [`TerrainSection`] per section and submit them all at once; unchanged
+    /// sections cost no GPU work. Returns the number of sections uploaded in
+    /// the next [`FrameStats::terrain_sections_uploaded`] count.
+    #[allow(
+        dead_code,
+        reason = "opt-in API: the lead wires it in; the demo must not change"
+    )]
+    pub(crate) fn submit_terrain(
+        &mut self,
+        sections: &[TerrainSection<'_>],
+    ) -> Result<(), RendererError> {
+        let uploaded = self.enable_terrain()?.submit(sections)?;
+        self.pending_terrain_uploads = self.pending_terrain_uploads.saturating_add(uploaded);
+        Ok(())
+    }
+
+    /// Creates or rewrites exactly one section, keyed by its world origin.
+    ///
+    /// Every other resident section keeps its buffers untouched. This is the
+    /// one-block-edit path: one call, one section.
+    #[allow(
+        dead_code,
+        reason = "opt-in API: the lead wires it in; the demo must not change"
+    )]
+    pub(crate) fn update_terrain_section(
+        &mut self,
+        section: TerrainSection<'_>,
+    ) -> Result<(), RendererError> {
+        let uploaded = u32::from(section_emits(&section));
+        self.enable_terrain()?.update(&section)?;
+        self.pending_terrain_uploads = self.pending_terrain_uploads.saturating_add(uploaded);
+        Ok(())
+    }
+
+    /// Removes every packed-quad section without tearing down the pipelines.
+    #[allow(
+        dead_code,
+        reason = "opt-in API: the lead wires it in; the demo must not change"
+    )]
+    pub(crate) fn clear_terrain(&mut self) {
+        if let Some(terrain) = &mut self.terrain
+            && let Err(error) = terrain.submit(&[])
+        {
+            error!(%error, "failed to clear terrain sections");
+        }
+    }
+
+    #[allow(clippy::cast_precision_loss, clippy::too_many_lines)]
     pub(crate) fn render(&mut self, frustum: &Frustum) -> FrameStats {
-        let mut stats = FrameStats::default();
+        let mut stats = FrameStats {
+            terrain_sections_uploaded: std::mem::take(&mut self.pending_terrain_uploads),
+            ..FrameStats::default()
+        };
         let frame = {
             profiling::scope!("acquire");
             match self.surface.get_current_texture() {
@@ -650,6 +749,7 @@ impl Renderer {
         frustum: &Frustum,
         stats: &mut FrameStats,
     ) {
+        let render_origin = self.render_origin;
         if !self.chunks.is_empty() {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
@@ -659,7 +759,7 @@ impl Renderer {
                 let Some(mesh) = gpu_chunk.active_mesh() else {
                     continue;
                 };
-                let min = chunk.origin();
+                let min = relative_origin(chunk.world_origin().to_array(), render_origin);
                 if !frustum.intersects_aabb(min, min + Vec3::splat(CHUNK_SIZE as f32)) {
                     continue;
                 }
@@ -673,6 +773,18 @@ impl Renderer {
             }
         }
 
+        // Packed-quad opaque and cutout terrain, still before any water.
+        if let Some(terrain) = &self.terrain {
+            terrain.draw_opaque(
+                pass,
+                frustum,
+                render_origin,
+                &self.camera_bind_group,
+                &self.texture_bind_group,
+                stats,
+            );
+        }
+
         // Transparent water after all opaque geometry; depth writes stay off.
         pass.set_pipeline(&self.water_pipeline);
         pass.set_bind_group(0, &self.camera_bind_group, &[]);
@@ -681,7 +793,7 @@ impl Renderer {
             let Some((_, mesh)) = &gpu_chunk.water else {
                 continue;
             };
-            let min = chunk.origin();
+            let min = relative_origin(chunk.world_origin().to_array(), render_origin);
             if !frustum.intersects_aabb(min, min + Vec3::splat(CHUNK_SIZE as f32)) {
                 continue;
             }
@@ -694,6 +806,19 @@ impl Renderer {
             pass.draw_indexed(0..mesh.index_count, 0, 0..1);
             stats.draw_calls += 1;
             stats.visible_vertices += u64::from(mesh.index_count);
+        }
+
+        // Packed-quad water, last of the terrain passes: blended, no depth
+        // writes, and no culling.
+        if let Some(terrain) = &self.terrain {
+            terrain.draw_water(
+                pass,
+                frustum,
+                render_origin,
+                &self.camera_bind_group,
+                &self.texture_bind_group,
+                stats,
+            );
         }
 
         if self.highlight_count > 0 {
@@ -718,604 +843,5 @@ impl Renderer {
             }
             Err(error) => error!(%error, "failed to recreate the window surface"),
         }
-    }
-}
-
-/// Features the GPU profiler needs, intersected with what the adapter supports.
-#[cfg(feature = "tracy")]
-fn timer_features(adapter: &wgpu::Adapter) -> wgpu::Features {
-    let requested = wgpu_profiler::GpuProfiler::ALL_WGPU_TIMER_FEATURES & adapter.features();
-    if requested.contains(wgpu::Features::TIMESTAMP_QUERY) {
-        requested
-    } else {
-        wgpu::Features::empty()
-    }
-}
-
-#[cfg(not(feature = "tracy"))]
-fn timer_features(_adapter: &wgpu::Adapter) -> wgpu::Features {
-    wgpu::Features::empty()
-}
-
-fn preferred_present_mode(vsync: bool, supported: &[wgpu::PresentMode]) -> wgpu::PresentMode {
-    if vsync {
-        wgpu::PresentMode::Fifo
-    } else if supported.contains(&wgpu::PresentMode::Immediate) {
-        wgpu::PresentMode::Immediate
-    } else if supported.contains(&wgpu::PresentMode::Mailbox) {
-        wgpu::PresentMode::Mailbox
-    } else {
-        wgpu::PresentMode::Fifo
-    }
-}
-
-fn create_camera_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("camera bind group layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: wgpu::BufferSize::new(160),
-            },
-            count: None,
-        }],
-    })
-}
-
-fn create_camera_bind_group(
-    device: &wgpu::Device,
-    layout: &wgpu::BindGroupLayout,
-    uniform_buffer: &wgpu::Buffer,
-) -> wgpu::BindGroup {
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("camera bind group"),
-        layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: uniform_buffer.as_entire_binding(),
-        }],
-    })
-}
-
-fn create_chunk_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("chunk bind group layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: wgpu::BufferSize::new(16),
-            },
-            count: None,
-        }],
-    })
-}
-
-fn create_chunk_bind_group(
-    device: &wgpu::Device,
-    layout: &wgpu::BindGroupLayout,
-    origin_buffer: &wgpu::Buffer,
-) -> wgpu::BindGroup {
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("chunk bind group"),
-        layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: origin_buffer.as_entire_binding(),
-        }],
-    })
-}
-
-fn create_texture_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("block texture bind group layout"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2Array,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-        ],
-    })
-}
-
-fn create_block_texture(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    layout: &wgpu::BindGroupLayout,
-) -> (wgpu::Texture, wgpu::BindGroup) {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("block texture array"),
-        size: wgpu::Extent3d {
-            width: TEXTURE_SIZE,
-            height: TEXTURE_SIZE,
-            depth_or_array_layers: TEXTURE_LAYERS,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
-    let data = block_texture_data();
-    queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture: &texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        &data,
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(TEXTURE_SIZE * 4),
-            rows_per_image: Some(TEXTURE_SIZE),
-        },
-        wgpu::Extent3d {
-            width: TEXTURE_SIZE,
-            height: TEXTURE_SIZE,
-            depth_or_array_layers: TEXTURE_LAYERS,
-        },
-    );
-    let view = texture.create_view(&wgpu::TextureViewDescriptor {
-        dimension: Some(wgpu::TextureViewDimension::D2Array),
-        ..Default::default()
-    });
-    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-        label: Some("block texture sampler"),
-        address_mode_u: wgpu::AddressMode::Repeat,
-        address_mode_v: wgpu::AddressMode::Repeat,
-        address_mode_w: wgpu::AddressMode::ClampToEdge,
-        mag_filter: wgpu::FilterMode::Nearest,
-        min_filter: wgpu::FilterMode::Nearest,
-        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-        ..Default::default()
-    });
-    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("block texture bind group"),
-        layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::Sampler(&sampler),
-            },
-        ],
-    });
-    (texture, bind_group)
-}
-
-fn block_texture_data() -> Vec<u8> {
-    let mut data = Vec::with_capacity(
-        usize::try_from(TEXTURE_SIZE * TEXTURE_SIZE * 4 * TEXTURE_LAYERS)
-            .expect("texture data size fits in usize"),
-    );
-    for layer in 0..TEXTURE_LAYERS {
-        for y in 0..TEXTURE_SIZE {
-            for x in 0..TEXTURE_SIZE {
-                data.extend_from_slice(&tile_pixel(layer, x, y));
-            }
-        }
-    }
-    data
-}
-
-fn tile_pixel(layer: u32, x: u32, y: u32) -> [u8; 4] {
-    let noise = tile_noise(layer, x, y);
-    let variation = i32::try_from(noise % 25).expect("variation fits in i32") - 12;
-    let colour = match layer {
-        0 => shade([122, 122, 128], variation),
-        2 => shade([82, 142, 66], variation),
-        3 if y < 4 => shade([82, 142, 66], variation),
-        1 | 3 | 4 => shade([116, 82, 58], variation),
-        5 => {
-            let dx = i32::try_from(x).expect("tile x fits in i32") - 8;
-            let dy = i32::try_from(y).expect("tile y fits in i32") - 8;
-            let ring = (dx * dx + dy * dy) / 8 % 2;
-            if ring == 0 {
-                shade([150, 112, 70], variation)
-            } else {
-                shade([118, 86, 53], variation)
-            }
-        }
-        6 if x.is_multiple_of(5) => shade([108, 78, 48], variation),
-        6 => shade([150, 112, 70], variation),
-        8 if x.is_multiple_of(4) || y.is_multiple_of(4) => shade([122, 96, 48], variation),
-        8 => shade([238, 198, 108], variation),
-        9 if noise.is_multiple_of(11) => shade([64, 132, 196], variation),
-        9 => shade([46, 104, 172], variation),
-        10 => shade([214, 196, 138], variation),
-        _ => {
-            if noise.is_multiple_of(7) {
-                shade([42, 88, 42], variation)
-            } else {
-                shade([62, 118, 54], variation)
-            }
-        }
-    };
-    [colour[0], colour[1], colour[2], 255]
-}
-
-fn shade(base: [i32; 3], variation: i32) -> [u8; 3] {
-    base.map(|channel| {
-        u8::try_from((channel + variation).clamp(0, 255)).expect("colour channel in range")
-    })
-}
-
-fn tile_noise(layer: u32, x: u32, y: u32) -> u32 {
-    let mut value = layer
-        .wrapping_mul(0x9E37_79B9)
-        .wrapping_add(x.wrapping_mul(0x85EB_CA6B))
-        .wrapping_add(y.wrapping_mul(0xC2B2_AE35));
-    value ^= value >> 16;
-    value = value.wrapping_mul(0x7FEB_352D);
-    value ^= value >> 15;
-    value
-}
-
-#[allow(clippy::too_many_arguments)]
-fn create_pipeline(
-    device: &wgpu::Device,
-    config: &wgpu::SurfaceConfiguration,
-    camera_bind_group_layout: &wgpu::BindGroupLayout,
-    chunk_bind_group_layout: &wgpu::BindGroupLayout,
-    texture_bind_group_layout: &wgpu::BindGroupLayout,
-    label: &str,
-    fragment_entry: &str,
-    blend: Option<wgpu::BlendState>,
-    depth_write: bool,
-    depth_compare: wgpu::CompareFunction,
-) -> Result<wgpu::RenderPipeline, RendererError> {
-    let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("voxel pipeline layout"),
-        bind_group_layouts: &[
-            Some(camera_bind_group_layout),
-            Some(chunk_bind_group_layout),
-            Some(texture_bind_group_layout),
-        ],
-        immediate_size: 0,
-    });
-    let vertex_layout = wgpu::VertexBufferLayout {
-        array_stride: u64::try_from(size_of::<Vertex>()).expect("vertex size fits in u64"),
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Uint8x4,
-                offset: 0,
-                shader_location: 0,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Uint8x4,
-                offset: 4,
-                shader_location: 1,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Uint32,
-                offset: 8,
-                shader_location: 2,
-            },
-        ],
-    };
-    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(label),
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            buffers: &[Some(vertex_layout)],
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some(fragment_entry),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: config.format,
-                blend,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        primitive: wgpu::PrimitiveState {
-            cull_mode: Some(wgpu::Face::Back),
-            ..Default::default()
-        },
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: DEPTH_FORMAT,
-            depth_write_enabled: Some(depth_write),
-            depth_compare: Some(depth_compare),
-            stencil: wgpu::StencilState::default(),
-            bias: wgpu::DepthBiasState::default(),
-        }),
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-        cache: None,
-    });
-
-    if let Some(error) = pollster::block_on(error_scope.pop()) {
-        return Err(RendererError::Validation(error.to_string()));
-    }
-    Ok(pipeline)
-}
-
-fn create_highlight_pipeline(
-    device: &wgpu::Device,
-    config: &wgpu::SurfaceConfiguration,
-    camera_bind_group_layout: &wgpu::BindGroupLayout,
-) -> Result<wgpu::RenderPipeline, RendererError> {
-    let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let shader = device.create_shader_module(wgpu::include_wgsl!("highlight.wgsl"));
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("highlight pipeline layout"),
-        bind_group_layouts: &[Some(camera_bind_group_layout)],
-        immediate_size: 0,
-    });
-    let vertex_layout = wgpu::VertexBufferLayout {
-        array_stride: u64::try_from(size_of::<HighlightVertex>())
-            .expect("highlight vertex size fits in u64"),
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[wgpu::VertexAttribute {
-            format: wgpu::VertexFormat::Float32x3,
-            offset: 0,
-            shader_location: 0,
-        }],
-    };
-    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("highlight pipeline"),
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            buffers: &[Some(vertex_layout)],
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            targets: &[Some(config.format.into())],
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::LineList,
-            ..Default::default()
-        },
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: DEPTH_FORMAT,
-            depth_write_enabled: Some(false),
-            depth_compare: Some(wgpu::CompareFunction::LessEqual),
-            stencil: wgpu::StencilState::default(),
-            bias: wgpu::DepthBiasState::default(),
-        }),
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-        cache: None,
-    });
-
-    if let Some(error) = pollster::block_on(error_scope.pop()) {
-        return Err(RendererError::Validation(error.to_string()));
-    }
-    Ok(pipeline)
-}
-
-fn create_depth_texture(
-    device: &wgpu::Device,
-    config: &wgpu::SurfaceConfiguration,
-) -> (wgpu::Texture, wgpu::TextureView) {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("depth texture"),
-        size: wgpu::Extent3d {
-            width: config.width,
-            height: config.height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: DEPTH_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        view_formats: &[],
-    });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    (texture, view)
-}
-
-fn create_index_buffer(
-    device: &wgpu::Device,
-    mesh: &MeshData,
-) -> (wgpu::Buffer, wgpu::IndexFormat, u32) {
-    let count = u32::try_from(mesh.indices.len()).expect("index count fits in u32");
-    if u16::try_from(mesh.vertices.len()).is_ok() {
-        let indices: Vec<u16> = mesh
-            .indices
-            .iter()
-            .map(|index| u16::try_from(*index).expect("index fits in u16"))
-            .collect();
-        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("chunk indices"),
-            contents: bytemuck::cast_slice(&indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-        return (buffer, wgpu::IndexFormat::Uint16, count);
-    }
-    let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("chunk indices"),
-        contents: bytemuck::cast_slice(&mesh.indices),
-        usage: wgpu::BufferUsages::INDEX,
-    });
-    (buffer, wgpu::IndexFormat::Uint32, count)
-}
-
-fn create_vertex_buffer(device: &wgpu::Device, mesh: &[Vertex]) -> (wgpu::Buffer, u32) {
-    let vertex_count = u32::try_from(mesh.len()).expect("mesh vertex count fits in u32");
-    let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("chunk vertices"),
-        contents: bytemuck::cast_slice(mesh),
-        usage: wgpu::BufferUsages::VERTEX,
-    });
-    (buffer, vertex_count)
-}
-
-fn create_highlight_buffer(device: &wgpu::Device, mesh: &[HighlightVertex]) -> (wgpu::Buffer, u32) {
-    let vertex_count = u32::try_from(mesh.len()).expect("highlight vertex count fits in u32");
-    let empty = [HighlightVertex { position: [0.0; 3] }];
-    let contents = if mesh.is_empty() {
-        bytemuck::cast_slice(&empty)
-    } else {
-        bytemuck::cast_slice(mesh)
-    };
-    let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("highlight vertices"),
-        contents,
-        usage: wgpu::BufferUsages::VERTEX,
-    });
-    (buffer, vertex_count)
-}
-
-fn create_overlay_pipeline(
-    device: &wgpu::Device,
-    config: &wgpu::SurfaceConfiguration,
-) -> Result<wgpu::RenderPipeline, RendererError> {
-    let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let shader = device.create_shader_module(wgpu::include_wgsl!("overlay.wgsl"));
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("overlay pipeline layout"),
-        bind_group_layouts: &[],
-        immediate_size: 0,
-    });
-    let vertex_layout = wgpu::VertexBufferLayout {
-        array_stride: u64::try_from(size_of::<OverlayVertex>())
-            .expect("overlay vertex size fits in u64"),
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x2,
-                offset: 0,
-                shader_location: 0,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x4,
-                offset: 8,
-                shader_location: 1,
-            },
-        ],
-    };
-    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("overlay pipeline"),
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            buffers: &[Some(vertex_layout)],
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: config.format,
-                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        primitive: wgpu::PrimitiveState::default(),
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: DEPTH_FORMAT,
-            depth_write_enabled: Some(false),
-            depth_compare: Some(wgpu::CompareFunction::Always),
-            stencil: wgpu::StencilState::default(),
-            bias: wgpu::DepthBiasState::default(),
-        }),
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-        cache: None,
-    });
-
-    if let Some(error) = pollster::block_on(error_scope.pop()) {
-        return Err(RendererError::Validation(error.to_string()));
-    }
-    Ok(pipeline)
-}
-
-fn create_overlay_buffer(device: &wgpu::Device) -> (wgpu::Buffer, u64) {
-    const OVERLAY_BUFFER_SIZE: u64 = 128 * 1024;
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("overlay vertices"),
-        size: OVERLAY_BUFFER_SIZE,
-        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    (buffer, OVERLAY_BUFFER_SIZE)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn vsync_prefers_fifo_and_tearing_falls_back() {
-        assert_eq!(
-            preferred_present_mode(true, &[wgpu::PresentMode::Fifo]),
-            wgpu::PresentMode::Fifo
-        );
-        assert_eq!(
-            preferred_present_mode(
-                false,
-                &[wgpu::PresentMode::Fifo, wgpu::PresentMode::Immediate]
-            ),
-            wgpu::PresentMode::Immediate
-        );
-        assert_eq!(
-            preferred_present_mode(
-                false,
-                &[wgpu::PresentMode::Fifo, wgpu::PresentMode::Mailbox]
-            ),
-            wgpu::PresentMode::Mailbox
-        );
-        assert_eq!(
-            preferred_present_mode(false, &[wgpu::PresentMode::Fifo]),
-            wgpu::PresentMode::Fifo
-        );
-    }
-
-    #[test]
-    fn texture_data_has_one_rgba_tile_per_layer() {
-        let data = block_texture_data();
-        let tile_bytes = usize::try_from(TEXTURE_SIZE * TEXTURE_SIZE * 4).unwrap();
-        assert_eq!(
-            data.len(),
-            tile_bytes * usize::try_from(TEXTURE_LAYERS).unwrap()
-        );
-    }
-
-    #[test]
-    fn texture_data_is_deterministic_and_layers_differ() {
-        let first = block_texture_data();
-        let second = block_texture_data();
-        let tile_bytes = usize::try_from(TEXTURE_SIZE * TEXTURE_SIZE * 4).unwrap();
-
-        assert_eq!(first, second);
-        assert_ne!(first[..tile_bytes], second[tile_bytes..tile_bytes * 2]);
     }
 }

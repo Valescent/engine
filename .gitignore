@@ -2,5 +2,6 @@
 /.idea
 /book
 /logs
+/reports
 /world
 *.tracy

@@ -3,6 +3,13 @@ name: Perf
 on:
   push:
     branches: [main]
+  # Nightly, not per-PR. The blend calibration is a measurement with thin
+  # margins (pair 2-3 has 36 transects and p90 63.32 against a 64-block
+  # ceiling), so a small platform-level float difference could fail an
+  # otherwise correct pull request. Running it once a night on one known
+  # Linux runner keeps the signal without making every PR pay for it.
+  schedule:
+    - cron: "17 3 * * *"
   workflow_dispatch:
 
 permissions:
@@ -31,7 +38,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --release --locked
+        run: cargo build --release --locked --no-default-features
 
       - name: Static camera at distance 12
         env:
@@ -75,6 +82,21 @@ jobs:
           awk -v p95="$p95" 'BEGIN { exit !(p95 < 50.0) }' || { echo "p95 frame work above 50 ms"; exit 1; }
           test "$resident" -lt 200000000 || { echo "resident world data above 200 MB"; exit 1; }
 
+      # Not part of the PR `Terrain gates` job. The 16-seed medians sit close
+      # to the 20..=28-block window and pair 2-3's p90 is 63.32 against the
+      # 64-block ceiling, so platform float drift could flip a pull request
+      # that did not change the blend. The per-PR coverage floors are covered
+      # by `biome_coverage_holds_for_pr_seeds`; this measurement runs nightly
+      # here, where a failure is a data signal rather than PR noise.
+      - name: Biome blend calibration
+        run: |
+          set -o pipefail
+          cargo run --release --locked --quiet --no-default-features --bin terrain-gen -- \
+            calibrate-blend --seeds 16 | tee blend-calibration.txt
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat blend-calibration.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload results
         uses: actions/upload-artifact@v7
         with:
@@ -82,3 +104,4 @@ jobs:
           path: |
             headless-static.txt
             headless-walk.txt
+            blend-calibration.txt

@@ -29,14 +29,24 @@ runs it for a static camera and a walk on every `main` push and gates on a gener
 
 ```console
 cargo fmt --all -- --check
-cargo clippy --all-targets --locked -- -D warnings
-cargo test --locked
-cargo doc --no-deps
+cargo clippy --all-targets --locked --no-default-features -- -D warnings
+cargo test --locked --no-default-features
+cargo run --locked --quiet --no-default-features --bin terrain-gen -- golden check
+cargo tree -p terrain-core -e normal --no-default-features
+cargo doc --no-deps --no-default-features
+sh scripts/size-budgets.sh
+sh scripts/size-budgets.test.sh
 typos
 mdbook build
 ```
 
-CI also runs dependency licence and advisory checks, commit message checks, and the documentation build. The `pool_sim` benchmark is not part of CI.
+`size-budgets.sh` reports files over 1,000 and 600 lines as warnings and always exits 0; the
+self-test checks its annotations and counts against fixed fixtures. See
+[CI](ci.md#size-budgets).
+
+CI also runs dependency licence and advisory checks, commit message checks, and the documentation build. The `pool_sim` benchmark is not part of CI. `--no-default-features` is required in CI because `tracy` is a default feature that builds a C++ client; use `cargo test --locked` locally to test the profiled build.
+
+`terrain-core` has no `wgpu`, `winit`, `wgpu-profiler`, or `tracy-client` in its normal dependency tree; the CI crate-graph step fails with a clear message if one appears. Run `cargo tree -p terrain-core -e normal --no-default-features` and look for those four names locally.
 
 ## Writing tests
 
@@ -52,7 +62,9 @@ CI also runs dependency licence and advisory checks, commit message checks, and 
 
 ## Current coverage
 
-The headless suite covers:
+The headless suite covers **701 library tests** across `engine` and `terrain-core` (2 ignored),
+**3** `light_preview`, and **30** `terrain_gen` integration tests. The terrain integration test
+and its goldens live under `crates/terrain-core/tests/`; `light_preview` stays with `engine`.
 
 - Camera look direction, yaw/pitch clamping, and angle wrapping.
 - Mouse-look gating on capture and focus.
@@ -68,6 +80,7 @@ The headless suite covers:
 - Generation determinism, biome thresholds, sea fill, cave carving, tree structure, streaming ring order, unload hysteresis, and the readiness guard, including air-only chunks and rejection of movement into an unready column; `config.toml` defaults, ranges, and unknown keys.
 - Modified-only saves, seed creation and parsing, the missing-seed error, saved chunks applied over generated blocks, empty saved chunks, and unload saving and dropping a column; a late generation result is discarded after its column was cancelled.
 - Mesh revisions, stale-result rejection, queue priority, background dropping, the two-upload cap, and admission checks before snapshot work.
+- v1 terrain: description/header/record round trips, generation goldens and seams, column light equality and fuzz, greedy meshing face coverage, LOD downsample, section encode/decode, persistence round trips, backup rotation, torn-tail recovery, journal replay and prefix trimming, repair actions, migration and reports, corruption fuzzing, repeated crash/save/reopen, incremental light/mesh equality, LOD selection, and tile-stream swap decisions.
 - The deterministic 8x8 stress fixture and the stress-mode world path.
 - Player AABB, gravity, jumping, ground detection, axis order, collision response, and tunnelling limits.
 - DDA ray hits, misses, range limits, tie-break order, and face normals.

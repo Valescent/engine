@@ -13,6 +13,7 @@ Keyboard and mouse bindings for the current engine and the scoped milestones. Se
 | FPS/frame-time overlay | Current (v0.0.4) |
 | Day/night debug key (`T`) | Current (v0.0.6) |
 | Unlit debug shading (`F4`) | Current (v0.0.6) |
+| Debug fly (`F`) | Current (debug) |
 | Remappable bindings | Planned, no milestone |
 
 ## Bindings by milestone
@@ -26,7 +27,7 @@ Keyboard and mouse bindings for the current engine and the scoped milestones. Se
 | Right click | — | — | Place the selected block |
 | `Space` | Toggle the demo voxel | Toggle the boundary demo voxel | Jump |
 | `1`–`5` | — | — | Select stone, dirt, grass, wood, leaves |
-| `Ctrl+S` | — | — | Save all non-empty chunks |
+| `Ctrl+S` | - | - | Save all non-empty chunks; also flushes `world/terrain-demo` |
 | `V` | — | — | Toggle vsync |
 | `F3` | — | — | Toggle the FPS/frame-time overlay |
 | `Escape` | Release the cursor | Release the cursor | Release the cursor |
@@ -35,6 +36,13 @@ Mouse look requires capture and window focus in every milestone.
 
 v0.0.4 replaces flight with walking. `W` / `S` use the camera yaw only, so looking up or down does
 not change the walk direction. The v0.0.3 demo toggle is not carried forward on `Space`.
+
+## Debug fly
+
+`F` toggles a debug flight mode for inspecting terrain: gravity and collision are off, `Space`
+ascends, `Ctrl` descends, and `WASD` moves horizontally at `12 m/s`. Leaving the mode restores
+walking immediately (you will fall). The toggle is logged at `info` level. It is a debug facility,
+not a gameplay mechanic, and it is not part of any milestone's Definition of Done.
 
 ## Current capture and focus (v0.0.4)
 
@@ -89,6 +97,21 @@ not change the walk direction. The v0.0.3 demo toggle is not carried forward on 
 | Mouse-wheel hotbar | No binding. v0.0.4 selects with `1`–`5`. |
 | Pause / menu | No binding. `Escape` only releases the cursor. |
 | Gamepad | No input support today; not scheduled. |
+
+## Terrain demo
+
+Start with `TERRAIN_DEMO=1` (and `ENGINE_STRESS_SCENE=1` when `world/seed` is absent). The demo
+keeps the normal movement bindings and adds:
+
+| Input | Effect |
+|---|---|
+| Left click | Break the targeted block |
+| Right click | Place the selected block |
+| `R` / `Q` / `S` | Restore backup / quarantine / salvage the corrupt section shown in the repair prompt |
+| Left/middle/right click in the repair prompt | Same three repair actions |
+
+`Ctrl+S` flushes the save worker; closing the window does the same. Tile paging, LOD selection, and
+light/mesh rebuilds are automatic. See [Terrain v1 runtime](terrain-v1.md).
 
 ## Keybindings
 

@@ -13,9 +13,9 @@ use std::sync::Arc;
 
 use glam::{IVec3, Vec3};
 use thiserror::Error;
+use tracing::warn;
 
 use crate::block::Block;
-use crate::light::{self, LightField};
 
 /// Edge length of a chunk on every axis.
 pub(crate) const CHUNK_SIZE: i32 = 32;
@@ -66,6 +66,14 @@ impl ChunkCoord {
     }
 
     /// Minimum-corner world position in metres.
+    ///
+    /// Rendering and culling use the exact integer [`Self::world_origin`];
+    /// this `f32` form remains for the CPU-side tests and tools that work in
+    /// world-space floats.
+    #[allow(
+        dead_code,
+        reason = "kept for tests; the renderer uses integer origins"
+    )]
     pub(crate) fn origin(self) -> Vec3 {
         self.world_origin().as_vec3()
     }
@@ -156,6 +164,113 @@ impl Chunk {
     pub(crate) fn blocks(&self) -> &[Block] {
         &self.blocks
     }
+}
+
+/// Immutable full-resolution copy of one chunk's blocks.
+///
+/// Meshing and light jobs read a snapshot instead of borrowing the live world.
+/// A missing chunk is an all-air snapshot.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ChunkSnapshot {
+    blocks: Box<[Block]>,
+}
+
+impl ChunkSnapshot {
+    /// Copies a chunk out of the world. A missing chunk becomes all air.
+    pub(crate) fn new(world: &World, chunk: ChunkCoord) -> Self {
+        let blocks = world.chunk(chunk).map_or_else(
+            || vec![Block::Air; CHUNK_CELLS].into_boxed_slice(),
+            |data| data.blocks().to_vec().into_boxed_slice(),
+        );
+        Self { blocks }
+    }
+
+    /// Returns the block at a chunk-local coordinate, or air outside the chunk.
+    pub(crate) fn block(&self, local: IVec3) -> Block {
+        local_index(local).map_or(Block::Air, |index| self.blocks[index])
+    }
+}
+
+/// Maximum light level.
+pub(crate) const MAX_LIGHT: u8 = 15;
+
+/// Cells per axis of a stored light field: the chunk plus one border cell.
+pub(crate) const PADDED: i32 = CHUNK_SIZE + 2;
+
+/// Sky and block light for a chunk plus one border cell.
+///
+/// Cells are indexed by chunk-local coordinates in `-1..=32` and stored as one
+/// nibble per cell; the border is what meshing samples across chunk edges. The
+/// light module computes the values; the world owns the per-chunk cache.
+#[derive(Clone, Debug)]
+pub(crate) struct LightField {
+    pub(crate) sky: PackedLight,
+    pub(crate) block: PackedLight,
+}
+
+impl LightField {
+    /// Bytes held by the two packed planes.
+    pub(crate) fn resident_bytes(&self) -> usize {
+        self.sky.resident_bytes() + self.block.resident_bytes()
+    }
+
+    /// Sky light at a local coordinate in `-1..=32`.
+    pub(crate) fn sky(&self, local: IVec3) -> u8 {
+        self.sky.get(field_index(local))
+    }
+
+    /// Block light at a local coordinate in `-1..=32`.
+    pub(crate) fn block(&self, local: IVec3) -> u8 {
+        self.block.get(field_index(local))
+    }
+}
+
+/// A plane of four-bit light values, two cells per byte.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PackedLight {
+    pub(crate) cells: Box<[u8]>,
+}
+
+impl PackedLight {
+    pub(crate) fn new() -> Self {
+        let cells = usize::try_from(PADDED * PADDED * PADDED).expect("light field fits in usize");
+        Self {
+            cells: vec![0; cells.div_ceil(2)].into_boxed_slice(),
+        }
+    }
+
+    fn resident_bytes(&self) -> usize {
+        self.cells.len()
+    }
+
+    pub(crate) fn get(&self, index: usize) -> u8 {
+        let byte = self.cells[index / 2];
+        if index.is_multiple_of(2) {
+            byte & 0x0F
+        } else {
+            byte >> 4
+        }
+    }
+
+    pub(crate) fn set(&mut self, index: usize, value: u8) {
+        debug_assert!(value <= MAX_LIGHT);
+        let slot = &mut self.cells[index / 2];
+        if index.is_multiple_of(2) {
+            *slot = (*slot & 0xF0) | value;
+        } else {
+            *slot = (*slot & 0x0F) | (value << 4);
+        }
+    }
+}
+
+/// Linear index of a coordinate in the padded light field.
+pub(crate) fn field_index(local: IVec3) -> usize {
+    let padded = local + IVec3::ONE;
+    let stride = usize::try_from(PADDED).expect("field size fits");
+    let x = usize::try_from(padded.x).expect("field coordinate fits");
+    let y = usize::try_from(padded.y).expect("field coordinate fits");
+    let z = usize::try_from(padded.z).expect("field coordinate fits");
+    (x * stride + y) * stride + z
 }
 
 /// Linear index of a chunk-local coordinate, or `None` outside the chunk.
@@ -309,23 +424,9 @@ impl World {
         self.light.get(&chunk)
     }
 
-    /// Recomputes sky and block light for every stored chunk.
-    ///
-    /// Light is derived state, so this runs after loading and whenever a world
-    /// is built in memory.
-    pub(crate) fn relight(&mut self) {
-        let fields: Vec<(ChunkCoord, Arc<LightField>)> = self
-            .chunks
-            .keys()
-            .map(|&chunk| {
-                let snapshot = light::LightSnapshot::new(self, chunk);
-                (chunk, Arc::new(light::compute(&snapshot, chunk)))
-            })
-            .collect();
+    /// Drops every cached light field.
+    pub(crate) fn clear_light_fields(&mut self) {
         self.light.clear();
-        for (chunk, field) in fields {
-            self.light.insert(chunk, field);
-        }
     }
 
     /// Returns every solid block inside the inclusive world-coordinate bounds.
@@ -684,10 +785,21 @@ pub(crate) fn load_or_create_seed(
     match fs::read_to_string(&seed_path) {
         Ok(text) => parse_seed(&text),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            if directory_has_chunks(&world_directory.join("chunks"))? {
-                return Err(SaveError::MissingSeed);
-            }
-            let seed = preferred.unwrap_or_else(fresh_seed);
+            let seed = if directory_has_chunks(&world_directory.join("chunks"))? {
+                // Do not guess a seed for existing saved chunks. An explicit
+                // `ENGINE_SEED` is the opt-in recovery path: the caller accepts
+                // that those edits are applied over a new generated world.
+                let Some(seed) = preferred else {
+                    return Err(SaveError::MissingSeed);
+                };
+                warn!(
+                    seed,
+                    "adopting saved chunks with ENGINE_SEED; unmodified terrain regenerates from this seed"
+                );
+                seed
+            } else {
+                preferred.unwrap_or_else(fresh_seed)
+            };
             fs::create_dir_all(world_directory)
                 .map_err(|error| SaveError::from_path(&error, world_directory))?;
             fs::write(&seed_path, format!("{seed}\n"))
@@ -748,6 +860,14 @@ fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_le_bytes(
         bytes.get(offset..offset + 4)?.try_into().ok()?,
     ))
+}
+
+/// The legacy world answers movement queries; the new terrain provides its own
+/// implementation so the player stays source-agnostic.
+impl crate::player::BlockSource for World {
+    fn solid_blocks_in(&self, min: IVec3, max: IVec3) -> Vec<IVec3> {
+        World::solid_blocks_in(self, min, max)
+    }
 }
 
 #[cfg(test)]
@@ -1265,6 +1385,13 @@ mod tests {
             Err(SaveError::MissingSeed)
         ));
         assert!(!directory.join("seed").exists());
+
+        assert_eq!(
+            load_or_create_seed(&directory, Some(7)).unwrap(),
+            7,
+            "an explicit ENGINE_SEED adopts orphaned chunks"
+        );
+        assert_eq!(fs::read_to_string(directory.join("seed")).unwrap(), "7\n");
         fs::remove_dir_all(directory).unwrap();
     }
 

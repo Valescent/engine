@@ -8,6 +8,12 @@
 **Supersedes:** None  
 **Scope:** The profiler used to measure CPU and GPU time during development. Frame-graph tooling (RenderDoc, Nsight, PIX), microbenchmarking, and production telemetry are out of scope and may use other tools.
 
+**Amendment (2026-11-19):** `tracy` is now a default Cargo feature so debug builds profile without
+a flag. Automatic capture and the profiled allocator are gated on `debug_assertions`, traces are
+written to the git-ignored `reports/tracy/`, and every CI cargo command passes
+`--no-default-features`. Statements below describing profiling as opt-in apply to release and CI
+builds.
+
 ---
 
 ## Summary
@@ -170,8 +176,8 @@ This decision has real weaknesses. I am recording them here rather than omitting
 | Missing spans leave a hot path unexplained. | Instrument stable engine boundaries first; review instrumentation when a frame report has an unexplained gap; keep a sampling profiler available for discovery. |
 | Instrumentation overhead distorts the measurement. | Keep per-frame span counts bounded; compare against a profiling-disabled baseline; avoid spans inside per-voxel loops. |
 | GPU timestamps unavailable on a target. | Query adapter features at startup; fall back to CPU-only with a warning; do not report invalid GPU data. |
-| The profiler is accidentally enabled in a release build. | Keep the client behind an opt-in feature; never enable it in default features; assert in release builds that the feature is off. |
-| Tracing data leaks onto the network or the machine. | Enable `only-localhost`, disable broadcast, keep the client feature off by default, and profile only on trusted networks. |
+| The profiler is accidentally enabled in a release build. | Cargo has no profile-conditional features, so `tracy` is on for release too; capture and the profiled allocator are gated on `debug_assertions`, and CI/release builds pass `--no-default-features`. |
+| Tracing data leaks onto the network or the machine. | Enable `only-localhost`, disable broadcast, gate automatic capture on debug builds, write traces only to the git-ignored `reports/`, and profile only on trusted networks. |
 | Profiling builds break because of the C++ toolchain. | Treat profiling as a local developer build; do not gate CI on it; document the toolchain requirement. |
 | Too many zones make the timeline unreadable. | Use a consistent, small set of named scopes; nest rather than repeat; keep plot count deliberate. |
 

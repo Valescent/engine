@@ -18,6 +18,8 @@ One file per decision. Each record states the context, the decision, the alterna
 | [0012](0012-fastnoise-lite-and-opensimplex2.md) | fastnoise-lite with OpenSimplex2 | Accepted |
 | [0013](0013-player-centred-chunk-streaming.md) | Finite player-centred chunk streaming | Accepted |
 | [0014](0014-seed-native-lod-hierarchy.md) | Seed-native multi-level LOD sections | Accepted |
+| [0015](0015-texture-references-are-presentation.md) | Per-face texture references are presentation-only | Accepted |
+| [0016](0016-block-texture-mipmap-policy.md) | Block texture mipmap and sampling policy | Accepted |
 
 ## Conventions
 

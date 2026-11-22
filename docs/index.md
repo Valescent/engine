@@ -5,7 +5,7 @@
 
 Valescent Engine is a voxel engine written in Rust. Seven milestones are shipped - a voxel scene, a fly camera, chunked meshes, a playable world, a scaled renderer, an atmospheric one, and a procedurally generated one - and every step after that is written down before it is built.
 
-This is **pre-alpha**. The current world is a walkable, editable, procedurally generated set of 32×32×32 chunks with greedy meshing, three LODs, frustum culling, seed-native streaming, voxel lighting with baked AO, fog and water, worker-thread remeshing, procedural block textures, swept collision, and `VCHK` saves. The v0.0.8 scale pass is implemented and in acceptance.
+This is **pre-alpha**. The current world is a walkable, editable, procedurally generated set of 32×32×32 chunks with greedy meshing, three LODs, frustum culling, seed-native streaming, voxel lighting with baked AO, fog and water, worker-thread remeshing, procedural block textures, swept collision, and `VCHK` saves. The v0.0.8 scale pass is implemented and in acceptance. The spec-driven v1 terrain stack runs as an opt-in demo with LOD1, tile streaming, and its own save format ([Terrain v1 runtime](dev/terrain-v1.md)).
 
 <div class="hero-actions">
 

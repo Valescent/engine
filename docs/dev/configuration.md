@@ -26,10 +26,13 @@ environment variables.
 | Variable | Read by | Effect |
 |---|---|---|
 | `RUST_LOG` | Engine (`tracing-subscriber` `EnvFilter`) | Sets the log filter. Unset or invalid falls back to `info`. Examples: `engine=debug`, `engine=debug,wgpu=warn`. |
-| `ENGINE_STRESS_SCENE` | Engine (`run`) | `1` builds the deterministic 8x8 stress scene in memory and disables world load and save. Any other value or unset uses `world/`. |
+| `ENGINE_STRESS_SCENE` | Engine (`run`) | `1` builds the deterministic 8x8 stress scene in memory and disables legacy world load and save. Any other value or unset uses `world/`. |
+| `TERRAIN_DEMO` | Engine (`run`) | `1` builds the v1 terrain patch instead of the legacy scene. It saves to `world/terrain-demo/`; see [Terrain v1 runtime](terrain-v1.md). |
+| `TRACY_CAPTURE_SECONDS` | `engine` binary (debug) | Seconds per automatic capture; default `30`. `0` keeps profiling on without capturing. |
+| `TRACY_CAPTURE` | `engine` binary (debug) | Absolute path to `tracy-capture`; checked before `PATH` and `%TEMP%\tracy`. |
 | `ENGINE_NO_VSYNC` | Engine (`App::resumed`) | `1` starts the surface with vsync off, for benchmark runs. `V` still toggles it at runtime. |
 | `ENGINE_MESH_POOL` | Engine (`mesher::create_pool`) | `rayon` uses the rayon mesh pool when built with the `rayon-pool` feature. Unset, or any other value, uses micropool. |
-| `ENGINE_SEED` | Engine (`run`) | A `u64` chooses the seed when `world/seed` is being created. An existing `world/seed` wins. Unset uses OS entropy for a new world. |
+| `ENGINE_SEED` | Engine (`run`) | A `u64` chooses the seed when `world/seed` is being created. An existing `world/seed` wins. With saved chunks but no seed, it adopts the chunks as a salvage run. Unset uses OS entropy for a new world. |
 | `ENGINE_HEADLESS` | Engine (`run`) | `1` runs a windowless fixed-step benchmark instead of opening a window. Prints one `HEADLESS` summary line to stdout. |
 | `ENGINE_HEADLESS_FRAMES` | Engine (`headless`) | Measured frames for a headless run; default `600`. |
 | `ENGINE_HEADLESS_SPEED` | Engine (`headless`) | Camera speed in metres per second for a headless run; default `0` (standing). `32` triggers streaming and unloads. |
@@ -39,7 +42,8 @@ See [Testing](testing.md) for manual-run examples, [Setup](setup.md) for backend
 [Debugging](debugging.md) for log workflows and the planned log file.
 
 The stress scene is selected with `ENGINE_STRESS_SCENE=1`; it never reads or writes `world/chunks/`.
-See the [v0.0.5 spec](../specs/v0.0.5.md).
+See the [v0.0.5 spec](../specs/v0.0.5.md). `TERRAIN_DEMO=1` is independent: it reads and writes
+`world/terrain-demo/` even when the legacy stress scene is active.
 
 #### Compile-time constants
 

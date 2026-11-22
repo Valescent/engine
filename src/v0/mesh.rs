@@ -13,6 +13,10 @@ use crate::light::LightField;
 use crate::voxel::Vertex;
 use crate::world::{CHUNK_SIZE, ChunkCoord, World};
 
+// The snapshot lives beside `Chunk`; the re-export keeps `mesh::ChunkSnapshot`
+// paths working for the mesher and the startup path.
+pub(crate) use crate::world::ChunkSnapshot;
+
 /// Distance in chunk units at or below which a chunk renders at LOD0.
 pub(crate) const LOD0_DISTANCE: f32 = 4.0;
 
@@ -91,33 +95,6 @@ pub(crate) fn select_lod(current: Option<Lod>, distance: f32) -> Lod {
             } else {
                 Lod::Lod2
             }
-        }
-    }
-}
-
-/// Immutable full-resolution copy of one chunk's blocks.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct ChunkSnapshot {
-    blocks: Box<[Block]>,
-}
-
-impl ChunkSnapshot {
-    /// Copies a chunk out of the world. A missing chunk becomes all air.
-    pub(crate) fn new(world: &World, chunk: ChunkCoord) -> Self {
-        let cells = usize::try_from(CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE).expect("grid fits");
-        let blocks = world.chunk(chunk).map_or_else(
-            || vec![Block::Air; cells].into_boxed_slice(),
-            |data| data.blocks().to_vec().into_boxed_slice(),
-        );
-        Self { blocks }
-    }
-
-    /// Returns the block at a chunk-local coordinate, or air outside the chunk.
-    pub(crate) fn block(&self, local: IVec3) -> Block {
-        if in_chunk(local) {
-            self.blocks[index(local)]
-        } else {
-            Block::Air
         }
     }
 }
@@ -575,10 +552,6 @@ fn in_chunk(local: IVec3) -> bool {
 
 fn in_grid(local: IVec3, size: i32) -> bool {
     local.cmpge(IVec3::ZERO).all() && local.cmplt(IVec3::splat(size)).all()
-}
-
-fn index(local: IVec3) -> usize {
-    index_in(local, CHUNK_SIZE)
 }
 
 fn index_in(local: IVec3, size: i32) -> usize {

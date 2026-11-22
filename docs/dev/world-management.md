@@ -4,6 +4,9 @@ The engine saves chunk data under `world/chunks/` on chunk unload, on clean exit
 This page is the operating procedure for the `VCHK` v3 save path, `world/seed`, and modified-only
 saves.
 
+> The v1 terrain demo does **not** use `VCHK`. It saves under `world/terrain-demo/`; see
+> [Terrain v1 runtime](terrain-v1.md) and [Save format](save-format.md).
+
 | Area | Status |
 |---|---|
 | `world/` save directory | Current (v0.0.4) |
@@ -98,7 +101,8 @@ engine is stopped.
 Copy the whole `world/` directory, not just `world/chunks/`.
 
 - In v0.0.7, `world/seed` is required to regenerate unmodified chunks. A chunks-only backup is
-  incomplete; a missing seed with saved chunks is a typed error, not a new world.
+  incomplete; a missing seed with saved chunks is a typed error unless the run supplies
+  `ENGINE_SEED`, which adopts the chunks as a salvage operation.
 - In v0.0.4-v0.0.6, there is no seed file; `world/chunks/` is the whole world.
 - Copying the whole directory also preserves any future world-level metadata.
 
@@ -332,15 +336,49 @@ quarantine the file.
 optional trailing newline, with no other bytes.
 
 - Missing seed with `.vchk` files: restore `world/seed` from backup. Do not delete the chunks to
-  make the error disappear unless you intend to lose the world.
+  make the error disappear unless you intend to lose the world. If the chunks are a v0.0.4-v0.0.6
+  demo save, there is no seed to restore; see [Pre-v0.0.7 demo chunks](#pre-v007-demo-chunks).
 - Malformed seed: restore it from backup. A text editor may add a BOM, spaces, or a Windows CRLF;
   write exactly the decimal digits and at most one `\n`.
 - If the original seed is lost and there is no backup, it cannot be derived from the chunk files.
   Restoring a full backup is the only way to recover the same world. Creating a new seed is a
   salvage operation: edited chunks still load, but unmodified terrain is generated from the new
-  seed and may not match the old world.
+  seed and may not match the old world. Start once with `ENGINE_SEED=<u64>` to adopt the existing
+  chunks and write `world/seed`; without `ENGINE_SEED` the loader still refuses to guess.
 - Do not delete `world/seed` alone while keeping chunks. That is the missing-seed error, not a
   reset.
+
+### Pre-v0.0.7 demo chunks
+
+v0.0.4-v0.0.6 opened a hand-built demo scene, not a generated world: an 8x8 dirt platform with a
+grass top layer at `y = 0..1`, three stone blocks, and a small tree, centered on the spawn at
+`(32, 32)`. Saving wrote its four `y = 0` chunks and no seed file, because there was no
+generation to repeat.
+
+Such a save has a clear signature:
+
+- No `world/seed`, because those builds did not have one.
+- All `.vchk` coordinates are `y = 0` around the spawn.
+- Files are a few hundred bytes. The records are the platform, not an edit against generated
+  terrain (35, 32, 32 and 21 blocks in the copy this engine shipped with).
+
+Nothing was lost and nothing can be recovered: the platform has no seed. Supplying one with
+`ENGINE_SEED` writes `world/seed` and logs a warning, and the four complete chunks load as a
+floating platform inside otherwise generated terrain. Retire the demo save instead:
+
+```powershell
+Move-Item -LiteralPath .\world\chunks -Destination .\world\legacy-demo\chunks
+Move-Item -LiteralPath .\world\seed -Destination .\world\legacy-demo\seed
+```
+
+```sh
+mkdir -p world/legacy-demo
+mv world/chunks world/legacy-demo/chunks
+mv world/seed world/legacy-demo/seed
+```
+
+With no seed and no chunks, the next launch creates a new seed and generates a procedural world.
+Keep the moved files until you are sure you do not want the platform back.
 
 ### Structurally valid but wrong files
 
@@ -465,7 +503,8 @@ backups, restores, or resets. Unset it to use the normal world.
   a compatible backup.
 - A pre-v0.0.7 world has no seed. v0.0.7 requires one when chunks exist. There is no automatic
   migration; adding a seed changes unmodified terrain. Keep the old build if exact preservation
-  matters.
+  matters. v1 and v2 files came from the hand-built demo scene, which has no seed at all; see
+  [Pre-v0.0.7 demo chunks](#pre-v007-demo-chunks).
 - Back up before an upgrade and keep the pre-upgrade backup until the new build has loaded and
   saved the world successfully.
 

@@ -11,11 +11,10 @@ use std::time::Duration;
 use glam::IVec3;
 
 use crate::block::Block;
-use crate::mesh::ChunkSnapshot;
-use crate::world::{CHUNK_COLUMN, CHUNK_SIZE, ChunkCoord, World};
-
-/// Maximum light level.
-pub(crate) const MAX_LIGHT: u8 = 15;
+use crate::world::{
+    CHUNK_COLUMN, CHUNK_SIZE, ChunkCoord, ChunkSnapshot, PackedLight, World, field_index,
+};
+pub(crate) use crate::world::{LightField, MAX_LIGHT};
 
 /// Block light emitted by a `Lamp`.
 pub(crate) const LAMP_LIGHT: u8 = 14;
@@ -25,9 +24,6 @@ const SIZE: i32 = CHUNK_SIZE;
 
 /// Cells per axis of the 3x3x3 propagation grid.
 const GRID: i32 = SIZE * 3;
-
-/// Cells per axis of the stored field: the chunk plus one border cell.
-const PADDED: i32 = CHUNK_SIZE + 2;
 
 const NEIGHBOURS: [IVec3; 6] = [
     IVec3::X,
@@ -80,71 +76,6 @@ pub(crate) struct LightResult {
     pub(crate) revision: u64,
     pub(crate) light: LightField,
     pub(crate) elapsed: Duration,
-}
-
-/// Sky and block light for a chunk plus one border cell.
-///
-/// Cells are indexed by chunk-local coordinates in `-1..=32` and stored as one
-/// nibble per cell; the border is what meshing samples across chunk edges.
-#[derive(Clone, Debug)]
-pub(crate) struct LightField {
-    sky: PackedLight,
-    block: PackedLight,
-}
-
-impl LightField {
-    /// Bytes held by the two packed planes.
-    pub(crate) fn resident_bytes(&self) -> usize {
-        self.sky.resident_bytes() + self.block.resident_bytes()
-    }
-
-    /// Sky light at a local coordinate in `-1..=32`.
-    pub(crate) fn sky(&self, local: IVec3) -> u8 {
-        self.sky.get(field_index(local))
-    }
-
-    /// Block light at a local coordinate in `-1..=32`.
-    pub(crate) fn block(&self, local: IVec3) -> u8 {
-        self.block.get(field_index(local))
-    }
-}
-
-/// A plane of four-bit light values, two cells per byte.
-#[derive(Clone, Debug, Default)]
-struct PackedLight {
-    cells: Box<[u8]>,
-}
-
-impl PackedLight {
-    fn new() -> Self {
-        let cells = usize::try_from(PADDED * PADDED * PADDED).expect("light field fits in usize");
-        Self {
-            cells: vec![0; cells.div_ceil(2)].into_boxed_slice(),
-        }
-    }
-
-    fn resident_bytes(&self) -> usize {
-        self.cells.len()
-    }
-
-    fn get(&self, index: usize) -> u8 {
-        let byte = self.cells[index / 2];
-        if index.is_multiple_of(2) {
-            byte & 0x0F
-        } else {
-            byte >> 4
-        }
-    }
-
-    fn set(&mut self, index: usize, value: u8) {
-        debug_assert!(value <= MAX_LIGHT);
-        let slot = &mut self.cells[index / 2];
-        if index.is_multiple_of(2) {
-            *slot = (*slot & 0xF0) | value;
-        } else {
-            *slot = (*slot & 0x0F) | (value << 4);
-        }
-    }
 }
 
 /// Computes light for one chunk from an immutable snapshot.
@@ -293,18 +224,31 @@ fn grid_index(cell: IVec3) -> usize {
     (x * stride + y) * stride + z
 }
 
-fn field_index(local: IVec3) -> usize {
-    let padded = local + IVec3::ONE;
-    let stride = usize::try_from(PADDED).expect("field size fits");
-    let x = usize::try_from(padded.x).expect("field coordinate fits");
-    let y = usize::try_from(padded.y).expect("field coordinate fits");
-    let z = usize::try_from(padded.z).expect("field coordinate fits");
-    (x * stride + y) * stride + z
+/// Recomputes sky and block light for every stored chunk.
+///
+/// Light is derived state, so this runs after loading and whenever a world is
+/// built in memory. The method lives beside the light algorithm; the world only
+/// owns the cache.
+impl World {
+    pub(crate) fn relight(&mut self) {
+        let fields: Vec<(ChunkCoord, LightField)> = self
+            .iter_chunks()
+            .map(|(chunk, _)| {
+                let snapshot = LightSnapshot::new(self, chunk);
+                (chunk, compute(&snapshot, chunk))
+            })
+            .collect();
+        self.clear_light_fields();
+        for (chunk, field) in fields {
+            self.set_light_field(chunk, field);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::PADDED;
 
     fn world_with(blocks: &[(IVec3, Block)]) -> World {
         let mut world = World::default();
