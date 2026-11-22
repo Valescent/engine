@@ -272,3 +272,9 @@ generation and over a saved section, prefix trimming, the three `world-repair` o
 header upgrading to version 2, migration records/resume, section canonicalisation, and a demo edit
 round-tripping through the journal and a section file. Corruption fuzzing covers section records,
 headers, and journal truncation at every byte. Migration reports and a repeated crash/save/reopen loop are covered; migration fixtures for older record formats are not.
+
+The `VPLY` player sidecar is implemented in `src/game/save.rs`: magic, version, seed, CRC32,
+little-endian payload, write-temp and rename, and quarantine on a bad magic, version, or checksum.
+Tests cover a full round trip, a corrupt payload, a bad magic, an unknown version, the file-system
+path, and a seed mismatch. The inventory slot records are covered by the scripted gather, place,
+save, and reopen test in `src/game/state.rs`.

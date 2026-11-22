@@ -366,11 +366,11 @@ See [v0.0.10 scope](dev/v0.0.10-scope.md) for the deliverables and acceptance cr
 ### Milestones
 
 #### 1. Interaction and items (`0.0.10.1`)
-- [ ] Hold-to-break with block hardness, tool classes, tier multipliers, and a minimum-tier rule
-- [ ] Stable item names, stacks, durability, inventory, hotbar, and offhand
-- [ ] Data-driven block drops and item entities with gravity, pickup, merging, and despawn
-- [ ] Placement rules for occupied cells, the player box, support, and replaceable blocks
-- [ ] Versioned player save for position, view, inventory, hotbar, and dropped items
+- [x] Hold-to-break with block hardness, tool classes, tier multipliers, and a minimum-tier rule
+- [x] Stable item names, stacks, durability, inventory, hotbar, and offhand
+- [x] Data-driven block drops and item entities with gravity, pickup, merging, and despawn
+- [x] Placement rules for occupied cells, the player box, support, and replaceable blocks
+- [x] Versioned player save for position, view, inventory, hotbar, and dropped items
 
 #### 2. UI and crafting (`0.0.10.2`, `0.0.10.3`)
 - [ ] egui HUD, inventory, crafting, pause, and death screens
