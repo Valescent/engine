@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -16,8 +17,50 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  changes:
+    name: Changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+      cargo: ${{ steps.filter.outputs.cargo }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Docs-only changes skip the Rust jobs. The required check names still
+      # report as skipped, which branch protection treats as successful.
+      - name: Detect changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            code:
+              - '**/*.rs'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'clippy.toml'
+              - 'rust-toolchain.toml'
+              - 'deny.toml'
+              - 'crates/**'
+              - 'tests/**'
+              - 'benches/**'
+              - 'scripts/**'
+              - 'build.rs'
+              - '.cargo/**'
+              - '.github/workflows/**'
+            cargo:
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'crates/**/Cargo.toml'
+              - 'deny.toml'
+              - 'rust-toolchain.toml'
+
   test:
     name: Test (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -57,6 +100,8 @@ jobs:
 
   dependencies:
     name: Dependencies
+    needs: changes
+    if: needs.changes.outputs.cargo == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Check out
@@ -77,6 +122,8 @@ jobs:
 
   terrain:
     name: Terrain gates
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Check out
