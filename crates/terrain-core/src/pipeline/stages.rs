@@ -24,7 +24,7 @@ pub const AIR: BlockId = 0;
 ///
 /// Generation never reads this constant: [`TerrainMaterials::water`] is the
 /// authoritative handle.
-pub const WATER: BlockId = 16;
+pub const WATER: BlockId = 18;
 
 /// The runtime block ids the column pipeline emits, resolved once from a
 /// [`ContentPack`] by stable name (`§2.6`, `§0.1`).

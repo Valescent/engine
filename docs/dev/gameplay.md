@@ -1,7 +1,7 @@
 # Gameplay core
 
-**Status:** `0.0.10.1` implemented. Inventory and crafting UI, survival, audio, and the full
-acceptance pass are later 0.0.10 checkpoints.
+**Status:** `0.0.10.1` items and save, `0.0.10.2` UI, and `0.0.10.3` crafting Phase 1 are
+implemented. Survival, audio, and the full acceptance pass are later 0.0.10 checkpoints.
 
 **Scope:** The headless gameplay state and the v1 demo wiring: items, inventory, tools, breaking,
 drops, item entities, the fixed tick, and the player save. It does not cover the UI layer, recipes,
@@ -85,7 +85,7 @@ The registry is built from the content pack plus the built-in tools and material
 
 | Group | Names | Max stack | Kind |
 |---|---|---|---|
-| Block items | `core:bedrock`, `core:boulder`, `core:clay`, `core:dirt`, `core:grass`, `core:gravel`, `core:ice`, `core:lamp`, `core:leaves`, `core:ore_copper`, `core:ore_iron`, `core:plant`, `core:sand`, `core:snow`, `core:stone`, `core:wood` | 64 | Block |
+| Block items | `core:bedrock`, `core:boulder`, `core:clay`, `core:dirt`, `core:grass`, `core:gravel`, `core:ice`, `core:lamp`, `core:leaves`, `core:ore_copper`, `core:ore_iron`, `core:planks`, `core:plant`, `core:sand`, `core:snow`, `core:stone`, `core:torch`, `core:wood`, `core:workbench` | 64 | Block |
 | Tools | `core:wooden_pickaxe`, `core:wooden_axe`, `core:wooden_shovel`, `core:wooden_sword`, `core:stone_pickaxe`, `core:stone_axe`, `core:stone_shovel`, `core:stone_sword`, `core:iron_pickaxe` | 1 | Tool |
 | Materials | `core:stick` | 64 | Material |
 | Food | `core:apple` | 64 | Food, 4 nutrition |
@@ -94,9 +94,9 @@ The registry is built from the content pack plus the built-in tools and material
 non-air, non-liquid content-pack record becomes a block item automatically, so a future record
 does not need a second item table entry.
 
-`core:planks`, `core:torch`, `core:workbench`, and `core:furnace` are referenced by the break rules
-and are reserved for the crafting checkpoint. They are not in the current content pack, so they
-cannot be obtained or placed yet.
+`core:planks`, `core:torch`, and `core:workbench` are in the content pack as of `0.0.10.3`.
+`core:furnace` remains referenced by the break rules but is reserved for Phase 2 and is not in the
+pack, so it cannot be obtained or placed yet.
 
 ### Stacks and durability
 
@@ -136,7 +136,7 @@ A partial add is not an error: the caller receives the leftover and may leave it
 
 ## Crafting
 
-**Status:** Phase 1 is scoped for `0.0.10.3`; the full design is in
+**Status:** Phase 1 is implemented in `0.0.10.3`; the full design is in
 [the crafting system](../design/crafting-system.md).
 
 Crafting uses one grammar for every recipe:
@@ -153,7 +153,8 @@ station tiers, costs, and discovery without reshaping every recipe.
   make a 3x3 recipe. Tagged recipes match a multiset of item tags. Hybrid patterns are deferred.
 - **Tags.** Phase 1 has `wood`, `planks`, `stone`, and `fuel`.
 - **Surfaces.** The inventory gains a 2x2 grid and output slot. A placed `core:workbench` opens a
-  3x3 screen. Closing either screen returns the grid and cursor to the inventory.
+  3x3 screen. Closing either screen returns the grid and cursor to the inventory; the grid is
+  transient and is not in the `VPLY` save.
 - **Recipe book.** Every Phase 1 recipe is known at start. The book shows ingredients, station,
   tier, discipline, and a craftable/missing state; it has search and one-click craft. It does not
   save glimpsed or unknown recipes yet.
@@ -343,9 +344,9 @@ The target must be a resident, solid cell; an unloaded column cannot be broken.
 
 ### Starting kit
 
-Until crafting lands in `0.0.10.3`, `GameState::new` puts one wooden pickaxe in the first hotbar
-slot. It is the only way to obtain stone and ores. The kit is removed when the crafting chain
-exists.
+`GameState::new` starts with an empty inventory. The wood-to-stone chain is the starting path:
+punch a tree, craft planks and sticks in the 2x2 grid, place a workbench, craft the first wooden
+pickaxe, then mine stone for the stone tools.
 
 ### Hotbar
 
@@ -426,7 +427,7 @@ Gameplay tests live beside the modules:
 | `drops` | Stone with a pickaxe, stone by hand, every drop resolves to a block item, unknown block. |
 | `entities` | Fall and land, pickup, full inventory, despawn, record round trip, spawn merging, distant/different drops. |
 | `save` | CRC check value, full round trip, corrupt payload, bad magic, unknown version, oversized entity count, file-system write/load/quarantine. |
-| `state` | Starting kit, fixed-tick break, cancel/reset, save/load, seed mismatch, scripted gather-use-save-reopen. |
+| `state` | Empty starting inventory, fixed-tick break, cancel/reset, save/load, seed mismatch, scripted gather-use-save-reopen. |
 
 The scripted loop in `state` covers the release gate's headless half: spawn a stone drop from the
 current tool, pick it up, select the hotbar slot, consume one placeable item (the state-side half
@@ -451,10 +452,10 @@ quit/reopen persistence. The full manual pass belongs to `0.0.10.6`.
 | Gameplay is wired to the demo only; the legacy path keeps instant break | 0.0.11 makes the demo the default |
 | Player movement is frame-driven | Render interpolation lands |
 | Tool class and tier are game tables, not content records | The authored pack lands in 0.0.12 |
-| Starting kit grants a wooden pickaxe | Crafting lands in 0.0.10.3 |
+| No starting kit; the player punches wood to begin | Crafting Phase 1 is implemented in `0.0.10.3` |
 | Ground merging happens on spawn and pickup, not continuously | The 0.0.10.2 UI needs merged ground stacks |
 | Placeholder item cubes use flat colours | The 0.0.11 art pipeline lands |
-| No crafting, health, stamina, or audio screens | `0.0.10.3`-`0.0.10.5` |
+| No crafting depth (quality, rarity, affixes, disciplines, discovery, queues, automation) | The crafting Phase 2+ releases |
 | No autosave | `0.0.10.6` acceptance decides the cadence |
 | No hand or held-item rendering | The 0.0.11 art pass |
 
@@ -462,9 +463,9 @@ quit/reopen persistence. The full manual pass belongs to `0.0.10.6`.
 
 - **`0.0.10.2`** added egui, the HUD, the inventory, drag and drop, shift-click, tooltips,
   keyboard navigation, and UI-first input routing.
-- **`0.0.10.3`** adds crafting Phase 1: the universal grammar, shaped/tagged recipes, the 2x2
+- **`0.0.10.3`** added crafting Phase 1: the universal grammar, shaped/tagged recipes, the 2x2
   inventory grid, 3x3 workbench, known recipe book, tags, salvage, and the wood-to-stone chain. It
-  adds `core:planks`, `core:workbench`, and `core:torch`; the furnace is Phase 2.
+  added `core:planks`, `core:workbench`, and `core:torch`; the furnace is Phase 2.
 - **`0.0.10.4`** adds health, stamina, fall damage, drowning hooks, death, and respawn.
 - **`0.0.10.5`** adds kira audio, the first sounds, settings, and keybinds.
 - **`0.0.10.6`** adds save migrations, the full acceptance run, docs, changelog, and the release.

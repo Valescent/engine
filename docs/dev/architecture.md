@@ -176,14 +176,16 @@ target, applies the completed edit through `DemoRuntime::edit`, spawns drops, pl
 loads or saves the player file. The renderer reads only the entity list and the break fraction.
 See [Gameplay core](gameplay.md) for the item table, break rules, save layout, and edge cases.
 
-`0.0.10.3` adds `game/recipe.rs`, `game/crafting.rs`, `ui/crafting.rs`, and `ui/workbench.rs` for
-the Phase 1 crafting system; the full grammar and later phases are in
+`0.0.10.3` implements crafting Phase 1 in `game/recipe/`, `game/crafting.rs`, and
+`ui/crafting.rs`; `ui/inventory.rs` hosts both the inventory and workbench layouts and the shared
+crafting panel. The full grammar and later phases are in
 [Crafting system](../design/crafting-system.md). The engine-facing architecture notes are in
 [Engine architecture notes](research/engine-architecture.md).
 
 ## Ownership
 
-- `App` owns the window handle, renderer, world, player, camera, sky clock, selected block, input state, mesh queue, worker pool, hierarchy selection and uploaded-section set, horizon bins, frame timing, one `Option<DemoRuntime>`, the cached content pack, the item registry, the `GameState` (inventory, item entities, break progress, and the fixed tick), and the egui context, winit adapter, and `UiState`.
+- `App` owns the window handle, renderer, world, player, camera, sky clock, selected block, input state, mesh queue, worker pool, hierarchy selection and uploaded-section set, horizon bins, frame timing, one `Option<DemoRuntime>`, the cached content pack, the item registry, the compiled recipe book, the `GameState` (inventory, item entities, break progress, and the fixed tick), and the egui context, winit adapter, and `UiState`.
+- `UiState` owns the open station, cursor stack, focused slot, transient crafting grid, recipe search and selection, and the last craft error. Closing returns the grid and cursor to the inventory.
 - `DemoRuntime` owns the v1 patch, column ring and workers, save worker, repair prompt, pending rebuild, and edit queue. It returns a `DemoFrame` instead of holding the renderer.
 - `Renderer` owns the `wgpu` instance, surface, device, queue, surface configuration, chunk and highlight pipelines, camera uniform, the quad-pool renderer, the per-chunk fallback buffers and origin uniforms, the block texture array, the depth attachment, and the egui textures, buffers, and color-only UI pass.
 - `Camera` owns only look state; it does not read the clock or input devices.

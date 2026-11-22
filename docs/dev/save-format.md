@@ -227,6 +227,10 @@ after the header's `migration_state` is cleared.
 The player save is a sidecar to the terrain store, not a section record. `TERRAIN_DEMO=1` writes
 `world/terrain-demo/player.dat`; the legacy world writes `world/player.dat`.
 
+The crafting grid and cursor stack are transient in Phase 1 and are not part of the `VPLY` payload.
+The UI returns them to the inventory on close, and the save path makes a best effort to return them
+before writing.
+
 The file is written on `Ctrl+S` and on window close. The terrain store owns block edits and its own
 journal; this file owns the player and dropped-item state. Stress scenes and headless runs skip it.
 

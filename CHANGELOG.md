@@ -14,11 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A full `VPLY` byte layout, validation order, writer policy, and versioning note in the [save format](docs/dev/save-format.md#player-save-vply).
 - An egui 0.37 HUD and UI-first event hook: a centre crosshair, nine-slot bottom hotbar with selected border, item icon, stack count, tool durability, and a targeted-block interaction prompt. The HUD is non-interactive and renders in a second color-only pass. See [the UI reference](docs/dev/ui.md).
 - The `0.0.10.2` inventory screen: `E` opens it, releases the cursor, and hides the HUD. It shows three rows of main slots, the hotbar, and the offhand; supports drag/drop, click, right-click, shift-click, keyboard focus with arrows and Enter, hover tooltips, and a held-stack cursor. `E`/`Escape`/the close button close it and recapture the cursor; a held stack is returned first and a full inventory keeps the screen open.
+- The `0.0.10.3` crafting Phase 1: the universal `station · tier · pattern · output · cost · unlock · discipline` grammar; twelve shaped and tagged recipes; 2x2 inventory and 3x3 workbench grids; a known-recipe book with search, ingredient totals, `Craft`, `Craft x10`, and `Salvage held`; a static salvage table; and the wood-to-stone tool chain. It adds `core:planks`, `core:workbench`, and `core:torch`; the torch is a light-emitting cross-quad.
 - The phased crafting design: the universal grammar, shaped/tagged/hybrid patterns, eight disciplines, stations and tiers, quality/rarity, discovery, recipe-book states, bulk/queue/automation, Phase 1 for `0.0.10.3`, and the proposed Phase 2-7 release mapping. See [the crafting system](docs/design/crafting-system.md).
 - An engine-architecture reference mapping the source design's storage, meshing, pooled rendering, and data-oriented tables to the current code, with the remaining optimization candidates. See [the engine architecture notes](docs/dev/research/engine-architecture.md).
 
 ### Changed
 
+- New runs start with an empty inventory. Crafting Phase 1 replaces the temporary starting wooden pickaxe with the wood-to-stone chain: punch a tree, make planks and sticks, place a workbench, and craft the first tools.
 - The 0.0.10 scope page and ADR-0018 (egui UI), ADR-0019 (kira audio), and ADR-0020 (minimal entity runtime) record the decisions for the rest of the release.
 - `egui`, `egui-wgpu`, and `egui-winit` 0.37 join the dependency set on the existing wgpu 30 and winit 0.30.13 stack, with default features off and default fonts on.
 

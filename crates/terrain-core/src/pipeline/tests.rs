@@ -751,14 +751,14 @@ fn column_and_section_digests_are_pinned() {
         write!(&mut rendered, "{byte:02x}").expect("writing to a string cannot fail");
     }
     assert_eq!(
-        rendered, "443479cf8e44ff1d36857a3e5176fda74c7411308d09fc9a259b4929a5a93403",
+        rendered, "ce1b27cf714b23a3917562573723513b96ca93188278f1c9d738a46a0559e0d0",
         "column (123, -45) digest changed"
     );
 
     let section = terrain.section(1, 4, 0).expect("the section generates");
     assert_eq!(
         section.content_hash(),
-        16_672_833_116_380_150_400,
+        7_992_660_242_972_054_931,
         "section (1, 4, 0) content hash changed"
     );
 }

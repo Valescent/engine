@@ -5,7 +5,7 @@
 
 Valescent Engine is a voxel engine written in Rust. Nine milestones are shipped through **v0.0.9 Far View** - a voxel scene, a fly camera, chunked meshes, a playable world, a scaled renderer, an atmospheric one, a procedurally generated one, packed light, and a kilometre-scale LOD hierarchy - and every step after that is written down before it is built.
 
-This is **pre-alpha**. The current world is a walkable, editable, procedurally generated set of 32x32x32 chunks with greedy meshing, three LODs, frustum culling, seed-native streaming, voxel lighting with baked AO, fog and water, worker-thread remeshing, procedural block textures, swept collision, and `VCHK` saves. The spec-driven v1 terrain stack runs as an opt-in demo with LOD1, tile streaming, and its own save format ([Terrain v1 runtime](dev/terrain-v1.md)). The 0.0.10 release is in progress: the first checkpoint adds hold-to-break, items, inventory, drops, and a versioned player save on that demo ([Gameplay core](dev/gameplay.md)).
+This is **pre-alpha**. The current world is a walkable, editable, procedurally generated set of 32x32x32 chunks with greedy meshing, three LODs, frustum culling, seed-native streaming, voxel lighting with baked AO, fog and water, worker-thread remeshing, procedural block textures, swept collision, and `VCHK` saves. The spec-driven v1 terrain stack runs as an opt-in demo with LOD1, tile streaming, and its own save format ([Terrain v1 runtime](dev/terrain-v1.md)). The 0.0.10 release is in progress: the first three checkpoints add hold-to-break, items, inventory, drops, a versioned player save, the HUD and inventory screens, and crafting Phase 1 on that demo ([Gameplay core](dev/gameplay.md)).
 
 <div class="hero-actions">
 
@@ -79,7 +79,7 @@ This is **pre-alpha**. The current world is a walkable, editable, procedurally g
 
 ### Basic mechanics
 
-The v1 terrain demo becomes a playable loop: hold-to-break with hardness and tool tiers, item drops and pickup, an inventory and hotbar, crafting, health and stamina, and a versioned player save. The items, HUD, and inventory are on `main`; crafting, survival, and audio follow.
+The v1 terrain demo becomes a playable loop: hold-to-break with hardness and tool tiers, item drops and pickup, an inventory and hotbar, crafting, health and stamina, and a versioned player save. The items, HUD, inventory, and crafting Phase 1 are on `main`; survival and audio follow.
 
 [Read the v0.0.10 scope](dev/v0.0.10-scope.md) · [Read the gameplay core](dev/gameplay.md)
 

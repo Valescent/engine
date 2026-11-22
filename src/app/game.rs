@@ -136,6 +136,15 @@ impl App {
         Some((name, record.hardness))
     }
 
+    /// Whether the targeted block is a placed workbench.
+    pub(super) fn targets_workbench(&self) -> bool {
+        let Some(hit) = self.target_hit() else {
+            return false;
+        };
+        self.target_block(hit.block)
+            .is_some_and(|(name, _)| name == "core:workbench")
+    }
+
     fn finish_break(&mut self, cell: IVec3) {
         let Some((name, _hardness)) = self.target_block(cell) else {
             return;
@@ -195,7 +204,7 @@ impl App {
             return;
         };
         let name = self.items.name(stack.item);
-        if name == "core:plant" && !demo.is_solid(cell - IVec3::Y) {
+        if (name == "core:plant" || name == "core:torch") && !demo.is_solid(cell - IVec3::Y) {
             return;
         }
         if needs_clear {

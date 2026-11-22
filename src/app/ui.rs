@@ -20,7 +20,19 @@ impl App {
         self.ui.open_inventory(self.game.inventory.selected_index());
     }
 
-    /// Closes the inventory, returning a held stack first.
+    /// Opens the workbench screen on the demo path.
+    pub(super) fn open_workbench(&mut self) {
+        if self.demo.is_none() || self.ui.inventory_open() {
+            return;
+        }
+        self.end_break();
+        self.release_cursor();
+        self.pressed.clear();
+        self.jump_requested = false;
+        self.ui.open_workbench(self.game.inventory.selected_index());
+    }
+
+    /// Closes the inventory or workbench, returning held and grid items first.
     pub(super) fn close_inventory(&mut self) {
         if let Some(held) = self.ui.take_held()
             && let Some(leftover) = self.game.inventory.add(held, &self.items)
@@ -28,8 +40,16 @@ impl App {
             self.ui.set_held(Some(leftover));
             return;
         }
+        if !self.ui.stow_crafting(&mut self.game.inventory, &self.items) {
+            return;
+        }
         self.ui.close_inventory();
         self.capture_cursor();
+    }
+
+    /// Best-effort return of transient UI items before a save or quit.
+    pub(super) fn stow_ui_items(&mut self) {
+        self.ui.stow_ui_items(&mut self.game.inventory, &self.items);
     }
 
     /// Forwards one window event to egui and reports whether gameplay must
@@ -67,9 +87,10 @@ impl App {
 
         let inventory = &mut self.game.inventory;
         let registry = &self.items;
+        let recipes = &self.recipes;
         let ui = &mut self.ui;
         let output = self.egui_ctx.run_pass(raw_input, |ctx| {
-            ui.draw(ctx, inventory, registry, target.as_deref());
+            ui.draw(ctx, inventory, registry, recipes, target.as_deref());
         });
 
         let egui::FullOutput {

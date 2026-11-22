@@ -1,6 +1,6 @@
 # Crafting system
 
-**Status:** Proposed. Phase 1 is scoped for `0.0.10.3`; Phases 2-7 are not scheduled.
+**Status:** Phase 1 is implemented in `0.0.10.3`. Phases 2-7 are proposed and not scheduled.
 
 **Source:** The project's internal Voxel RPG crafting design notes. This page is the engine-facing
 adaptation, not a verbatim copy. It separates the long-term RPG design from what the current
@@ -214,6 +214,9 @@ unknown silhouettes. Those arrive with a save version that also stores unlocked 
 6. Closing the screen returns the grid and cursor to the inventory. If the inventory is full, the
    screen stays open rather than deleting items.
 
+The crafting grid is transient in Phase 1. Closing the screen returns its items; the grid is not in
+the `VPLY` save, so the player save format stays unchanged.
+
 For a tagged recipe with counts, the matcher uses the total item count across the grid. The
 specific slot arrangement is irrelevant. For a shaped recipe, slot counts matter only as
 "occupied" unless the ingredient declares a count.
@@ -250,7 +253,8 @@ full three-state book arrive with discovery.
 
 ## 10. Phase 1 for `0.0.10.3`
 
-Phase 1 is the source's "Basic crafting" prototype, adapted to the current item/block set.
+Phase 1 is the source's "Basic crafting" prototype, adapted to the current item/block set. It is
+implemented in `0.0.10.3`.
 
 ### Recipe model
 
@@ -300,7 +304,7 @@ The source's Phase 1 includes salvage. Phase 1 should include a small static sal
 - a tool returns one material and one stick,
 - a workbench returns two planks,
 - a torch returns one stick,
-- a block returns its base material at a reduced rate.
+- raw world blocks are not salvageable in Phase 1; crafted blocks use their own return row.
 
 Salvage is a station action with no reverse-engineering and no affix recovery. If it makes Phase 1
 too large, it can become the first `0.0.10.3` follow-up without changing the recipe model.
@@ -322,7 +326,7 @@ The source's prototype order is:
 
 | Phase | Content | Current mapping |
 |---|---|---|
-| 1 | Workbench, 12 recipes, shaped/tagged, known recipe book, salvage | `0.0.10.3` |
+| 1 | Workbench, 12 recipes, shaped/tagged, known recipe book, salvage | `0.0.10.3` (implemented) |
 | 2 | Campfire, Furnace, Anvil; station tiers; material tags and quality inheritance | Post-0.0.19 crafting-depth release |
 | 3 | Experimentation, ruins, reverse-engineering | Post-0.0.19 crafting-depth release |
 | 4 | Eight disciplines with recipe pools and XP | Post-0.0.19 crafting-depth release |
@@ -347,12 +351,11 @@ Crafting belongs in the headless gameplay layer:
 
 | Path | Responsibility |
 |---|---|
-| `src/game/recipe.rs` | Grammar fields, patterns, tags, validation, matching, recipe book queries |
+| `src/game/recipe/` | Grammar fields, patterns, tags, validation, matching, recipe book queries |
 | `src/game/crafting.rs` | Grid, output preview, consumption, salvage, transactional direct craft |
 | `src/game/item.rs` | Item ids, stack limits, future instance ids |
 | `src/ui/crafting.rs` | Shared 2x2/3x3 grid, output slot, recipe list and details |
-| `src/ui/inventory.rs` | Adds the 2x2 grid and recipe panel |
-| `src/ui/workbench.rs` | 3x3 screen and workbench open/close |
+| `src/ui/inventory.rs` | Inventory and workbench screens, inventory slots, and the shared panel |
 | `crates/terrain-core/src/content/record.rs` | New block records for planks, workbench, torch |
 
 Headless tests should cover:
@@ -386,15 +389,22 @@ The source explicitly rejects:
 Phase 1 should stay small and legible. Twelve recipes, one station, and one tag table are enough
 to prove the grammar.
 
-## 14. Open decisions
+## 14. Phase 1 decisions
 
-- Item instances: defer quality/rarity until Phase 2, or add a side table now?
-- Furnace: Phase 2 station, or a nonfunctional Phase 1 block?
-- Salvage: include in `0.0.10.3` or make it the first follow-up?
-- Recipe data: in-code validated tables or an authored data file?
-- Recipe book: panel in the crafting screen or a separate `R` screen?
-- Torch fuel: `stick + fuel` tag, or add coal/charcoal and a real fuel chain?
-- Roadmap: new post-0.0.19 crafting releases, or a revised roadmap that inserts them?
+The Phase 1 scope was settled before implementation:
+
+- **Item instances:** deferred to Phase 2. Phase 1 keeps the current `ItemStack` and `VPLY`
+  version.
+- **Furnace:** a Phase 2 station. Phase 1 ships only the workbench and does not add a
+  nonfunctional furnace.
+- **Salvage:** included as the static table in Phase 1.
+- **Recipe data:** in-code validated tables for Phase 1; authored recipe data comes with the
+  content pipeline.
+- **Recipe book:** a panel in the shared crafting screen; the separate `R` screen arrives with
+  discovery.
+- **Torch fuel:** the provisional `stick + fuel` tag recipe; coal and charcoal are later.
+- **Release mapping:** Phases 2-7 use new post-`0.0.19` releases rather than reshaping the current
+  `0.0.10`-`0.0.19` ladder.
 
 See [the 0.0.10-0.0.19 plan](../dev/roadmap-0.0.10-0.0.19.md), [the v0.0.10 scope](../dev/v0.0.10-scope.md),
 and [the UI reference](../dev/ui.md) for the current commitments.

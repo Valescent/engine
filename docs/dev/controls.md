@@ -125,11 +125,11 @@ the v0.0.4 click-to-break behaviour until the demo becomes the default.
 
 ### Items and hotbar
 
-- The demo starts with one wooden pickaxe in slot 1 until crafting lands in `0.0.10.3`.
+- New demo runs start with an empty inventory. Punch wood to begin the crafting chain.
 - `1`-`9` select a hotbar slot. The HUD shows the nine slots, the item icon, stack count, and tool
   durability. The selected slot has a white border.
 - Pickup radius is `1.5 m`. A full inventory leaves the remainder on the ground.
-- There is no drop key, inventory screen, crafting, health, stamina, or audio yet.
+- There is no drop key, health, stamina, or audio yet.
 
 ## HUD (0.0.10.2, demo)
 
@@ -159,13 +159,16 @@ the v0.0.4 click-to-break behaviour until the demo becomes the default.
 - Hovering a slot shows its name, kind, count, and durability.
 - If the inventory is full, a held stack keeps the screen open rather than being destroyed.
 
-## Crafting (0.0.10.3, planned)
+## Crafting (0.0.10.3)
 
 - The inventory screen gains a 2x2 crafting grid and output slot.
 - Right-click a placed `core:workbench` opens the 3x3 workbench screen instead of placing a block.
+- Click a craft slot to pick up or place; right-click splits or places one; shift-click moves a
+  craft slot back to the inventory.
 - Click the output to craft one; shift-click to craft as many as the grid and inventory allow.
-- The known-recipe book is a panel with search and one-click craft; there is no separate recipe-book
-  key yet.
+- The known-recipe book is a panel with search, details, `Craft`, and `Craft x10`; there is no
+  separate recipe-book key yet. The search field owns the keyboard while focused.
+- `Salvage held` breaks one item from the cursor stack into its static returns.
 - `E`/`Escape`/the close button close the station and return the grid and cursor to the inventory.
 - Quality, rarity, disciplines, queues, and automation are not bound because they are not in
   Phase 1.

@@ -206,6 +206,7 @@ pub(crate) fn item_color(name: &str) -> [f32; 3] {
         "core:snow" | "core:ice" => [0.85, 0.92, 0.98],
         "core:water" => [0.20, 0.42, 0.75],
         "core:lamp" => [1.0, 0.85, 0.40],
+        "core:torch" => [1.0, 0.62, 0.18],
         "core:ore_copper" => [0.55, 0.45, 0.30],
         "core:ore_iron" => [0.70, 0.62, 0.55],
         "core:stick" => [0.62, 0.45, 0.25],
