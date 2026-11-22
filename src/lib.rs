@@ -5,17 +5,25 @@
 //! without a window.
 
 mod app;
+#[cfg(test)]
+mod bench;
 mod block;
 mod camera;
 mod config;
 mod demo;
 mod frustum;
 mod headless;
+mod hierarchy;
+mod horizon;
 mod metrics;
 mod overlay;
 mod player;
+mod pool;
+mod quad;
+mod quad_renderer;
 mod raycast;
 mod renderer;
+mod section;
 mod sky;
 mod startup;
 mod v0;
@@ -36,7 +44,7 @@ pub use v0::{generation, light, mesh, mesher, streaming, voxel, world};
 pub(crate) use terrain_core::{
     climate, content, curve, description, editlog, error, features, graph, hash, header, height,
     hydro, lattice, light2, lod, mesher2, metrics2, noise, padded, pipeline, residency, revisions,
-    save, section, strata, surface, volume, world_save,
+    save, section as terrain_section, strata, surface, volume, world_save,
 };
 
 /// The supported entry point for the headless terrain stack.

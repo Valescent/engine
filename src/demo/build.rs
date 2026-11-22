@@ -13,7 +13,7 @@ use glam::IVec3;
 use crate::description;
 use crate::light2;
 use crate::mesher2;
-use crate::section;
+use crate::terrain_section as section;
 
 use super::{COLUMN_SECTIONS, demo_light_table, demo_section};
 
@@ -176,7 +176,7 @@ mod tests {
     use crate::mesher2;
     use crate::padded;
     use crate::pipeline;
-    use crate::section;
+    use crate::terrain_section as section;
 
     use super::super::content::demo_materials;
     use super::super::lod::demo_coarse;

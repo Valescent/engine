@@ -2,7 +2,8 @@
 
 Tracy shows a live, per-frame CPU timeline with per-thread lanes. `wgpu-profiler` adds GPU timer
 queries to the same view, so a slow frame can be attributed to CPU work or GPU work instead of
-guessed at. [ADR-0006](../decisions/0006-tracy-for-profiling.md) selects this pair.
+guessed at. [ADR-0006](../decisions/0006-tracy-for-profiling.md) selects this pair. The GPU timing
+also works without Tracy: the default build reports it as `gpu_ms` in the frame log.
 
 > **Status: current; `tracy` is a default feature.** A debug build (`cargo run`, `cargo run --bin
 > engine`) starts the Tracy client and, if `tracy-capture` is available, automatically records a
@@ -19,7 +20,7 @@ guessed at. [ADR-0006](../decisions/0006-tracy-for-profiling.md) selects this pa
 | Automatic capture | Current; debug builds write `reports/tracy/run-<unix>.tracy` |
 | Timestamp-query device features | Requested only with `tracy`, intersected with adapter support |
 | Memory allocations | Current; `ProfiledAllocator` in `src/main.rs` |
-| Plots | Current; `frame_ms`, `gpu_ms`, `visible_chunks`, `draw_calls`, `visible_vertices`, `rebuild_ms`, `upload_ms`, `mesh_jobs`, `generated_columns`, `generation_ms`, `terrain_sections_uploaded` |
+| Plots | Current; `frame_ms`, `gpu_ms`, `visible_chunks`, `draw_calls`, `visible_vertices`, `geometry_bytes`, `visible_geometry_bytes`, `rebuild_ms`, `upload_ms`, `mesh_jobs`, `generated_columns`, `generation_ms`, `terrain_sections_uploaded` |
 | Frame-timing log | Current; see [Debugging](debugging.md#logging) |
 | `pool_sim` benchmark | Current; see [Benchmark results](benchmarks.md) |
 | Frame debuggers (RenderDoc, Nsight, PIX) | Complementary external tools; see ADR-0006 |
@@ -72,6 +73,8 @@ crate, `wgpu-profiler`, `profiling`, and GUI as one set and reconnect the GUI af
 
 ## Prerequisites
 
+The default build needs no profiling prerequisites. These apply only to the `tracy` feature:
+
 - A C++ compiler. `tracy-client-sys` compiles `TracyClient.cpp` with `cc`. On Windows, the
   **Desktop development with C++** workload from [Setup](setup.md#platform-prerequisites)
   supplies it; on Debian/Ubuntu `build-essential` does; on macOS the Xcode command-line tools
@@ -79,14 +82,16 @@ crate, `wgpu-profiler`, `profiling`, and GUI as one set and reconnect the GUI af
 - Tracy GUI 0.13.1. The Windows build is the `windows-0.13.1.zip` asset on the
   [v0.13.1 release](https://github.com/wolfpld/tracy/releases/tag/v0.13.1); it contains
   `tracy-profiler.exe`. The GUI is not vendored in this repository.
-- A local build. Profiling is not part of CI, the release workflow, or a shipped binary.
+- A local build. Tracy builds are not part of CI, the release workflow, or a shipped binary.
 - The first run may trigger a firewall prompt. Do not expose the port publicly.
 
 ## Cargo setup
 
-`wgpu` already depends on `profiling` without a backend, so keeping `profiling` as a normal
-dependency adds no new crate. The instrumented call sites then compile to no-ops when Tracy is
-off, instead of needing a `#[cfg(feature = "tracy")]` on every span.
+`wgpu-profiler` is a normal dependency, so the default build creates the GPU profiler and can
+report `gpu_ms` without a client. `wgpu` already depends on `profiling` without a backend, so
+keeping `profiling` as a normal dependency adds no new crate. The instrumented call sites then
+compile to no-ops when Tracy is off, instead of needing a `#[cfg(feature = "tracy")]` on every
+span.
 
 ```toml
 [features]
@@ -95,7 +100,7 @@ tracy = [
     "profiling/profile-with-tracy",
     "dep:tracy-client",
     "dep:tracy-client-sys",
-    "dep:wgpu-profiler",
+    "wgpu-profiler/tracy",
 ]
 
 [dependencies]
@@ -106,7 +111,7 @@ tracy-client = { version = "=0.18.4", optional = true, default-features = false,
     "only-localhost",
 ] }
 tracy-client-sys = { version = "=0.28.0", optional = true, default-features = false }
-wgpu-profiler = { version = "=0.28.0", optional = true, features = ["tracy"] }
+wgpu-profiler = { version = "=0.28.0" }
 ```
 
 `ondemand` starts collecting when the GUI connects, not at process start. `enable` is required;
@@ -118,10 +123,11 @@ internal calls such as `Queue::write_buffer_with` appear in the timeline.
 
 ## Start the client
 
-The client starts in `run()` and stays alive for the whole process. Start it before the GPU
-profiler and before the first instrumented call: a `profiling::scope!` with the Tracy backend
-panics if no client is running, and `new_with_tracy_client` returns
-`CreationError::TracyClientNotRunning`.
+The client starts in `run()` under the `tracy` feature and stays alive for the whole process.
+Start it before the GPU profiler and before the first instrumented call: a `profiling::scope!`
+with the Tracy backend panics if no client is running, and `new_with_tracy_client` returns
+`CreationError::TracyClientNotRunning`. The default build has no client and uses
+`GpuProfiler::new` instead.
 
 ```rust
 #[cfg(feature = "tracy")]
@@ -154,7 +160,6 @@ unsupported feature fails device creation. If `TIMESTAMP_QUERY` is missing, the 
 skipped and CPU spans still work.
 
 ```rust
-#[cfg(feature = "tracy")]
 fn timer_features(adapter: &wgpu::Adapter) -> wgpu::Features {
     let requested = wgpu_profiler::GpuProfiler::ALL_WGPU_TIMER_FEATURES & adapter.features();
     if requested.contains(wgpu::Features::TIMESTAMP_QUERY) {
@@ -165,22 +170,40 @@ fn timer_features(adapter: &wgpu::Adapter) -> wgpu::Features {
 }
 ```
 
+The renderer calls this unconditionally and ORs the result into the device's required features,
+so the default build requests the same timer features as the Tracy build.
+
 ## Create the GPU profiler
 
-The profiler is created after the device and queue exist. The creation call blocks once to read
-the initial GPU timestamp for Tracy's GPU context, so it belongs in startup, not the frame loop.
+The profiler is created after the device and queue exist. With `tracy`,
+`new_with_tracy_client` blocks once to read the initial GPU timestamp for Tracy's GPU context;
+without it, `GpuProfiler::new` creates the timer-query context with no client. Both belong in
+startup, not the frame loop.
 
 ```rust
+#[cfg(feature = "tracy")]
 let profiler = wgpu_profiler::GpuProfiler::new_with_tracy_client(
     wgpu_profiler::GpuProfilerSettings::default(),
     adapter.get_info().backend,
     &device,
     &queue,
 );
+#[cfg(not(feature = "tracy"))]
+let profiler = wgpu_profiler::GpuProfiler::new(
+    &device,
+    wgpu_profiler::GpuProfilerSettings::default(),
+);
 ```
 
 A failure logs a warning and disables GPU scopes; it never blocks startup. The default settings
 keep three profiler frames in flight.
+
+## Read GPU timing without Tracy
+
+The default build logs `gpu_ms` in the once-per-second frame log. It is the summed scene-pass
+timer-query duration for the last resolved frame, so it works without a window full of Tracy
+zones. A value that stays at zero means startup logged either `no timestamp-query support; GPU
+timing disabled` or `GPU timing disabled`; the rest of the frame log still works.
 
 ## Wire a frame
 
@@ -198,8 +221,8 @@ Order matters:
 error if a scope is still open or queries were not resolved; log it instead of ignoring it. GPU
 results lag the CPU by a few frames because the readback must complete. Call
 `process_finished_frame` every frame even if the result is unused; otherwise the pending-frame
-cap fills and newer frames are dropped. The returned per-scope times are in seconds and feed the
-`gpu_ms` plot.
+cap fills and newer frames are dropped. The returned per-scope times are in seconds; their sum is
+the `gpu_ms` value in the frame log and, with Tracy, the `gpu_ms` plot.
 
 ## CPU scopes
 
@@ -231,8 +254,9 @@ Rules:
 
 ## Plots
 
-`profiling` 1.0.18 has spans, thread names, and frame marks but no plot macro. `src/metrics.rs`
-wraps `tracy_client` directly and is a no-op without the feature:
+Plots are a Tracy-only view. `profiling` 1.0.18 has spans, thread names, and frame marks but no
+plot macro. `src/metrics.rs` wraps `tracy_client` directly and is a no-op without the feature;
+the `gpu_ms` value itself is still computed and logged in the default build:
 
 ```rust
 pub(crate) fn frame_ms(value: f64) {
@@ -245,7 +269,7 @@ pub(crate) fn frame_ms(value: f64) {
 | Plot | Source |
 |---|---|
 | `frame_ms` | Wall time between redraws |
-| `gpu_ms` | Summed GPU timer-query durations for the finished frame |
+| `gpu_ms` | Summed GPU timer-query durations for the finished frame; also in the frame log without Tracy |
 | `visible_chunks` | Frustum-culled chunks drawn this frame |
 | `draw_calls` | Chunk draws this frame |
 | `visible_vertices` | Vertices submitted this frame |

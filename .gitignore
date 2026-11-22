@@ -5,3 +5,6 @@
 /reports
 /world
 *.tracy
+
+/prototypes/*/target
+/prototypes/*/preview.ppm

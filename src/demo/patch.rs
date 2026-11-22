@@ -13,7 +13,7 @@ use crate::light2;
 use crate::mesher2;
 use crate::padded;
 use crate::player;
-use crate::section;
+use crate::terrain_section as section;
 
 #[cfg(test)]
 use super::build::{DemoEdit, demo_rebuild};

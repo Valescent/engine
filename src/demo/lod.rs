@@ -9,7 +9,7 @@ use crate::description;
 use crate::lod;
 use crate::mesher2;
 use crate::padded;
-use crate::section;
+use crate::terrain_section as section;
 
 use super::{COLUMN_SECTIONS, DemoSection, TERRAIN_DEMO_FINE_CUTOFF, TERRAIN_DEMO_LOD1_RADIUS};
 

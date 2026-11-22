@@ -16,7 +16,7 @@ use crate::error;
 use crate::pipeline;
 #[cfg(test)]
 use crate::residency;
-use crate::section;
+use crate::terrain_section as section;
 use crate::world_save;
 
 use super::COLUMN_SECTIONS;
@@ -475,7 +475,7 @@ mod tests {
     use crate::content;
     use crate::editlog;
     use crate::pipeline;
-    use crate::section;
+    use crate::terrain_section as section;
 
     use super::*;
 

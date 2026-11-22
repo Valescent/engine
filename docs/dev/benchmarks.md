@@ -630,6 +630,634 @@ Results:
 Notes:
 ```
 
+## 2026-11-19 far-view baseline (v0.0.9 slice 1)
+
+Machine and toolchain as above (Ryzen 5 7600, 6C/12T, RTX 4060, Windows 11 Home, `rustc 1.99.1`,
+release profile). No other work on the machine.
+
+### Mesh build
+
+```console
+cargo test --release --lib bench_mesh_build -- --ignored --nocapture
+```
+
+Each row meshes one 32^3 chunk of a 3x3 column patch with its light field: the seed 42 spawn
+surface, the spawn ground layer, a flat slab, and an all-air chunk that isolates the fixed scan
+cost. Thirty samples after two warmups. The table is the second run; the first was 25-40% slower,
+so treat the numbers as a range rather than precise constants.
+
+| Fixture | LOD0 | LOD1 | LOD2 | LOD0 quads | LOD0 indices |
+|---|---:|---:|---:|---:|---:|
+| Spawn surface | 0.81 ms | 0.25 ms | 0.07 ms | 2,005 | 12,030 |
+| Spawn ground | 1.39 ms | 0.45 ms | 0.12 ms | 2,273 | 13,638 |
+| Flat slab | 0.90 ms | 0.23 ms | 0.07 ms | 2 | 12 |
+| All air (scan only) | 0.33 ms | 0.15 ms | 0.05 ms | 0 | 0 |
+
+The water pass costs 0.36-0.51 ms per chunk and is built for every chunk, including 0.36 ms when it
+emits nothing.
+
+Reading it:
+
+- A real LOD0 surface chunk costs 0.8-1.4 ms, not the recorded 0.48 ms. That figure came from the
+  v0.0.5 stress scene, which has changed since; `bench_hot_paths` on the current scene gives
+  2.3 ms/chunk on the same machine.
+- About 0.33 ms of every LOD0 build is fixed scan cost: six faces x 32 slices x 32 x 32 cells,
+  independent of output. That is roughly 3 s of worker time for the 9,285 chunks at distance 32
+  before any geometry is emitted, and the water pass adds about 3.3 s more.
+- A surface chunk emits about 2,000 quads, ten times the 188 implied by the "11 KiB per chunk"
+  average. Near LOD0 chunks dominate geometry; coarse and underground chunks pull the average down.
+
+### Streaming baseline
+
+```console
+$env:ENGINE_HEADLESS = "1"; $env:ENGINE_HEADLESS_FRAMES = "120"; $env:ENGINE_SEED = "42"
+target\release\engine.exe
+```
+
+Fresh world in a temporary directory, `render_distance_chunks` set per run. Settle frames are
+counted at the 1 ms step.
+
+| Distance | Chunks | Blocks + light | Settle frames | Wall | Work p95 / max |
+|---:|---:|---:|---:|---:|---:|
+| 24 | 5,289 | 381.2 MB | 5,765 | 16.0 s | 2.9 / 3.9 ms |
+| 32 | 9,285 | 669.2 MB | 9,749 | 32.1 s | 3.2 / 19.1 ms |
+
+After four-bit block packing (same session, same world):
+
+| Distance | Chunks | Blocks + light | Settle frames | Wall | Work p95 / max |
+|---:|---:|---:|---:|---:|---:|
+| 24 | 5,289 | 294.5 MB | 5,861 | 15.8 s | 2.3 / 8.4 ms |
+| 32 | 9,285 | 517.1 MB | 9,936 | 34.8 s | 2.3 / 8.0 ms |
+
+`resident_bytes` is blocks plus light only. The drop is exactly 16 KiB per chunk: 86.6 MB at
+distance 24 and 152.1 MB at distance 32. Settle time is unchanged within noise.
+
+Meshing after packing measured 0.97 ms (spawn surface), 1.53 ms (spawn ground), and 0.42 ms
+(all-air scan) per LOD0 chunk, against 0.81, 1.39, and 0.33 before. The nibble decode costs about
+15-25% and runs on workers.
+
+The other half is light. A `LightField` stores one nibble per cell for sky and block light, and the
+block-light plane is now omitted when the 3x3x3 neighbourhood contains no lamp. Generated terrain
+places no lamps, so almost every chunk keeps only the sky plane, 19.2 KiB instead of 39 KiB:
+
+| Distance | Chunks | Blocks + light | Settle frames | Wall | Work p95 / max |
+|---:|---:|---:|---:|---:|---:|
+| 24 | 5,289 | 190.6 MB | 5,964 | 15.1 s | 2.0 / 2.8 ms |
+| 32 | 9,285 | 334.6 MB | 10,323 | 29.1 s | 2.6 / 4.4 ms |
+
+The sparsity is per neighbourhood, not per chunk: a lamp keeps the block plane for the 27 chunks
+around it, adding 19.2 KiB each. The distance-32 figure is under the 350 MB definition of done with
+no lamps placed, and a lamp costs about 0.15% of that budget (518 KiB across the 27 chunks).
+
+### Cheap wins after the baseline
+
+Three worker-side and renderer-side cleanups landed after the numbers above. None changes output.
+
+Mesher (`bench_mesh_build`):
+
+| Fixture | Before | After | Note |
+|---|---:|---:|---|
+| Water pass, dry chunk | 0.37-0.38 ms | 0.0 ms | no scan when the chunk has no water |
+| Surface LOD0 | 0.97 ms | 0.91 ms | mask allocation hoisted out of the slice loop |
+| Ground LOD0 | 1.53 ms | 1.49 ms | same |
+| All-air LOD0 | 0.42 ms | 0.38 ms | same |
+
+Headless (`ENGINE_HEADLESS=1`, 120 frames):
+
+| Distance | Settle frames | Wall | Work p95 |
+|---:|---:|---:|---:|
+| 24 before | 5,964 | 15.1 s | 2.04 ms |
+| 24 after | 5,145 | 12.2 s | 1.59 ms |
+| 32 before | 10,323 | 29.1 s | 2.60 ms |
+| 32 after | 8,717 | 24.4 s | 1.52 ms |
+
+Windowed:
+
+| Distance | Before | After | Draws | Geometry |
+|---:|---:|---:|---:|---:|
+| 24 | 2.24-2.39 ms | 2.34 ms | 1,934 | 89.4 MB |
+| 32 | 9.06 ms | 4.86-5.01 ms | 3,409-3,507 | 125.2 MB, 9,430 chunks |
+
+The distance-32 windowed run drifted (the player slid several metres), so it loaded 145 extra chunks
+and is not a perfectly static comparison; the frame time is still the settled figure for that run.
+One interaction with the cheaper traversal: the distance-24 frame is unchanged because draw
+submission dominates there, while distance 32 loses the duplicate BTreeMap walks and frustum tests.
+
+A single release run aborted with no output while streaming at distance 32; it did not reproduce in
+a debug build or in a later release run with the same configuration. Treat it as unresolved until it
+recurs. The same silent exit happened twice more in this session and then stopped; later runs with
+the same binary completed. It recurred again during the eight-upload run, ending that process after
+about six seconds. This is the top open risk for benchmarking and needs a crash handler or a device-loss
+diagnostic before the next long run.
+
+### Predictable CPU work
+
+Two structural changes make the main-thread work bounded and ordered rather than bursty:
+
+- `level_work` is a `BTreeSet<ChunkCoord>` drained under a 2 ms per-frame budget, so chunks are
+  processed in a stable order and the request phase cannot run long. A chunk leaves the set while its
+  light or mesh job is in flight and is re-inserted when the result is accepted, so the set is a queue
+  of actionable work instead of a set of blocked chunks.
+- Active-LOD selection moved from a per-frame scan of every loaded chunk (9,285 at distance 32) to the
+  upload of the chunk that just changed, and stale LOD pruning happens there.
+
+A `slow level request` debug line reports any single chunk that takes 2 ms or more; none appeared in
+the settled runs.
+
+| Metric | Before | After |
+|---|---:|---:|
+| Settled windowed frame, distance 32 | 4.86-5.01 ms | **4.30-4.35 ms** |
+| Settled windowed frame, distance 24 | 2.34 ms | 2.34 ms |
+| Headless wall, distance 24 | 12.2 s | **11.7 s** |
+| Headless wall, distance 32 | 24.4 s | **21.6 s** |
+| Headless work p95 / max, distance 24 | 1.59 / 2.46 ms | **1.36 / 1.53 ms** |
+| Headless work p95 / max, distance 32 | 1.52 / 2.08 ms | 1.47 / 2.54 ms |
+| `slow phases` logs, 79 s at distance 32 | present while streaming | **none** |
+
+The distance-32 maximum is noisy and slightly worse in this sample; the p95 and wall time both
+improved. Streaming to 9,285 chunks still takes about 70 s at 190-230 FPS, because generation and
+light throughput set the pace once requests are bounded.
+
+### Shared index buffer
+
+Every quad uses the same four-vertex, six-index pattern, so one static `u16` buffer replaces the
+per-chunk index buffers; a chunk draws `0..6 * quads` from it. Chunks above 65,535 vertices keep a
+per-chunk `u32` buffer.
+
+| Metric at distance 32 | Before | After |
+|---|---:|---:|
+| Resident geometry | 125.9 MB | **100.9 MB** |
+| Visible geometry | 37.6 MB | **30.1 MB** |
+| Draw calls | 3,409 | 3,409 |
+
+The run overlapped prototype compilation, so its frame sample (4.45-6.00 ms) is not used as a
+performance result; the geometry totals are exact. This removes 12 of the 60 bytes per quad and is a
+step toward ADR-0017's 12-byte quads, which remove the remaining 48.
+
+### Upload cap
+
+`MAX_UPLOADS_PER_FRAME` was the last open slice-1 measurement. Windowed distance 32, fresh world,
+time from the first frame log to the first log with 9,285 chunks and `rebuild_ms = 0`:
+
+| Uploads per frame | Settle time | Max one-second sample |
+|---:|---:|---:|
+| 2 | 33 s | 6.76 ms |
+| 64 | 22 s | 6.97 ms |
+| 8 | 23 s | 10.35 ms |
+
+The cap was limiting first-load streaming: raising it to 64 recovers about 11 s with no measurable
+frame regression. `8` reproduces the 64 result on a retry (23 s) and keeps a single frame's upload
+burst lower than 64, so it is the chosen value. The 10.35 ms maximum is one noisy sample; the other
+runs peaked at 6.76-6.97 ms.
+
+### Quad record emission
+
+The mesher now writes ADR-0017's 12-byte record for every quad alongside the existing vertices and
+indices. `bench_mesh_build` reports the count, and every row has `records == quads`:
+
+| Fixture | LOD0 | Records | Water pass |
+|---|---:|---:|---:|
+| Spawn surface | 1.03 ms | 2,005 | 0.44 ms |
+| Spawn ground | 1.51 ms | 2,273 | 0.46 ms |
+| Flat slab | 0.98 ms | 2 | 0.0 ms (dry) |
+| All air | 0.37 ms | 0 | 0.0 ms (dry) |
+
+Against the pre-record numbers this is within run noise, with the surface fixture 5-8% slower and the
+others flat. The records add 12 bytes per quad to the transient worker output (about 24 KB for a
+2,000-quad chunk); nothing is uploaded to the GPU until the pool lands.
+
+### Quad pool (ADR-0017)
+
+Settled distance 32, seed 42, after the quad path replaced the per-chunk vertex and index buffers:
+
+| Metric | Shared-index path | Quad pool |
+|---|---:|---:|
+| Draw calls | 3,409 | **2** |
+| Resident geometry | 100.9 MB | **37.6 MiB** |
+| Visible geometry | 30.1 MB | **7.52 MiB** |
+| Frame CPU | 4.30-4.35 ms | **1.84-1.87 ms** |
+| Visible quads | 656,817 | 656,891 |
+
+- The pool reserves 38.4 MB (3.2M quads at 12 bytes), plus a 48-byte chunk table and indirect
+  arguments; `geometry_mb` reports the reservation, not the allocated fraction.
+- No mesh was skipped by a full pool in the settled run. If it happens, the result is not marked
+  built and the level pass requests it again after two-frame frees retire.
+- The visible quad count matches the old path within 0.01%, so LOD selection and water are intact.
+- The stress scene screenshot (64 chunks) rendered the expected terrain and sky; draw calls fell
+  from 8 to 1. The per-chunk vertex/index path remains as the fallback for adapters without the
+  required features.
+- `ENGINE_LEGACY_RENDER=1` forces the fallback. On the stress scene it draws 8 calls in 0.31 ms
+  against 1 call in 0.22 ms for the pool; the small scene hides the submission win that distance 32
+  shows.
+
+### Neighbour light deferral
+
+Loading a column changes the sky exposure of the eight surrounding columns, because light treats a
+missing chunk as open sky. The first fix invalidated all eight neighbour columns on every generated
+column, which made the settle path compute the same light fields repeatedly. Deferring a light job
+until its 3x3 column neighbourhood is either loaded or outside the render distance (where it will
+never arrive) keeps one light pass per chunk.
+
+| Run | Before deferral | After deferral | v0.0.8 baseline |
+|---|---:|---:|---:|
+| Headless wall, distance 24 | 26.4 s | **11.1 s** | 11.7 s |
+| Headless wall, distance 32 | 47.4 s | **20.4 s** | 21.6 s |
+| Headless mean frame, distance 32 | 2.75 ms | **0.99 ms** | — |
+
+The after-run reports 2,400 generated columns and 5,289 chunks at distance 24, and 4,224 columns and
+9,285 chunks at distance 32, with `ready_columns == loaded_columns` and no pending work. Windowed
+distance 32 settles at 2.51-2.59 ms, 2 draw calls, 38.18 MiB resident and 3.64 M visible vertices.
+The visible vertex count is higher than the pre-fix 2.90 M because the LOD fixes keep resident LOD0
+meshes selected instead of leaving the chunk on a pruned coarse level.
+
+A deferred chunk is re-admitted when a generation result lands, when the player crosses a column, or
+when an unload removes its blocking neighbour. Chunks at the edge of the wanted area are not deferred:
+the missing side will never be generated from that camera position, so open sky is the final answer.
+
+### Streaming candidate cache
+
+`stream_columns` used to rebuild and sort the wanted-column list, test all loaded columns for
+readiness, and scan for unloadable columns every frame. The wanted and unloadable lists are now
+cached until the player crosses a column, and a column is marked ready from mesh acceptance instead
+of a world scan.
+
+| Run | Before | After |
+|---|---:|---:|
+| Windowed distance-32 frame | 2.51-2.59 ms | **0.66-0.68 ms** |
+| Headless wall, distance 24 | 11.1 s | **7.6-7.9 s** |
+| Headless wall, distance 32 | 20.4 s | **12.2-12.8 s** |
+
+- The settled frame is unchanged visually: 2,435 visible chunks, 3.64 M visible vertices, 2 draws,
+  38.18 MiB resident and 6.94 MiB visible.
+- The headless mean rises (0.89 to 1.43 ms at distance 32) because the same 120 fixed steps now pack
+  more generation work; wall time and settle frames are the comparable metrics.
+- A moving run (`ENGINE_HEADLESS_SPEED=12`, distance 16, 400 frames) settles with
+  `wanted_columns = 0`, `ready_columns == loaded_columns`, and no pending jobs.
+- Rotating in place does not reorder the candidate list until the player crosses a column; the
+  forward-first preference is a scheduling nicety, not a correctness rule.
+- A failed unload save is retried from a rebuilt list on the next frame instead of every frame.
+
+### Saved-chunk index
+
+Streaming probed the save directory for every generated chunk, a failed `fs::read` for each
+coordinate that had never been edited. The chunk directory is now listed once at startup, and the
+per-chunk read only runs when the listing contains the coordinate. Unloads and `Ctrl+S` add the
+chunks they write.
+
+| Run | Probe per chunk | Indexed |
+|---|---:|---:|
+| Headless wall, distance 24 | 7.8-7.9 s | 7.8 s |
+| Headless wall, distance 32 | 12.6-12.8 s | 12.6 s |
+| Headless mean / p95, distance 32 | 1.50 / 2.53 ms | **1.18 / 2.23 ms** |
+
+Wall time is unchanged on this machine, where the failed reads are cheap and cached. The index
+removes about 9,300 filesystem calls per distance-32 load and the stall risk behind the occasional
+settle outlier. A missing directory yields an empty index; a listed coordinate still goes through the
+normal per-chunk loader, so corrupt or mismatched files report the same errors.
+
+### Pool high-water
+
+The frame log now reports `allocated_geometry_mb` (quad-pool pages currently reserved) and
+`peak_geometry_mb` (session high-water), alongside the fixed 38.18 MiB reservation.
+
+| Distance-32 settled | Value |
+|---|---:|
+| Peak allocated quads | 2.36 M |
+| Peak allocated records | 28.32 MB |
+| Pool reservation | 2.36 M x 1.35 = 3.19 M, matching the 3.2 M cap |
+
+The current cap is the measured peak plus the planned 35% slack, so it is not over-provisioned and
+does not need resizing. A smaller pool would trade a few MB of VRAM for pool-full risk on other seeds
+or views.
+
+### Renderer traversal
+
+The quad path stored slots in a `HashMap<ChunkCoord, Slot>` and allocated two indirect-argument
+`Vec`s per frame. Slots are now a dense `Vec` with a chunk-to-position map (swap-remove on unload),
+and the argument lists are reused. The frame log now reports `stream_ms`, `levels_ms`, and
+`render_ms` separately.
+
+| Distance-32 settled frame | Value |
+|---|---:|
+| Whole frame | 0.588-0.602 ms |
+| `render_ms` | 0.47-0.60 ms |
+| `stream_ms` / `levels_ms` | <0.001 ms |
+
+- The dense slots are neutral at this scale: the frame is dominated by surface acquire/present and
+  the fixed submission path, not the slot traversal. They remove two per-frame allocations and make
+  the traversal sequential; they are kept for the larger hierarchy node sets.
+- One 80 s run logged 0.65 ms and a 54 ms stall in an otherwise 0.59 ms run; frame-time outliers are
+  dominated by the window/surface state, so compare ranges, not single samples.
+
+### Frame capture
+
+`ENGINE_CAPTURE=<path.bmp>` and `ENGINE_CAPTURE_DELAY=<seconds>` (default 20) copy the presented
+surface to a readback buffer and write a 24-bit BMP once. It does not need window focus, so it is the
+repeatable visual gate for horizon and hierarchy work.
+
+The horizon A/B at the spawn view:
+
+- **Off:** the full ridge and its trees are visible.
+- **On, before the fix:** the far part of the ridge beyond the near crest was removed, leaving a
+  vertical cut at a chunk boundary.
+- **On, after the fix:** the capture matches the off view on seed 42, seed 7, and a strafe
+  view. Occluders now use the chunk's **minimum** column top (`Chunk::terrain_min`) instead of its
+  maximum, so a crest cannot act as a wall across a slope; the occluder span also uses the chunk's
+  16 m half-width rather than 24 m. Trees are excluded from both tops.
+- The conservative occluder reduces the cull: 819 visible chunks instead of 166, 1.84 M vertices,
+  and a 0.139 ms GPU scene against 0.245-0.253 ms with horizon off.
+- Horizon is now **on by default**; `ENGINE_HORIZON_CULL=0` disables it. `ENGINE_AUTO_STRAFE=1` is
+  the dev hook used for the moving capture.
+
+### Hierarchy selection and the 2 km gate
+
+`ENGINE_HIERARCHY=1` stops L0 at `ENGINE_DETAIL_CHUNKS` (default 16, 512 m). Level-2 parents cover
+768-2,048 m and refine to their eight level-1 children when a projected-size threshold is met and all
+children are ready; otherwise the parent stays drawn. Level-1 sections also fill the near ring.
+Refine/collapse use 72/62 px at 900 px/rad, with the parent retained until the child swap. Uploaded
+children stay in the pool but hidden until the swap; one target rebuild runs per 250 ms.
+
+| Settled 2 km view (west, spawn) | Value |
+|---|---:|
+| Target sections | 1,486 |
+| Visible nodes | 1,045 |
+| Visible vertices | 3.58 M |
+| Draw calls | 2 |
+| Frame | 0.466 ms |
+| GPU scene | 0.235 ms |
+| Allocated geometry | 30.94 MiB |
+| Geometry reservation | 39.31 MiB |
+
+- Headless L0 at detail 16: 2,383 chunks, 85.9 MB resident, 4.3 s settle. With the pool reservation
+  the 2 km working set is roughly 125 MB, well inside 400 MB.
+- The west capture matches the L0-only control for the visible island and caves; the hierarchy fills
+  the ring beyond the 1,024 m L0 edge. The earlier dark coarse-water seam was fixed by using the
+  highest solid sample as the coarse sky top, so water cells above the seabed stay lit.
+- Coarse BFS light replaces the per-column 0/15 field: sky seeds above each column's highest solid,
+  spreads through non-solid samples, and water passes without attenuation. It costs about 120 µs per
+  section; the fixed-key mesh quad count is unchanged. Halo samples copy the nearest edge interior
+  cell; no neighbouring section is read.
+- Edit invalidation marks the overlapping level-1/2 sections dirty, removes the stale upload, and
+  rebuilds from the modified/saved chunk overlay before the normal queue.
+
+#### Levels 3-4 and the 8 km gate
+
+Level-3 roots (256 m) cover 2,048-4,096 m and level-4 roots (512 m) cover 4,096-8,192 m. Both use
+the same recursive projected refinement and parent retention as level 2; children above the
+128-block world are filtered and count as ready. The hierarchy pool is 8M quads (96 MB) when
+`ENGINE_HIERARCHY=1`; the distance-32 path keeps 3.2M (38.4 MB).
+
+| Settled 8 km view (west, spawn) | Value |
+|---|---:|
+| Cold target / settled target | 2,836 / 4,908 |
+| Sections with bounds | 4,641 |
+| Sections in the frustum | 1,330 |
+| Sections removed by the horizon | 552 |
+| Visible nodes (sections + L0 chunks) | 1,358 |
+| Visible vertices | 5.86 M |
+| Draw calls | 2 |
+| Frame | 0.62-0.63 ms |
+| GPU scene | 0.365 ms |
+| Allocated geometry | 74.62 MiB |
+| Visible geometry | 11.18 MiB |
+| Geometry reservation | 94.24 MiB |
+| L0 resident (detail 16) | 85.9 MB |
+
+- Far refinement adds about 1,900 settled sections; the 8M pool holds them with ~20 MB of headroom.
+  Two uploads were deferred during startup and none after.
+- The section horizon removes 552 of 1,330 in-frustum sections (-41%), 3.54 M of 9.40 M visible
+  vertices (-38%), and 6.75 MiB of visible geometry (-38%) at the spawn view. GPU scene time falls
+  from 0.780 ms to 0.365 ms. The conservative full-bin coverage rule draws 94 more sections than the
+  earlier partial-bin approximation, but it cannot hide a visible bin.
+- `bench_horizon_sections` reproduces the target and culling counts without a window:
+  `target=4908 bounds=4641 frustum=1330 occluded=552 visible=778`.
+- The 8 km frame and draw gates hold: 60 FPS and 2 draws. The 500 MB working-set gate is
+  unverified: the table records L0 resident blocks and light plus the geometry reservation, not
+  total process working set, and no full working-set measurement exists.
+- The far view extends the water and land to the horizon; the hierarchy 2 km and L0 controls agree on
+  the visible island and cave patches.
+
+#### Steady-frame pass
+
+The horizon caches its occluded chunk and section sets at each 250 ms rebuild, so a settled frame does
+hash lookups instead of rerunning the azimuth-bin scan for every node. The quad renderer iterates a
+compact list of slots with geometry instead of all 20,480 slots. At the spawn 8 km view:
+
+| Metric | Before | Current |
+|---|---:|---:|
+| Frame | 0.58-0.69 ms | **0.62-0.63 ms** |
+| GPU scene | 0.323 ms | 0.365 ms |
+| Horizon rebuild | ~0.74 ms / 250 ms | ~2.58 ms / 250 ms |
+| Per-frame horizon bin scans | ~1,259 | 0 |
+
+The cached horizon and compact active-slot draw loop are in place, but the conservative full-bin
+coverage rule draws more sections than the earlier approximate test. The combined current frame is
+0.62-0.63 ms. The four profiling scopes cover `input`, `player update`, `camera update`,
+`stream columns`, `hierarchy`, `mesh request`, `mesh upload`, and `record frame`. Reusing the
+swapchain view and batching timestamp queries were evaluated and left alone: the view belongs to the
+acquired frame, and `wgpu-profiler` 0.28 resolves queries per frame.
+
+#### Section horizon
+
+`Horizon` now takes the uploaded sections' conservative bounds. For each section, `Section::bounds`
+reports the lowest **solid** column top and the highest visible top (water is visible but transparent,
+so it raises the candidate height without acting as an occluder). An occluder is inserted at the
+section's farthest point with the lowest top; a candidate is tested at its nearest point with the
+highest top across every azimuth bin its footprint covers. Sections nearer than 256 m, sections
+without bounds, and sections whose footprint spans half the bins are kept. The result is
+quality-neutral: a section is removed only when even its highest surface is below the nearer terrain
+across its whole angular footprint.
+
+#### Parallel section builds
+
+Coarse sections run as `Job::Section` on the shared worker pool instead of the main thread. The main
+thread builds the edit overlay and uploads finished opaque/water meshes and horizon bounds. Timing
+from `generated world ready` to `target=4908 queue=0`:
+
+| | Main-thread build | Pooled (8 jobs) | Bounded (11 jobs) | Review fixes (shared 16) |
+|---|---:|---:|---:|---:|
+| Hierarchy settle (4,908 sections) | 22.9 s | 6.4-6.9 s | 5.69 s | **7.8 s** |
+| First logged frame | 4.14 ms | 2.36 ms | 2.36-2.65 ms | 2.36-2.65 ms |
+| Settled frame / GPU | 0.69 / 0.33 ms | 0.58-0.69 / 0.32-0.33 ms | 0.55-0.56 / 0.327 ms | **0.62-0.63 / 0.365 ms** |
+
+- The pool has 11 workers and also serves chunk generation, light, and meshing. Section jobs use
+  `Priority::Background`, so a saturated chunk load delays them rather than blocking the frame.
+- Bounds-limited meshing and bulk column generation cut the far level-3 section build from
+  1,793/1,784/1,139 µs (generate/opaque/water) to **1,135/642/248 µs**. Level-1 sections span almost
+  the whole grid vertically, so they improve mainly on generation (629 -> 480 µs).
+- Raising `MAX_SECTION_JOBS` from 8 to 11 matched the worker count and cut the settle from 6.53 s to
+  5.69 s in consecutive runs.
+- Chunk and section results now share one upload budget. The old separate budgets allowed 8 + 8; a
+  cap of 8 slowed the settle to 8.9-10.3 s, while the shipped shared cap of 16 restores 7.8 s. The
+  5.69 s column predates that shared budget and the conservative horizon coverage; it is kept for
+  comparison, not as the current gate.
+- The full 4,908-section target still meshes to the same geometry; after the conservative horizon
+  coverage fix the settled view is 5.86 M visible vertices. `sections_in_flight` in the frame log
+  shows the queue draining.
+
+### Section foundation (level 1)
+
+The first hierarchy slice adds `src/section.rs`: `SectionKey` math, a level-1 coarse generator using
+the conservative `2 × 2` footprint maximum, a modified-chunk overlay, per-column coarse sky light,
+and a sample-space greedy mesh through `build_section_mesh`. It is wired into the hierarchy path.
+`bench_section` compares one level-1 section with the eight LOD1 chunk meshes covering the same `64³`
+region at seed 42's spawn:
+
+| Metric | One level-1 section | Eight LOD1 chunks |
+|---|---:|---:|
+| Generation | 480 µs (p95 577) | not timed |
+| Mesh | 1,221 µs (p95 1,285) | 2,360 µs |
+| Quads | 2,193 | 3,613 |
+| Vertices | 8,772 | 14,452 |
+| Samples / storage | 32,768 B | 131,072 B |
+| Light | 19,652 B | 157,216 B |
+| Draw calls | 1 | 8 |
+
+- The section covers the same volume with ~39% fewer quads and ~18% of the sample + light bytes.
+  Its mesh is cheaper than the eight LOD1 meshes because the coarse surface has no caves or trees.
+- The comparison uses LOD1 chunk meshes from freshly generated L0 chunks; the section uses the
+  surface-only seed rule, so the visual result is a comparison, not a pixel match.
+- Missing neighbour sections emit boundary faces (the mesher gets an empty border), which is the
+  deliberate no-crack rule for the first slice.
+
+### GPU timing and indexed draws
+
+`wgpu-profiler` now runs unconditionally; the `tracy` feature only adds its Tracy client. The frame
+log reports `gpu_ms` for the scene pass. The quad pipeline draws four vertices per quad through a
+shared `u16` index pattern; meshes above 16,383 quads keep the six-vertex non-indexed path.
+
+| Distance-32 settled | Non-indexed | Indexed |
+|---|---:|---:|
+| GPU scene | 0.38-0.59 ms | **0.253 ms** |
+| Frame | 0.62-0.65 ms | **0.479-0.482 ms** |
+| Draw calls | 2 | 2 |
+| Visible chunks / vertices | 2,435 / 3.64 M | 2,435 / 3.64 M |
+| Geometry reservation | 38.18 MiB | 39.31 MiB |
+
+- The index buffer costs 187.5 KiB and the four-list argument buffer about 0.9 MiB; the reservation
+  stays under the 40 MiB target. The pool peak is unchanged at 28.32 MB.
+- The pattern is `[4q, 4q+1, 4q+2, 4q, 4q+2, 4q+3]` with `base_vertex = first_quad * 4`, so the
+  shader derives the pool quad from `vertex_index / 4` and the corner from `vertex_index % 4`. A unit
+  test pins the pattern against the CPU corner order `[0,1,2,0,2,3]`.
+- `visible_vertices` keeps the six-per-quad meaning so the metric stays comparable; the GPU now runs
+  four vertex invocations per quad.
+- `Depth24Plus` instead of `Depth32Float`, and `textureSampleLevel(..., 0.0)` instead of
+  `textureSample`, were measured together against the settled indexed frame. GPU time stayed at
+  0.248-0.249 ms against the 0.245-0.253 ms baseline, within noise, so both were reverted.
+
+### Light job
+
+The job used to scan the full `96³` propagation grid three times: once to fill blocks and column
+ceilings, once to mark sky and collect lamps, and once more to seed the sky flood fill. Lamp
+discovery moved into the block fill, and sky seeding now runs only above each column's ceiling and
+tests the boundary in the same pass. The snapshot also shares the chunk storage behind an `Arc`
+instead of copying each packed chunk.
+
+| Fixture (`bench_light`, 20 samples) | Before | After |
+|---|---:|---:|
+| Surface compute | 5,164 µs | **4,790 µs** |
+| Ground compute | 4,370 µs | **3,552 µs** |
+| Snapshot build | ~6.5 µs (copy) | **1.7 µs** (Arc clone) |
+| Headless d32 wall | 12.1-12.8 s | **11.9 s** |
+
+- The merge removes one full-grid pass and skips every cell below its column ceiling; the ground
+  chunk gains more because more of its grid is shadowed.
+- The light benchmark is noisy outside saturation; one after-run measured 5.5 ms. The before/after
+  pair above was taken from the same binary with the implementation stashed.
+- `Chunk` now stores its packed cells in `Arc<Vec<u8>>`; an edit clones the 16 KiB buffer once
+  (`Arc::make_mut`) and worker snapshots only bump the refcount.
+
+### Corner neighbourhood gather
+
+`corner_values` re-read the outside cell and its edge/diagonal neighbours for each of the four
+corners, and re-read the same cells again to test light candidates. It now gathers the 3x3 ring once
+per exposed cell and derives AO and light from that. Output is unchanged; the mesher tests compare
+the exact records. `bench_mesh_build`, release, 30 samples:
+
+| Fixture | Before | After | Change |
+|---|---:|---:|---:|
+| Spawn surface LOD0 | 1,131 µs | **955 µs** | -16% |
+| Spawn ground LOD0 | 1,715 µs | **1,134 µs** | -34% |
+| Flat slab LOD0 | 1,188 µs | **859 µs** | -28% |
+| Spawn surface LOD1 | 299 µs | 317 µs | +6% |
+| Spawn ground LOD1 | 534 µs | **278 µs** | -48% |
+| Flat slab LOD1 | 295 µs | **142 µs** | -52% |
+| Spawn ground LOD2 | 139 µs | **74 µs** | -47% |
+| Water, surface | 512 µs | 519 µs | +1% |
+| Water, ground | 518 µs | **460 µs** | -11% |
+
+The gather helps most on nearly flat chunks: the top face exposes 1,024 cells that merge into one
+quad, so the old per-cell corner reads dominated the merge. Water uses the same solidity ring but
+keeps the water cell's uniform light, so it is unchanged within noise.
+
+### Binary greedy attempt (reverted)
+
+A bitmask greedy mesher with the strict light merge key was implemented and measured against the
+current mesher. Output matched exactly (248 tests), but it was slower:
+
+| Fixture | Current | Bitmask |
+|---|---:|---:|
+| Spawn surface LOD0 | 1.03 ms | 1.02 ms |
+| Spawn ground LOD0 | 1.51 ms | 1.53 ms |
+| Flat slab LOD0 | 0.98 ms | 1.08 ms |
+| All air LOD0 | 0.37 ms | 0.48 ms |
+| Water, surface | 0.44 ms | 0.64 ms |
+| Water, ground | 0.46 ms | 0.68 ms |
+
+The bitmask build evaluates passability for every padded cell; the current scan short-circuits the
+exposure test for non-matching cells, and the per-cell corner/light key dominates the merge. Reverted.
+The next experiment is the relaxed merge key described in [Meshing research](research/meshing.md).
+
+### Horizon culling
+
+Horizon culling is on by default; `ENGINE_HORIZON_CULL=0` disables it. It builds a 128-bin horizon
+from the lowest terrain/water column top in each chunk, patched across each chunk's azimuth span, and
+culls only when nearer terrain hides the chunk's top in every direction its footprint covers.
+
+| Metric at distance 32, settled | Off | On |
+|---|---:|---:|
+| Visible chunks | 2,435 | 819 |
+| Visible vertices | 3.64 M | 1.84 M |
+| Visible geometry | 6.94 MiB | 3.50 MiB |
+| GPU scene | 0.245-0.253 ms | **0.139 ms** |
+| Frame | 0.479-0.498 ms | 0.516-0.821 ms |
+
+- Culling removes two-thirds of the visible set on the spawn view and about half of the visible
+  vertices.
+- The measured GPU scene time falls by 45%; the frame is still acquire/present-bound, so frame time
+  does not improve. The periodic horizon build and run-to-run variance dominate the frame samples.
+- A full horizon build costs about 2.4 ms, so it is cached and rebuilt at most every 250 ms.
+- The threshold and margins make it deliberately conservative: chunks under 256 m are never culled,
+  empty bins keep a chunk, and the elevation margin is about 1.7 degrees. Occluders use the lowest
+  terrain column top, candidates use `max(terrain top, water top)`, and trees are excluded from both.
+- In-engine captures on seeds 42 and 7 and on a strafe view match the horizon-off image. The feature
+  is on by default; `ENGINE_HORIZON_CULL=0` disables it.
+
+### Windowed baseline
+
+Same world and camera, 30 s (distance 24) and 60 s (distance 32) after startup, `ENGINE_NO_VSYNC=1`,
+`RUST_LOG=engine=debug`, window minimised. The player stands at the seed 42 spawn `(3.5, 36.0, 0.5)`
+and does not move.
+
+| Distance | Chunks | Visible chunks | Draws | Indices drawn | Geometry | Visible geometry | Frame CPU |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 24 | 5,289 | 1,436 | 1,934 | 2.98 M | 89.3 MB | 28.5 MB | 2.24-2.39 ms |
+| 32 | 9,285 | 2,435 | 3,409 | 3.94 M | 125.9 MB | 37.6 MB | 9.06 ms |
+
+- `geometry_mb` counts every retained vertex and index buffer: all built LODs plus water.
+  `visible_geometry_mb` counts only the buffers reached by that frame's draws. Both are new
+  metrics from this slice.
+- Indices divided by six give drawn quads: 497,000 at distance 24 and 657,000 at distance 32.
+  At four 12-byte vertices and six 16-bit indices per quad that is 60 bytes per quad, which matches
+  `visible_geometry_mb` to within rounding.
+- Distance 32 draws 77% more calls and costs 3.8x the frame CPU of distance 24. One sample during
+  streaming logged 18.4 ms; the settled figure above is the comparable number.
+- Resident geometry is 89 MB at distance 24 and 126 MB at distance 32, not the 60-80 MB estimated
+  after the v0.0.8 packing. Retained LODs, not the visible set, dominate it: 1.48 M and 2.10 M quads
+  respectively.
+- A fixed 12-byte quad would put the same geometry in 18-25 MB; an 8-byte quad in 12-17 MB. That is
+  the budget the v0.0.9 page format is measured against.
+
 ## Caveats
 
 - `pool_sim` is a simulation of the frame shape, not the real renderer. It does not measure

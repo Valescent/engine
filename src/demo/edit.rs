@@ -5,7 +5,7 @@ use tracing::warn;
 
 use crate::description;
 use crate::editlog;
-use crate::section;
+use crate::terrain_section as section;
 use crate::world_save;
 
 use super::TerrainDemo;

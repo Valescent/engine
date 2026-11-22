@@ -46,6 +46,14 @@ impl Streaming {
         self.ready.contains(&column)
     }
 
+    pub(crate) fn is_loaded(&self, column: IVec2) -> bool {
+        self.loaded.contains(&column)
+    }
+
+    pub(crate) fn render_distance(&self) -> i32 {
+        self.render_distance
+    }
+
     pub(crate) fn loaded(&self) -> impl Iterator<Item = IVec2> + '_ {
         self.loaded.iter().copied()
     }
@@ -233,6 +241,6 @@ mod tests {
 
         streaming.mark_unloaded(IVec2::new(10, 0));
         assert!(!streaming.is_ready(IVec2::new(10, 0)));
-        assert_eq!(streaming.loaded().count(), 0);
+        assert_eq!(streaming.loaded_count(), 0);
     }
 }

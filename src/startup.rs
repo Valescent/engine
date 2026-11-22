@@ -13,7 +13,7 @@ use crate::app::{App, RunError};
 use crate::config;
 use crate::demo::{DemoRuntime, TERRAIN_DEMO_ENV, TERRAIN_DEMO_STRESS_SEED};
 use crate::streaming::Streaming;
-use crate::world::WORLD_DIRECTORY;
+use crate::world::{WORLD_DIRECTORY, World};
 use crate::world_io::world_for;
 
 use crate::{headless, residency};
@@ -34,8 +34,17 @@ pub fn run() -> Result<(), RunError> {
     #[cfg(feature = "tracy")]
     let _tracy_client = tracy_client::Client::start();
 
-    let config = config::load(Path::new(CONFIG_FILE))?;
+    let mut config = config::load(Path::new(CONFIG_FILE))?;
     let stress = stress_requested();
+    let hierarchy = std::env::var("ENGINE_HIERARCHY").is_ok_and(|value| value == "1");
+    let detail_chunks = std::env::var("ENGINE_DETAIL_CHUNKS")
+        .ok()
+        .and_then(|value| value.trim().parse::<i32>().ok())
+        .unwrap_or(crate::hierarchy::DEFAULT_DETAIL_CHUNKS)
+        .clamp(4, 32);
+    if hierarchy {
+        config.render_distance_chunks = detail_chunks;
+    }
     let setup = world_for(
         stress,
         Path::new(WORLD_DIRECTORY),
@@ -63,6 +72,11 @@ pub fn run() -> Result<(), RunError> {
     app.config = config;
     app.streaming = setup.streaming;
     app.seed = setup.seed;
+    app.detail_chunks = detail_chunks;
+    app.hierarchy = hierarchy && app.demo.is_none();
+    if let Some(directory) = app.save_directory.clone() {
+        app.saved_chunks = World::saved_chunk_index(&directory)?;
+    }
     app.apply_render_distance();
     if let Some(options) = headless::options() {
         headless::run(app, options);

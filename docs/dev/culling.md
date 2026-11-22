@@ -9,7 +9,7 @@ nearby options, and the order they are worth building.
 | Backface culling | Current (v0.0.8) |
 | Distance LOD (LOD0/1/2) | Current (v0.0.8) |
 | Hierarchical frustum culling | Proposed |
-| Horizon (heightmap) culling | Proposed |
+| Horizon (heightmap) culling | Implemented and enabled by default (v0.0.9; `ENGINE_HORIZON_CULL=0` disables it) |
 | Software (raster-based) occlusion | Proposed |
 | Voxel visibility graph (cave flood fill) | Proposed |
 | GPU occlusion queries or a depth pyramid | Proposed |
@@ -69,7 +69,7 @@ help overdraw. The current order is the chunk map order.
 | Backface culling | Back faces | None | Done. |
 | Front-to-back sort | Overdraw | O(n log n) per frame | Sorts about 1,400 visible chunks; cheap, GPU-only win. |
 | Water distance cutoff | Transparent draws beyond LOD1 | None | Water is full resolution; skip it far away. |
-| Horizon (heightmap) culling | Chunks below the terrain silhouette | Per-frame horizon build from column tops | Catches hills and mountains; cannot see into caves or tunnels. |
+| Horizon (heightmap) culling | Chunks and hierarchy sections below the terrain silhouette | Cached horizon rebuild at most every 250 ms | Catches hills and mountains; a settled frame only does cached hash lookups; an occluder claims only bins it fully contains; cannot see into caves or tunnels. |
 | GPU occlusion queries | Any chunk hidden on screen, including caves | Query set plus one-frame-late readback | Handles what heightmaps cannot; adds synchronization. |
 | Screen-space depth pyramid | Same as queries, no readback stall | Compute pass plus indirect draws | Most robust, most work. |
 | Multi-draw indirect | Per-chunk draw setup | Megabuffer plus indirect args | Cuts 1,900 draws to a handful; the enabler for distance 48+. |
@@ -79,8 +79,10 @@ help overdraw. The current order is the chunk map order.
 1. `World` keeps a `column_top` height for every loaded column, updated on `set_block` (O(1) for
    placements; a short downward scan when the top block is removed) and rebuilt for a chunk when
    it is inserted or unloaded.
-2. Per frame, bucket the loaded columns by azimuth bin from the camera and keep, per bin, the
-   maximum elevation angle over distance (a small prefix-max or sorted list).
+2. On each rebuild (at most once every 250 ms), bucket the loaded columns by azimuth bin from the
+   camera and keep, per bin, the maximum elevation angle over distance (a small prefix-max or
+   sorted list). Cache the occluded chunk and section sets at the same time; a settled frame
+   tests those sets instead of scanning the bins.
 3. For each chunk, take its nearest horizontal distance and its highest top, and compare its
    elevation angle against the bin's horizon at that distance. Cull only when the chunk is
    strictly below the conservative horizon.
@@ -103,7 +105,9 @@ origin (or an origin index in a storage buffer), and `multi_draw_indirect` with 
 per batch. That removes the per-chunk bind group and vertex-buffer rebinds that dominate the CPU
 side of 1,900 draws. wgpu 30 exposes `multi_draw_indexed_indirect` and the
 `MULTI_DRAW_INDIRECT_COUNT` feature; support varies by backend and Metal may emulate the call, so
-verify on the target backend and keep a single-draw fallback.
+verify on the target backend and keep a single-draw fallback. The full pipeline that follows from
+this, including vertex pulling and a shared quad pool, is evaluated in
+[GPU-driven meshing](research/gpu-driven-meshing.md).
 
 ## Other techniques
 

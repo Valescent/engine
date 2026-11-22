@@ -21,7 +21,7 @@ use crate::pipeline;
 use crate::player::BlockSource;
 use crate::residency;
 use crate::save;
-use crate::section;
+use crate::terrain_section as section;
 use crate::world_save;
 
 mod build;
@@ -821,7 +821,7 @@ mod tests {
 
     use crate::pipeline;
     use crate::residency;
-    use crate::section;
+    use crate::terrain_section as section;
 
     use super::*;
 

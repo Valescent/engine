@@ -65,8 +65,20 @@ impl Default for FrameUniform {
 pub(crate) struct FrameStats {
     pub(crate) total_chunks: u32,
     pub(crate) visible_chunks: u32,
+    /// Slots skipped by the horizon pass this frame.
+    pub(crate) horizon_culled: u32,
     pub(crate) visible_vertices: u64,
     pub(crate) draw_calls: u32,
+    /// Vertex and index bytes resident for every built LOD and water mesh.
+    pub(crate) geometry_bytes: u64,
+    /// Vertex and index bytes reached by this frame's draws.
+    pub(crate) visible_bytes: u64,
+    /// Quad-pool records currently reserved, including page rounding.
+    pub(crate) allocated_bytes: u64,
+    /// Session high-water mark of `allocated_bytes`.
+    pub(crate) peak_allocated_bytes: u64,
+    /// Latest resolved GPU time for the scene pass, in milliseconds.
+    pub(crate) gpu_ms: f64,
     /// Packed-quad sections created or rewritten since the previous frame.
     ///
     /// A full `submit_terrain` diffs against the resident set, so a one-block

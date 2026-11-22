@@ -3,16 +3,17 @@
 //! [`frame`]; key and mouse handling lives in [`input`].
 
 mod frame;
+mod hierarchy;
 mod input;
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use glam::{IVec3, Vec3};
+use glam::{IVec2, IVec3, Vec3};
 use thiserror::Error;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
@@ -24,11 +25,14 @@ use crate::block::Block;
 use crate::camera::Camera;
 use crate::config::{Config, ConfigError};
 use crate::demo::DemoRuntime;
+use crate::hierarchy::{DEFAULT_DETAIL_CHUNKS, Hierarchy};
+use crate::horizon;
 use crate::mesh::Lod;
 use crate::mesher::{MeshKind, MeshPool, MeshQueue, Priority, create_pool};
 use crate::player::Player;
 use crate::renderer::{Renderer, RendererError};
 use crate::save;
+use crate::section::{SectionBounds, SectionKey, overlapping_sections_for_chunk};
 use crate::sky::Sky;
 use crate::streaming::Streaming;
 use crate::world::{ChunkCoord, DirtyChunks, SaveError, World};
@@ -85,8 +89,35 @@ pub(crate) struct App {
     /// The v1 terrain demo: patch, ring, saves, repair, and pending rebuild.
     pub(crate) demo: Option<DemoRuntime>,
     pub(crate) save_directory: Option<PathBuf>,
-    pub(crate) level_work: HashSet<ChunkCoord>,
+    /// Chunk coordinates with a file in `save_directory`, listed at startup.
+    pub(crate) saved_chunks: HashSet<ChunkCoord>,
+    pub(crate) level_work: BTreeSet<ChunkCoord>,
     pub(crate) level_player_chunk: ChunkCoord,
+    /// Cached generation candidates, rebuilt when the player column or loaded set changes.
+    pub(crate) wanted_columns: Vec<IVec2>,
+    pub(crate) unload_columns: Vec<IVec2>,
+    pub(crate) wanted_cursor: usize,
+    pub(crate) wanted_player: Option<IVec2>,
+    /// Chunks whose light waits for an adjacent column that is still streaming in.
+    pub(crate) deferred_light: BTreeSet<ChunkCoord>,
+    /// Consecutive mesh upload failures per chunk, cleared on success.
+    pub(crate) upload_failures: HashMap<ChunkCoord, u8>,
+    pub(crate) hierarchy: bool,
+    pub(crate) detail_chunks: i32,
+    /// Parent-retained target, readiness, and build queue.
+    pub(crate) sections: Hierarchy,
+    pub(crate) section_cursor: usize,
+    pub(crate) sections_uploaded: HashSet<SectionKey>,
+    pub(crate) sections_in_flight: HashSet<SectionKey>,
+    /// Job id expected for each in-flight section build.
+    pub(crate) section_jobs: HashMap<SectionKey, u64>,
+    pub(crate) next_section_job: u64,
+    pub(crate) section_bounds: HashMap<SectionKey, SectionBounds>,
+    pub(crate) hierarchy_at: Instant,
+    pub(crate) hierarchy_cell: Option<IVec2>,
+    pub(crate) horizon_cull: bool,
+    pub(crate) horizon: horizon::Horizon,
+    pub(crate) horizon_at: Instant,
     pub(crate) stats: FrameAccumulator,
     pub(crate) stress: bool,
     pub(crate) world: World,
@@ -148,8 +179,29 @@ impl App {
             seed: None,
             demo: None,
             save_directory: save_directory(stress).map(Path::to_path_buf),
+            saved_chunks: HashSet::new(),
             level_work: world.iter_chunks().map(|(chunk, _)| chunk).collect(),
             level_player_chunk: ChunkCoord::from_world(spawn.floor().as_ivec3()).0,
+            wanted_columns: Vec::new(),
+            unload_columns: Vec::new(),
+            wanted_cursor: 0,
+            wanted_player: None,
+            deferred_light: BTreeSet::new(),
+            upload_failures: HashMap::new(),
+            hierarchy: std::env::var("ENGINE_HIERARCHY").is_ok_and(|value| value == "1"),
+            detail_chunks: DEFAULT_DETAIL_CHUNKS,
+            sections: Hierarchy::default(),
+            section_cursor: 0,
+            sections_uploaded: HashSet::new(),
+            sections_in_flight: HashSet::new(),
+            section_jobs: HashMap::new(),
+            next_section_job: 0,
+            section_bounds: HashMap::new(),
+            hierarchy_at: Instant::now(),
+            hierarchy_cell: None,
+            horizon_cull: !std::env::var("ENGINE_HORIZON_CULL").is_ok_and(|value| value == "0"),
+            horizon: horizon::Horizon::disabled(),
+            horizon_at: Instant::now(),
             stats: FrameAccumulator::default(),
             stress,
             world,
@@ -191,6 +243,7 @@ impl App {
         let light_dirty = self.world.light_dirty(dirty);
         self.queue.invalidate(&light_dirty);
         self.level_work.extend(light_dirty.iter().copied());
+        self.invalidate_sections(dirty);
 
         if let Some(pool) = self.mesher.clone() {
             for chunk in &light_dirty {
@@ -217,6 +270,46 @@ impl App {
             rebuild_ms = started.elapsed().as_secs_f64() * 1000.0,
             "rebuilt chunks"
         );
+    }
+
+    /// Marks the coarse sections overlapping an edit for a rebuild.
+    ///
+    /// Sections outside the current target stay marked but are not built until
+    /// they re-enter it, so an edit never forces off-target work.
+    fn invalidate_sections(&mut self, dirty: &DirtyChunks) {
+        if !self.hierarchy {
+            return;
+        }
+        let mut keys = Vec::new();
+        for chunk in dirty {
+            keys.extend(overlapping_sections_for_chunk(*chunk));
+        }
+        for key in &keys {
+            if let Some(renderer) = &mut self.renderer {
+                renderer.remove_section(*key);
+            }
+            self.sections_uploaded.remove(key);
+            self.section_bounds.remove(key);
+            self.section_jobs.remove(key);
+            self.sections_in_flight.remove(key);
+        }
+        self.sections.mark_dirty(keys);
+    }
+
+    /// Turns the section hierarchy off and drops its pending work.
+    ///
+    /// The fallback chunk renderer cannot draw sections, so a hierarchy that
+    /// cannot upload must fall back instead of queueing work forever.
+    fn disable_hierarchy(&mut self, reason: &str) {
+        warn!(%reason, "hierarchy disabled; rendering chunks only");
+        self.hierarchy = false;
+        self.sections = Hierarchy::default();
+        self.section_cursor = 0;
+        self.sections_uploaded.clear();
+        self.sections_in_flight.clear();
+        self.section_jobs.clear();
+        self.section_bounds.clear();
+        self.hierarchy_cell = None;
     }
 
     pub(crate) fn request_initial_meshes(&mut self) {
@@ -252,7 +345,11 @@ impl App {
             return;
         };
         match self.world.save_chunks(directory) {
-            Ok(()) => debug!("world saved"),
+            Ok(()) => {
+                self.saved_chunks.extend(self.world.modified_chunks());
+                self.world.clear_modified();
+                debug!("world saved");
+            }
             Err(error) => error!(%error, "failed to save the world"),
         }
     }
@@ -305,6 +402,9 @@ impl ApplicationHandler for App {
         if let Err(error) = upload {
             self.fail(RunError::Renderer(error), event_loop);
             return;
+        }
+        if self.hierarchy && !renderer.supports_sections() {
+            self.disable_hierarchy("quad pool render path unavailable");
         }
 
         info!(width = size.width, height = size.height, "window ready");
@@ -513,7 +613,7 @@ mod tests {
                 Job::Mesh(_) => {
                     self.mesh_jobs.fetch_add(1, Ordering::Relaxed);
                 }
-                Job::Generate(_) => {}
+                Job::Generate(_) | Job::Section(_) => {}
             }
             true
         }

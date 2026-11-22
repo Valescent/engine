@@ -13,29 +13,31 @@
 //! path), and [`texture`] (the procedural block texture array). Every item is
 //! re-exported here, so `renderer::<item>` paths are unchanged.
 
+mod capture;
 mod chunk;
 mod frame;
 mod origin;
 mod pipeline;
+mod pool;
 mod terrain;
 mod texture;
 
 use std::collections::BTreeMap;
 use std::mem::size_of;
 use std::sync::Arc;
+use std::time::Instant;
 
 use glam::{IVec3, Vec3};
 use thiserror::Error;
-#[cfg(feature = "tracy")]
-use tracing::warn;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
 use crate::camera::{Camera, RenderView, relative_origin};
 use crate::frustum::Frustum;
-use crate::mesh::{Lod, MeshData};
+use crate::horizon::Horizon;
 use crate::overlay::build_overlay_mesh;
+use crate::quad_renderer::{CAPACITY_QUADS, HIERARCHY_CAPACITY_QUADS, QuadRenderer, pool_bytes};
 use crate::sky::SkySample;
 use crate::voxel::HighlightVertex;
 use crate::world::{CHUNK_SIZE, ChunkCoord};
@@ -54,18 +56,19 @@ pub(crate) use terrain::{
     DecodedQuad, DuplicateOrigin, TerrainDraw, TerrainSection, UploadPlan, decode_quad, plan_upload,
 };
 
-use self::chunk::{GpuChunk, GpuMesh, create_index_buffer, create_vertex_buffer};
+use self::capture::{Capture, write_bmp};
+use self::chunk::{GpuChunk, create_shared_index_buffer};
 use self::frame::{
     CLEAR_COLOR, FrameUniform, create_camera_bind_group, create_depth_texture,
     create_highlight_buffer, create_overlay_buffer, device_limits, preferred_present_mode,
     timer_features,
 };
-use self::origin::{create_origin_buffer, origin_change, wave_anchor};
+use self::origin::{origin_change, wave_anchor};
 use self::pipeline::{
-    create_camera_bind_group_layout, create_chunk_bind_group, create_chunk_bind_group_layout,
-    create_highlight_pipeline, create_overlay_pipeline, create_pipeline,
-    create_texture_bind_group_layout,
+    create_camera_bind_group_layout, create_chunk_bind_group_layout, create_highlight_pipeline,
+    create_overlay_pipeline, create_pipeline, create_texture_bind_group_layout,
 };
+use self::pool::{PoolCapabilities, pool_supported};
 use self::terrain::section_emits;
 use self::texture::create_block_texture;
 
@@ -102,6 +105,18 @@ pub(crate) struct Renderer {
     chunk_bind_group_layout: wgpu::BindGroupLayout,
     textures_layout: wgpu::BindGroupLayout,
     chunks: BTreeMap<ChunkCoord, GpuChunk>,
+    /// Six `u16` indices per quad, shared by every chunk that fits a `u16` index.
+    shared_index_buffer: wgpu::Buffer,
+    /// Sum of `GpuMesh::bytes` over every resident slot plus the shared index
+    /// buffer, maintained on mutation.
+    geometry_bytes: u64,
+    /// The ADR-0017 quad-pool path, when the adapter supports it.
+    quad: Option<QuadRenderer>,
+    frame_index: u64,
+    /// Last time a pool-full warning was emitted.
+    last_pool_warning: Option<Instant>,
+    /// Pool-full messages folded into the next warning.
+    suppressed_pool_warnings: u32,
     terrain: Option<TerrainDraw>,
     /// Sections created or rewritten since the last [`Renderer::render`].
     pending_terrain_uploads: u32,
@@ -122,8 +137,9 @@ pub(crate) struct Renderer {
     overlay_count: u32,
     depth_texture: wgpu::Texture,
     depth_view: wgpu::TextureView,
-    #[cfg(feature = "tracy")]
     profiler: Option<wgpu_profiler::GpuProfiler>,
+    gpu_ms: f64,
+    capture: Option<Capture>,
 }
 
 impl Renderer {
@@ -153,43 +169,95 @@ impl Renderer {
             "selected GPU adapter"
         );
 
+        let adapter_limits = adapter.limits();
+        let downlevel = adapter.get_downlevel_capabilities().flags;
+        let legacy_forced = std::env::var("ENGINE_LEGACY_RENDER").is_ok_and(|value| value == "1");
+        let capacity_quads = if std::env::var("ENGINE_HIERARCHY").is_ok_and(|value| value == "1") {
+            HIERARCHY_CAPACITY_QUADS
+        } else {
+            CAPACITY_QUADS
+        };
+        let quad_pool_bytes = pool_bytes(capacity_quads);
+        let quad_supported = pool_supported(PoolCapabilities {
+            legacy_forced,
+            indirect_first_instance: adapter
+                .features()
+                .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE),
+            indirect_execution: downlevel.contains(wgpu::DownlevelFlags::INDIRECT_EXECUTION),
+            vertex_storage: downlevel.contains(wgpu::DownlevelFlags::VERTEX_STORAGE),
+            storage_buffers_per_stage: adapter_limits.max_storage_buffers_per_shader_stage,
+            storage_buffer_binding_size: adapter_limits.max_storage_buffer_binding_size,
+            max_buffer_size: adapter_limits.max_buffer_size,
+            pool_bytes: quad_pool_bytes,
+        });
+        if quad_supported {
+            info!("quad pool render path enabled");
+        } else {
+            warn!("quad pool render path unavailable; using per-chunk meshes");
+        }
+
+        let mut required_features = timer_features(&adapter);
+        if quad_supported {
+            required_features |= wgpu::Features::INDIRECT_FIRST_INSTANCE;
+        }
+        let mut required_limits = device_limits(&adapter);
+        if quad_supported {
+            required_limits.max_storage_buffers_per_shader_stage =
+                required_limits.max_storage_buffers_per_shader_stage.max(2);
+            required_limits.max_storage_buffer_binding_size = required_limits
+                .max_storage_buffer_binding_size
+                .max(quad_pool_bytes);
+            required_limits.max_buffer_size = required_limits.max_buffer_size.max(quad_pool_bytes);
+        }
+
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("engine device"),
-                required_features: timer_features(&adapter),
-                required_limits: device_limits(&adapter),
+                required_features,
+                required_limits,
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
                 memory_hints: wgpu::MemoryHints::Performance,
                 trace: wgpu::Trace::Off,
             })
             .await?;
 
-        #[cfg(feature = "tracy")]
         let profiler = if timer_features(&adapter).contains(wgpu::Features::TIMESTAMP_QUERY) {
-            match wgpu_profiler::GpuProfiler::new_with_tracy_client(
+            #[cfg(feature = "tracy")]
+            let created = wgpu_profiler::GpuProfiler::new_with_tracy_client(
                 wgpu_profiler::GpuProfilerSettings::default(),
                 adapter.get_info().backend,
                 &device,
                 &queue,
-            ) {
+            );
+            #[cfg(not(feature = "tracy"))]
+            let created = wgpu_profiler::GpuProfiler::new(
+                &device,
+                wgpu_profiler::GpuProfilerSettings::default(),
+            );
+            match created {
                 Ok(profiler) => Some(profiler),
                 Err(error) => {
-                    warn!(%error, "GPU profiling disabled");
+                    warn!(%error, "GPU timing disabled");
                     None
                 }
             }
         } else {
-            warn!("no timestamp-query support; profiling the CPU only");
+            warn!("no timestamp-query support; GPU timing disabled");
             None
         };
 
         let config = surface
             .get_default_config(&adapter, width, height)
             .ok_or(RendererError::UnsupportedSurface)?;
-        let present_modes = surface.get_capabilities(&adapter).present_modes;
+        let caps = surface.get_capabilities(&adapter);
+        let present_modes = caps.present_modes;
         let mut config = config;
         config.present_mode = wgpu::PresentMode::Fifo;
+        if caps.usages.contains(wgpu::TextureUsages::COPY_SRC) {
+            config.usage |= wgpu::TextureUsages::COPY_SRC;
+        }
         surface.configure(&device, &config);
+        let capture = Capture::new(&device, &config);
 
         let view = camera.render_view();
         let frame = FrameUniform {
@@ -220,6 +288,18 @@ impl Renderer {
         let texture_bind_group_layout = create_texture_bind_group_layout(&device);
         let (block_texture, texture_bind_group) =
             create_block_texture(&device, &queue, &texture_bind_group_layout);
+        let quad = if quad_supported {
+            QuadRenderer::new(
+                &device,
+                &queue,
+                &config,
+                &camera_bind_group_layout,
+                &texture_bind_group_layout,
+                capacity_quads,
+            )
+        } else {
+            None
+        };
         let pipeline = create_pipeline(
             &device,
             &config,
@@ -251,6 +331,9 @@ impl Renderer {
         let overlay_pipeline = create_overlay_pipeline(&device, &config)?;
         let (overlay_buffer, overlay_buffer_size) = create_overlay_buffer(&device);
 
+        let shared_index_buffer = create_shared_index_buffer(&device);
+        let shared_index_bytes = shared_index_buffer.size();
+
         let renderer = Self {
             window,
             instance,
@@ -268,6 +351,12 @@ impl Renderer {
             chunk_bind_group_layout,
             textures_layout: texture_bind_group_layout,
             chunks: BTreeMap::new(),
+            shared_index_buffer,
+            geometry_bytes: shared_index_bytes,
+            quad,
+            frame_index: 0,
+            last_pool_warning: None,
+            suppressed_pool_warnings: 0,
             terrain: None,
             pending_terrain_uploads: 0,
             present_modes,
@@ -285,8 +374,9 @@ impl Renderer {
             overlay_count: 0,
             depth_texture,
             depth_view,
-            #[cfg(feature = "tracy")]
             profiler,
+            gpu_ms: 0.0,
+            capture,
         };
 
         info!(
@@ -308,6 +398,9 @@ impl Renderer {
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
+        if let Some(capture) = &mut self.capture {
+            capture.resize(&self.device, &self.config);
+        }
         let (depth_texture, depth_view) = create_depth_texture(&self.device, &self.config);
         self.depth_texture = depth_texture;
         self.depth_view = depth_view;
@@ -372,108 +465,6 @@ impl Renderer {
     fn write_frame(&mut self) {
         self.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&self.frame));
-    }
-
-    pub(crate) fn upload_chunk(
-        &mut self,
-        chunk: ChunkCoord,
-        lod: Lod,
-        revision: u64,
-        mesh: &MeshData,
-    ) {
-        if mesh.is_empty() {
-            if let Some(gpu_chunk) = self.chunks.get_mut(&chunk) {
-                *gpu_chunk.slot(lod) = None;
-                if gpu_chunk.active == Some(lod) {
-                    gpu_chunk.active = None;
-                }
-                if gpu_chunk.is_empty() {
-                    self.chunks.remove(&chunk);
-                }
-            }
-            return;
-        }
-
-        let (vertex_buffer, _) = create_vertex_buffer(&self.device, &mesh.vertices);
-        let (index_buffer, index_format, index_count) = create_index_buffer(&self.device, mesh);
-        let gpu_chunk = self.chunk_entry(chunk);
-        *gpu_chunk.slot(lod) = Some((
-            revision,
-            GpuMesh {
-                vertex_buffer,
-                index_buffer,
-                index_format,
-                index_count,
-            },
-        ));
-        if gpu_chunk.active.is_none() {
-            gpu_chunk.active = Some(lod);
-        }
-    }
-
-    fn chunk_entry(&mut self, chunk: ChunkCoord) -> &mut GpuChunk {
-        let device = &self.device;
-        let layout = &self.chunk_bind_group_layout;
-        self.chunks.entry(chunk).or_insert_with(|| {
-            let world_origin = chunk.world_origin().to_array();
-            let origin_buffer = create_origin_buffer(device, "chunk origin", world_origin, 0);
-            GpuChunk {
-                bind_group: create_chunk_bind_group(device, layout, &origin_buffer),
-                _origin_buffer: origin_buffer,
-                lod0: None,
-                lod1: None,
-                lod2: None,
-                water: None,
-                active: None,
-            }
-        })
-    }
-
-    /// Makes `lod` the drawn mesh when that mesh is resident.
-    pub(crate) fn select_active(&mut self, chunk: ChunkCoord, lod: Lod) {
-        if let Some(gpu_chunk) = self.chunks.get_mut(&chunk)
-            && gpu_chunk.mesh(lod).is_some()
-        {
-            gpu_chunk.active = Some(lod);
-        }
-    }
-
-    /// Uploads or clears a chunk's transparent water mesh.
-    pub(crate) fn upload_water_chunk(&mut self, chunk: ChunkCoord, revision: u64, mesh: &MeshData) {
-        if mesh.is_empty() {
-            if let Some(gpu_chunk) = self.chunks.get_mut(&chunk) {
-                gpu_chunk.water = None;
-                if gpu_chunk.is_empty() {
-                    self.chunks.remove(&chunk);
-                }
-            }
-            return;
-        }
-
-        let (vertex_buffer, _) = create_vertex_buffer(&self.device, &mesh.vertices);
-        let (index_buffer, index_format, index_count) = create_index_buffer(&self.device, mesh);
-        let gpu_chunk = self.chunk_entry(chunk);
-        gpu_chunk.water = Some((
-            revision,
-            GpuMesh {
-                vertex_buffer,
-                index_buffer,
-                index_format,
-                index_count,
-            },
-        ));
-    }
-
-    pub(crate) fn remove_chunk(&mut self, chunk: ChunkCoord) {
-        self.chunks.remove(&chunk);
-    }
-
-    pub(crate) fn total_vertices(&self) -> u64 {
-        self.chunks
-            .values()
-            .filter_map(GpuChunk::active_mesh)
-            .map(|mesh| u64::from(mesh.index_count))
-            .sum()
     }
 
     pub(crate) fn toggle_vsync(&mut self) -> bool {
@@ -608,8 +599,13 @@ impl Renderer {
     }
 
     #[allow(clippy::cast_precision_loss, clippy::too_many_lines)]
-    pub(crate) fn render(&mut self, frustum: &Frustum) -> FrameStats {
+    pub(crate) fn render(&mut self, frustum: &Frustum, horizon: &Horizon) -> FrameStats {
+        self.frame_index += 1;
+        if let Some(quad) = self.quad.as_mut() {
+            quad.begin_frame(self.frame_index);
+        }
         let mut stats = FrameStats {
+            gpu_ms: self.gpu_ms,
             terrain_sections_uploaded: std::mem::take(&mut self.pending_terrain_uploads),
             ..FrameStats::default()
         };
@@ -652,6 +648,7 @@ impl Renderer {
                 label: Some("frame encoder"),
             });
 
+        let mut captured = false;
         {
             profiling::scope!("encode");
             let attachments = [Some(wgpu::RenderPassColorAttachment {
@@ -663,28 +660,50 @@ impl Renderer {
                     store: wgpu::StoreOp::Store,
                 },
             })];
+            let mut quad = self.quad.take();
             let descriptor = self.scene_pass_descriptor(&attachments);
 
-            #[cfg(feature = "tracy")]
             if let Some(profiler) = &self.profiler {
                 let mut scope = profiler.scope("world", &mut encoder);
                 let mut pass = scope.scoped_render_pass("terrain", descriptor);
-                self.draw_scene(&mut pass, frustum, &mut stats);
+                self.draw_scene(quad.as_mut(), &mut pass, frustum, horizon, &mut stats);
                 drop(pass);
             } else {
                 let mut pass = encoder.begin_render_pass(&descriptor);
-                self.draw_scene(&mut pass, frustum, &mut stats);
+                self.draw_scene(quad.as_mut(), &mut pass, frustum, horizon, &mut stats);
             }
 
-            #[cfg(not(feature = "tracy"))]
-            {
-                let mut pass = encoder.begin_render_pass(&descriptor);
-                self.draw_scene(&mut pass, frustum, &mut stats);
-            }
+            self.quad = quad;
 
-            #[cfg(feature = "tracy")]
             if let Some(profiler) = self.profiler.as_mut() {
                 profiler.resolve_queries(&mut encoder);
+            }
+
+            if let Some(capture) = &mut self.capture
+                && capture.due()
+            {
+                encoder.copy_texture_to_buffer(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &frame.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &capture.buffer,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(capture.bytes_per_row),
+                            rows_per_image: Some(capture.height),
+                        },
+                    },
+                    wgpu::Extent3d {
+                        width: capture.width,
+                        height: capture.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                captured = true;
             }
         }
 
@@ -693,32 +712,63 @@ impl Renderer {
             self.queue.submit(Some(encoder.finish()));
             self.window.pre_present_notify();
         }
+        if captured {
+            self.finish_capture();
+        }
         {
             profiling::scope!("present");
             self.queue.present(frame);
         }
 
-        #[cfg(feature = "tracy")]
-        {
-            profiling::scope!("profiler end");
-            if let Some(profiler) = self.profiler.as_mut() {
-                if let Err(error) = profiler.end_frame() {
-                    warn!(%error, "GPU profiler frame was not resolved");
-                }
-                let period = self.queue.get_timestamp_period();
-                if let Some(queries) = profiler.process_finished_frame(period) {
-                    let gpu_ms = queries
-                        .iter()
-                        .filter_map(|query| query.time.as_ref())
-                        .map(|time| time.end - time.start)
-                        .sum::<f64>()
-                        * 1000.0;
-                    crate::metrics::gpu_ms(gpu_ms);
-                }
+        profiling::scope!("profiler end");
+        if let Some(profiler) = self.profiler.as_mut() {
+            if let Err(error) = profiler.end_frame() {
+                warn!(%error, "GPU profiler frame was not resolved");
+            }
+            let period = self.queue.get_timestamp_period();
+            if let Some(queries) = profiler.process_finished_frame(period) {
+                let gpu_ms = queries
+                    .iter()
+                    .filter_map(|query| query.time.as_ref())
+                    .map(|time| time.end - time.start)
+                    .sum::<f64>()
+                    * 1000.0;
+                self.gpu_ms = gpu_ms;
+                crate::metrics::gpu_ms(gpu_ms);
             }
         }
 
         stats
+    }
+
+    fn finish_capture(&mut self) {
+        let Some(capture) = &mut self.capture else {
+            return;
+        };
+        let slice = capture.buffer.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+        let result = slice.get_mapped_range().map(|data| {
+            write_bmp(
+                &capture.path,
+                capture.width,
+                capture.height,
+                capture.bytes_per_row,
+                capture.format,
+                &data,
+            )
+        });
+        capture.buffer.unmap();
+        capture.done = true;
+        match result {
+            Ok(Ok(())) => info!(path = %capture.path.display(), "captured frame"),
+            Ok(Err(error)) => {
+                warn!(%error, path = %capture.path.display(), "failed to write frame capture");
+            }
+            Err(error) => {
+                warn!(%error, path = %capture.path.display(), "failed to map frame capture");
+            }
+        }
     }
 
     fn scene_pass_descriptor<'a>(
@@ -742,83 +792,122 @@ impl Renderer {
         }
     }
 
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(clippy::cast_precision_loss, clippy::too_many_lines)]
     fn draw_scene(
         &self,
+        quad: Option<&mut QuadRenderer>,
         pass: &mut wgpu::RenderPass<'_>,
         frustum: &Frustum,
+        horizon: &Horizon,
         stats: &mut FrameStats,
     ) {
         let render_origin = self.render_origin;
-        if !self.chunks.is_empty() {
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            pass.set_bind_group(2, &self.texture_bind_group, &[]);
+        if let Some(quad) = quad {
+            quad.draw(
+                &self.queue,
+                pass,
+                &self.camera_bind_group,
+                &self.texture_bind_group,
+                frustum,
+                horizon,
+                stats,
+            );
+        } else {
+            stats.geometry_bytes = self.geometry_bytes;
+
+            // One traversal: count every resident chunk and test each chunk's AABB
+            // once, recording the opaque and water meshes that survive culling.
+            let mut opaque = Vec::with_capacity(self.chunks.len());
+            let mut water = Vec::with_capacity(self.chunks.len());
             for (chunk, gpu_chunk) in &self.chunks {
                 stats.total_chunks += 1;
-                let Some(mesh) = gpu_chunk.active_mesh() else {
-                    continue;
-                };
                 let min = relative_origin(chunk.world_origin().to_array(), render_origin);
                 if !frustum.intersects_aabb(min, min + Vec3::splat(CHUNK_SIZE as f32)) {
                     continue;
                 }
-                pass.set_bind_group(1, &gpu_chunk.bind_group, &[]);
-                pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-                pass.set_index_buffer(mesh.index_buffer.slice(..), mesh.index_format);
-                pass.draw_indexed(0..mesh.index_count, 0, 0..1);
-                stats.visible_chunks += 1;
-                stats.draw_calls += 1;
-                stats.visible_vertices += u64::from(mesh.index_count);
+                if horizon.occludes(*chunk) {
+                    stats.horizon_culled += 1;
+                    continue;
+                }
+                if let Some(mesh) = gpu_chunk.active_mesh() {
+                    opaque.push((gpu_chunk, mesh));
+                }
+                if let Some((_, mesh)) = &gpu_chunk.water {
+                    water.push((gpu_chunk, mesh));
+                }
             }
-        }
 
-        // Packed-quad opaque and cutout terrain, still before any water.
-        if let Some(terrain) = &self.terrain {
-            terrain.draw_opaque(
-                pass,
-                frustum,
-                render_origin,
-                &self.camera_bind_group,
-                &self.texture_bind_group,
-                stats,
-            );
-        }
-
-        // Transparent water after all opaque geometry; depth writes stay off.
-        pass.set_pipeline(&self.water_pipeline);
-        pass.set_bind_group(0, &self.camera_bind_group, &[]);
-        pass.set_bind_group(2, &self.texture_bind_group, &[]);
-        for (chunk, gpu_chunk) in &self.chunks {
-            let Some((_, mesh)) = &gpu_chunk.water else {
-                continue;
-            };
-            let min = relative_origin(chunk.world_origin().to_array(), render_origin);
-            if !frustum.intersects_aabb(min, min + Vec3::splat(CHUNK_SIZE as f32)) {
-                continue;
+            if !opaque.is_empty() {
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                pass.set_bind_group(2, &self.texture_bind_group, &[]);
+                for (gpu_chunk, mesh) in opaque {
+                    pass.set_bind_group(1, &gpu_chunk.bind_group, &[]);
+                    pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+                    pass.set_index_buffer(
+                        mesh.index_buffer
+                            .as_ref()
+                            .unwrap_or(&self.shared_index_buffer)
+                            .slice(..),
+                        mesh.index_format,
+                    );
+                    pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                    stats.visible_chunks += 1;
+                    stats.draw_calls += 1;
+                    stats.visible_vertices += u64::from(mesh.index_count);
+                    stats.visible_bytes += mesh.bytes;
+                }
             }
-            if gpu_chunk.active_mesh().is_none() {
-                stats.visible_chunks += 1;
-            }
-            pass.set_bind_group(1, &gpu_chunk.bind_group, &[]);
-            pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-            pass.set_index_buffer(mesh.index_buffer.slice(..), mesh.index_format);
-            pass.draw_indexed(0..mesh.index_count, 0, 0..1);
-            stats.draw_calls += 1;
-            stats.visible_vertices += u64::from(mesh.index_count);
-        }
 
-        // Packed-quad water, last of the terrain passes: blended, no depth
-        // writes, and no culling.
-        if let Some(terrain) = &self.terrain {
-            terrain.draw_water(
-                pass,
-                frustum,
-                render_origin,
-                &self.camera_bind_group,
-                &self.texture_bind_group,
-                stats,
-            );
+            // Packed-quad opaque and cutout terrain, still before any water.
+            if let Some(terrain) = &self.terrain {
+                terrain.draw_opaque(
+                    pass,
+                    frustum,
+                    render_origin,
+                    &self.camera_bind_group,
+                    &self.texture_bind_group,
+                    stats,
+                );
+            }
+
+            // Transparent water after all opaque geometry; depth writes stay off.
+            if !water.is_empty() {
+                pass.set_pipeline(&self.water_pipeline);
+                pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                pass.set_bind_group(2, &self.texture_bind_group, &[]);
+                for (gpu_chunk, mesh) in water {
+                    if gpu_chunk.active_mesh().is_none() {
+                        stats.visible_chunks += 1;
+                    }
+                    pass.set_bind_group(1, &gpu_chunk.bind_group, &[]);
+                    pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+                    pass.set_index_buffer(
+                        mesh.index_buffer
+                            .as_ref()
+                            .unwrap_or(&self.shared_index_buffer)
+                            .slice(..),
+                        mesh.index_format,
+                    );
+                    pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                    stats.draw_calls += 1;
+                    stats.visible_vertices += u64::from(mesh.index_count);
+                    stats.visible_bytes += mesh.bytes;
+                }
+            }
+
+            // Packed-quad water, last of the terrain passes: blended, no depth
+            // writes, and no culling.
+            if let Some(terrain) = &self.terrain {
+                terrain.draw_water(
+                    pass,
+                    frustum,
+                    render_origin,
+                    &self.camera_bind_group,
+                    &self.texture_bind_group,
+                    stats,
+                );
+            }
         }
 
         if self.highlight_count > 0 {
@@ -840,8 +929,14 @@ impl Renderer {
             Ok(surface) => {
                 self.surface = surface;
                 self.surface.configure(&self.device, &self.config);
+                if let Some(capture) = &mut self.capture {
+                    capture.resize(&self.device, &self.config);
+                }
             }
             Err(error) => error!(%error, "failed to recreate the window surface"),
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

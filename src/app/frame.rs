@@ -5,21 +5,21 @@
 use std::time::{Duration, Instant};
 
 use glam::{IVec2, Vec2, Vec3};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use winit::dpi::PhysicalSize;
 use winit::keyboard::KeyCode;
 
 use crate::demo::DemoRuntime;
 use crate::frustum::Frustum;
 use crate::mesh::Lod;
-use crate::mesher::{MeshKind, MeshPool, Priority, collect_finished};
+use crate::mesher::{MeshKind, MeshPool, MeshQueue, Priority, collect_finished};
 use crate::metrics;
 use crate::player::{Player, PlayerInput};
 use crate::renderer::{FrameStats, Renderer, RendererError, TerrainSection};
 use crate::streaming::Streaming;
 use crate::voxel::build_highlight_mesh;
 use crate::world::{CHUNK_COLUMN, ChunkCoord};
-use crate::world_io::{insert_generated_chunk, release_column, save_directory};
+use crate::world_io::{insert_generated_chunk, release_column_tracked, save_directory};
 
 use super::App;
 use super::input::axis;
@@ -28,6 +28,34 @@ const MAX_FRAME_DELTA: Duration = Duration::from_millis(100);
 const FRAME_LOG_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_COLUMNS_PER_FRAME: usize = 2;
 const MAX_UPLOADS_PER_FRAME: usize = 2;
+const LEVEL_WORK_BUDGET: Duration = Duration::from_millis(2);
+const UPLOAD_RETRY_WARNING_COUNT: u8 = 8;
+
+/// Column that owns `chunk`.
+fn chunk_column(chunk: ChunkCoord) -> IVec2 {
+    let coordinates = chunk.coordinates();
+    IVec2::new(coordinates.x, coordinates.z)
+}
+
+/// LODs other than `active`.
+fn inactive_lods(active: Option<Lod>) -> Vec<Lod> {
+    [Lod::Lod0, Lod::Lod1, Lod::Lod2]
+        .into_iter()
+        .filter(|lod| Some(*lod) != active)
+        .collect()
+}
+
+/// Drops built meshes for LODs the renderer no longer draws.
+fn forget_inactive_lods(queue: &mut MeshQueue, renderer: &Renderer, chunk: ChunkCoord) {
+    let Some(active) = renderer.active_lod(chunk) else {
+        return;
+    };
+    for lod in inactive_lods(Some(active)) {
+        if !renderer.has_lod(chunk, lod) {
+            queue.forget_built(chunk, lod, MeshKind::Opaque);
+        }
+    }
+}
 
 /// Uploads the demo's active section set through the renderer's packed-quad path.
 pub(super) fn upload_terrain_demo(
@@ -81,26 +109,20 @@ impl App {
             self.level_player_chunk = player_chunk;
             self.level_work
                 .extend(self.world.iter_chunks().map(|(chunk, _)| chunk));
+            self.admit_deferred_light();
         }
 
-        let work: Vec<ChunkCoord> = self.level_work.drain().collect();
-        for chunk in work {
-            if self.world.chunk(chunk).is_none() {
-                continue;
-            }
-            let mut done = true;
-            if !self.queue.light_is_current(chunk) {
-                done = false;
-                if !self.queue.light_pending(chunk) {
-                    self.queue
-                        .request_light(pool, &self.world, chunk, Priority::Background);
-                }
-            }
-            if self.queue.light_is_current(chunk) {
-                let lod = self.queue.desired_lod(chunk, player_chunk);
-                if !self.queue.is_built(chunk, lod, MeshKind::Opaque) {
-                    done = false;
-                    if !self.queue.is_pending(chunk, lod, MeshKind::Opaque) {
+        let started = Instant::now();
+        while let Some(chunk) = self.level_work.pop_first() {
+            let chunk_started = Instant::now();
+            if let Some(data) = self.world.chunk(chunk) {
+                let has_water = data.has_water();
+                let mut retry = false;
+                if self.queue.light_is_current(chunk) {
+                    let lod = self.queue.desired_lod(chunk, player_chunk);
+                    if !self.queue.is_built(chunk, lod, MeshKind::Opaque)
+                        && !self.queue.is_pending(chunk, lod, MeshKind::Opaque)
+                    {
                         self.queue.request(
                             pool,
                             &self.world,
@@ -109,12 +131,13 @@ impl App {
                             MeshKind::Opaque,
                             Priority::Background,
                         );
+                        retry = !self.queue.is_pending(chunk, lod, MeshKind::Opaque);
                     }
-                }
 
-                if !self.queue.is_built(chunk, Lod::Lod0, MeshKind::Water) {
-                    done = false;
-                    if !self.queue.is_pending(chunk, Lod::Lod0, MeshKind::Water) {
+                    if has_water
+                        && !self.queue.is_built(chunk, Lod::Lod0, MeshKind::Water)
+                        && !self.queue.is_pending(chunk, Lod::Lod0, MeshKind::Water)
+                    {
                         self.queue.request(
                             pool,
                             &self.world,
@@ -123,30 +146,96 @@ impl App {
                             MeshKind::Water,
                             Priority::Background,
                         );
+                        retry = retry || !self.queue.is_pending(chunk, Lod::Lod0, MeshKind::Water);
+                    }
+                } else if !self.queue.light_pending(chunk) {
+                    if self.light_neighbourhood_stable(chunk_column(chunk)) {
+                        self.queue
+                            .request_light(pool, &self.world, chunk, Priority::Background);
+                        retry = !self.queue.light_pending(chunk);
+                    } else {
+                        self.deferred_light.insert(chunk);
                     }
                 }
+                if retry {
+                    self.level_work.insert(chunk);
+                }
             }
-            if !done {
-                self.level_work.insert(chunk);
+            let took = chunk_started.elapsed();
+            if took.as_millis() >= 2 {
+                debug!(
+                    chunk = ?chunk,
+                    ms = took.as_secs_f64() * 1000.0,
+                    "slow level request"
+                );
+            }
+            if started.elapsed() >= LEVEL_WORK_BUDGET {
+                break;
             }
         }
         self.stats.pending_jobs = self.queue.pending_len();
     }
 
+    /// Whether every adjacent column is loaded or will never load.
+    fn light_neighbourhood_stable(&self, column: IVec2) -> bool {
+        let Some(streaming) = &self.streaming else {
+            return true;
+        };
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                if dx == 0 && dz == 0 {
+                    continue;
+                }
+                let neighbour = column + IVec2::new(dx, dz);
+                if !streaming.is_loaded(neighbour) && self.column_is_wanted(neighbour) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Moves deferred light work back into the level pass once it can be final.
+    fn admit_deferred_light(&mut self) {
+        if self.deferred_light.is_empty() {
+            return;
+        }
+        let ready: Vec<ChunkCoord> = self
+            .deferred_light
+            .iter()
+            .copied()
+            .filter(|chunk| self.light_neighbourhood_stable(chunk_column(*chunk)))
+            .collect();
+        for chunk in &ready {
+            self.deferred_light.remove(chunk);
+        }
+        self.level_work.extend(ready);
+    }
+
+    /// Whether the streamer may still generate this column for the player.
+    fn column_is_wanted(&self, column: IVec2) -> bool {
+        let Some(streaming) = &self.streaming else {
+            return false;
+        };
+        let player_column = Streaming::column_at(self.player.position);
+        let delta = (column - player_column).abs();
+        delta.x.max(delta.y) <= streaming.render_distance()
+    }
+
     pub(crate) fn upload_finished_meshes(&mut self, pool: &dyn MeshPool) {
         profiling::scope!("mesh upload");
-        let (results, lights, generations, rebuild) =
-            collect_finished(&mut self.queue, pool, MAX_UPLOADS_PER_FRAME);
-        let rebuild_ms = rebuild.as_secs_f64() * 1000.0;
+        let finished = collect_finished(&mut self.queue, pool, MAX_UPLOADS_PER_FRAME);
+        let rebuild_ms = finished.worker_time.as_secs_f64() * 1000.0;
         self.stats.rebuild_ms += rebuild_ms;
         self.stats.last_rebuild_ms = rebuild_ms;
 
-        for light in lights {
+        for light in finished.lights {
+            self.level_work.insert(light.chunk);
             self.world.set_light_field(light.chunk, light.light);
         }
 
         let chunk_directory = save_directory(self.stress);
-        for generation in generations {
+        for generation in finished.generations {
             self.stats.generated_columns += 1;
             self.stats.generation_ms += generation.elapsed.as_secs_f64() * 1000.0;
             let mut loaded = true;
@@ -172,20 +261,65 @@ impl App {
             return;
         };
         let mut upload_ms = 0.0;
-        for result in &results {
+        let mut outcomes = Vec::with_capacity(finished.meshes.len());
+        for result in &finished.meshes {
             let started = Instant::now();
-            match result.kind {
+            let uploaded = match result.kind {
                 MeshKind::Opaque => {
-                    renderer.upload_chunk(result.chunk, result.lod, result.revision, &result.mesh);
+                    let uploaded = renderer.upload_chunk(
+                        result.chunk,
+                        result.lod,
+                        result.revision,
+                        &result.mesh,
+                    );
+                    if uploaded {
+                        let desired = self.queue.desired(result.chunk);
+                        let target = desired
+                            .filter(|&lod| renderer.has_lod(result.chunk, lod))
+                            .unwrap_or(result.lod);
+                        renderer.select_active(result.chunk, target);
+                        forget_inactive_lods(&mut self.queue, renderer, result.chunk);
+                    }
+                    uploaded
                 }
                 MeshKind::Water => {
-                    renderer.upload_water_chunk(result.chunk, result.revision, &result.mesh);
+                    renderer.upload_water_chunk(result.chunk, result.revision, &result.mesh)
                 }
-            }
+            };
+            outcomes.push(uploaded);
             upload_ms += started.elapsed().as_secs_f64() * 1000.0;
         }
         self.stats.upload_ms += upload_ms;
         self.stats.last_upload_ms = upload_ms;
+        for (result, uploaded) in finished.meshes.iter().zip(outcomes) {
+            self.record_mesh_upload(result, uploaded);
+        }
+        for result in &finished.sections {
+            self.upload_section_result(result);
+        }
+    }
+
+    /// Updates the per-chunk retry state for one mesh upload attempt.
+    fn record_mesh_upload(&mut self, result: &crate::mesher::MeshResult, uploaded: bool) -> bool {
+        if uploaded {
+            self.upload_failures.remove(&result.chunk);
+            self.level_work.insert(result.chunk);
+            return true;
+        }
+        self.queue
+            .forget_built(result.chunk, result.lod, result.kind);
+        let count = self.upload_failures.entry(result.chunk).or_insert(0);
+        *count = count.saturating_add(1);
+        let count = *count;
+        if count == UPLOAD_RETRY_WARNING_COUNT {
+            warn!(
+                chunk = ?result.chunk,
+                count,
+                "mesh upload keeps failing; retrying when pool or slot space frees"
+            );
+        }
+        self.level_work.insert(result.chunk);
+        false
     }
 
     fn select_active_levels(&mut self) {
@@ -307,7 +441,7 @@ impl App {
             .update_guarded(source, input, delta_seconds, &ready);
     }
 
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(clippy::cast_precision_loss, clippy::too_many_lines)]
     pub(super) fn redraw(&mut self) {
         if self.occluded {
             return;
@@ -357,6 +491,11 @@ impl App {
             }
         }
 
+        if self.hierarchy {
+            let pool = self.mesher.clone();
+            self.ensure_hierarchy(pool.as_deref());
+        }
+
         let player_column = Streaming::column_at(self.player.position);
         let player_column = (player_column.x, player_column.y);
         if self
@@ -386,12 +525,15 @@ impl App {
             profiling::scope!("frustum");
             Frustum::from_view_projection(view.view_projection)
         };
+        if self.horizon_cull && self.horizon_at.elapsed() >= Duration::from_millis(250) {
+            self.rebuild_horizon();
+        }
         let slow_render = Instant::now();
         if let Some(renderer) = &mut self.renderer {
             renderer.set_camera(&view);
             renderer.set_sky(&self.sky.sample(), self.unlit);
             renderer.set_overlay(overlay.as_deref());
-            self.stats.totals = renderer.render(&frustum);
+            self.stats.totals = renderer.render(&frustum, &self.horizon);
         }
         if slow_render.elapsed().as_millis() > 5 {
             debug!(
@@ -404,6 +546,8 @@ impl App {
         metrics::visible_chunks(f64::from(self.stats.totals.visible_chunks));
         metrics::draw_calls(f64::from(self.stats.totals.draw_calls));
         metrics::visible_vertices(self.stats.totals.visible_vertices as f64);
+        metrics::geometry_bytes(self.stats.totals.geometry_bytes as f64);
+        metrics::visible_geometry_bytes(self.stats.totals.visible_bytes as f64);
         metrics::rebuild_ms(self.stats.last_rebuild_ms);
         metrics::upload_ms(self.stats.last_upload_ms);
         metrics::mesh_jobs(self.stats.pending_jobs as f64);
@@ -434,6 +578,7 @@ impl App {
                 upload_ms = self.stats.upload_ms,
                 generated_columns = self.stats.generated_columns,
                 generation_ms = self.stats.generation_ms,
+                gpu_ms = self.stats.totals.gpu_ms,
                 player = ?self.player.position,
                 on_ground = self.player.on_ground,
                 "frame timing"
@@ -471,11 +616,15 @@ impl App {
     #[allow(clippy::cast_precision_loss)]
     pub(crate) fn apply_render_distance(&mut self) {
         let distance = self.config.render_distance_chunks as f32 * 32.0;
-        self.camera.set_far_plane(distance + 64.0);
-        self.camera.set_fog_end(distance);
+        if self.hierarchy {
+            self.camera.set_far_plane(9_216.0);
+            self.camera.set_fog_end(9_200.0);
+        } else {
+            self.camera.set_far_plane(distance + 64.0);
+            self.camera.set_fog_end(distance);
+        }
     }
 
-    /// Whether all four chunks of a column are lit and meshed.
     /// Whether all four chunks of a column are lit and meshed.
     ///
     /// A chunk with no stored blocks is empty air and needs no light or mesh.
@@ -491,19 +640,33 @@ impl App {
     }
 
     /// Marks ready columns, unloads distant ones, and requests the nearest missing.
+    ///
+    /// Both the wanted and unloadable lists are rebuilt only when the player
+    /// crosses a column, so a settled frame does not rescan the world.
     pub(crate) fn stream_columns(&mut self, pool: &dyn MeshPool) {
+        profiling::scope!("stream columns");
         let Some(seed) = self.seed else {
             return;
         };
         let player_column = Streaming::column_at(self.player.position);
 
-        let unloadable = self
-            .streaming
-            .as_ref()
-            .map(|streaming| streaming.unloadable(player_column))
-            .unwrap_or_default();
-        for column in unloadable {
-            self.unload_column(column);
+        if self.wanted_player != Some(player_column) {
+            let forward = self.camera.forward();
+            let forward = Vec2::new(forward.x, forward.z).normalize_or_zero();
+            let (wanted, unload) = self
+                .streaming
+                .as_ref()
+                .map(|streaming| {
+                    (
+                        streaming.wanted(self.player.position, forward),
+                        streaming.unloadable(player_column),
+                    )
+                })
+                .unwrap_or_default();
+            self.wanted_columns = wanted;
+            self.unload_columns = unload;
+            self.wanted_cursor = 0;
+            self.wanted_player = Some(player_column);
         }
 
         let loaded: Vec<IVec2> = self
@@ -519,27 +682,58 @@ impl App {
             }
         }
 
-        let forward = self.camera.forward();
-        let forward = Vec2::new(forward.x, forward.z).normalize_or_zero();
-        let wanted = self
-            .streaming
-            .as_ref()
-            .map(|streaming| streaming.wanted(self.player.position, forward))
-            .unwrap_or_default();
-        for column in wanted.into_iter().take(MAX_COLUMNS_PER_FRAME) {
+        let mut failed_unload = false;
+        for column in std::mem::take(&mut self.unload_columns) {
+            if !self.unload_column(column) {
+                self.unload_columns.push(column);
+                failed_unload = true;
+            }
+        }
+        if failed_unload {
+            // Rebuild both lists next frame and retry the save.
+            self.wanted_player = None;
+        }
+
+        let mut requested = 0;
+        while requested < MAX_COLUMNS_PER_FRAME && self.wanted_cursor < self.wanted_columns.len() {
+            let column = self.wanted_columns[self.wanted_cursor];
+            self.wanted_cursor += 1;
+            let loaded = self
+                .streaming
+                .as_ref()
+                .is_some_and(|streaming| streaming.is_loaded(column));
+            if loaded || self.queue.generation_pending(column) {
+                continue;
+            }
             self.queue
                 .request_generation(pool, seed, column, Priority::Background);
+            if self.queue.generation_pending(column) {
+                requested += 1;
+            } else {
+                // The pool is behind; keep this candidate for the next frame.
+                self.wanted_cursor -= 1;
+                break;
+            }
         }
     }
 
     /// Saves and drops one column that left the unload margin.
-    fn unload_column(&mut self, column: IVec2) {
-        let Some(directory) = &self.save_directory else {
-            return;
+    ///
+    /// Returns whether the column was released.
+    fn unload_column(&mut self, column: IVec2) -> bool {
+        let Some(directory) = self.save_directory.clone() else {
+            return false;
         };
-        if let Err(error) = release_column(&mut self.world, &mut self.queue, directory, column) {
+        self.invalidate_neighbour_columns(column);
+        if let Err(error) = release_column_tracked(
+            &mut self.world,
+            &mut self.queue,
+            &directory,
+            &mut self.saved_chunks,
+            column,
+        ) {
             error!(%error, ?column, "failed to save an unloaded chunk");
-            return;
+            return false;
         }
         if let Some(renderer) = &mut self.renderer {
             for y in 0..CHUNK_COLUMN {
@@ -547,13 +741,23 @@ impl App {
             }
         }
         for y in 0..CHUNK_COLUMN {
-            self.level_work
-                .remove(&ChunkCoord::new(column.x, y, column.y));
+            let chunk = ChunkCoord::new(column.x, y, column.y);
+            self.level_work.remove(&chunk);
+            self.deferred_light.remove(&chunk);
+            self.upload_failures.remove(&chunk);
         }
         if let Some(streaming) = &mut self.streaming {
             streaming.mark_unloaded(column);
         }
         debug!(?column, "unloaded column");
+        true
+    }
+
+    /// Invalidates the meshes of stored columns adjacent to an unloaded one.
+    fn invalidate_neighbour_columns(&mut self, column: IVec2) {
+        let neighbours = self.world.neighbour_column_chunks(column);
+        self.queue.invalidate(&neighbours);
+        self.level_work.extend(neighbours.iter().copied());
     }
 
     pub(crate) fn set_spawn(&mut self, position: Vec3) {
@@ -580,8 +784,9 @@ mod tests {
     use crate::block::Block;
     use crate::generation::GenResult;
     use crate::mesh;
-    use crate::mesher::{MeshQueue, MeshResult};
+    use crate::mesher::{MeshQueue, MeshResult, SectionResult};
     use crate::residency;
+    use crate::section::SectionKey;
     use crate::world::World;
 
     use super::super::tests::{InlinePool, demo_world, temp_directory};
@@ -727,5 +932,39 @@ mod tests {
         assert_eq!(saved.block(coordinate), Block::Stone);
         assert!(!app.streaming.as_ref().unwrap().is_ready(IVec2::ZERO));
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_stale_section_result_is_dropped() {
+        let mut app = App::with_world(World::default(), false);
+        let key = SectionKey::new(1, IVec3::ZERO);
+        app.section_jobs.insert(key, 7);
+        app.sections_in_flight.insert(key);
+        app.sections.mark_building(key);
+
+        let stale = SectionResult {
+            key,
+            job: 6,
+            opaque: mesh::MeshData::default(),
+            water: mesh::MeshData::default(),
+            bounds: None,
+            elapsed: Duration::ZERO,
+        };
+        assert!(!app.upload_section_result(&stale));
+        assert_ne!(app.sections.state(key), crate::hierarchy::Readiness::Ready);
+        assert!(app.sections_in_flight.contains(&key));
+
+        let fresh = SectionResult { job: 7, ..stale };
+        assert!(app.upload_section_result(&fresh));
+        assert_eq!(app.sections.state(key), crate::hierarchy::Readiness::Ready);
+        assert!(!app.sections_in_flight.contains(&key));
+    }
+
+    #[test]
+    fn inactive_lods_exclude_only_the_active_level() {
+        assert_eq!(inactive_lods(Some(Lod::Lod0)), vec![Lod::Lod1, Lod::Lod2]);
+        assert_eq!(inactive_lods(Some(Lod::Lod1)), vec![Lod::Lod0, Lod::Lod2]);
+        assert_eq!(inactive_lods(Some(Lod::Lod2)), vec![Lod::Lod0, Lod::Lod1]);
+        assert_eq!(inactive_lods(None), vec![Lod::Lod0, Lod::Lod1, Lod::Lod2]);
     }
 }

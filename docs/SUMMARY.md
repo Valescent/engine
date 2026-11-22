@@ -20,6 +20,7 @@
   - [v0.0.6 — Atmosphere](dev/v0.0.6-scope.md)
   - [v0.0.7 — Advanced Horizons](dev/v0.0.7-scope.md)
   - [v0.0.8 — Scale](dev/v0.0.8-scope.md)
+  - [v0.0.9 — Far View](dev/v0.0.9-scope.md)
   - [Milestone template](dev/milestone-template.md)
 
 # Specs
@@ -31,6 +32,7 @@
 - [v0.0.6 — Atmosphere](specs/v0.0.6.md)
 - [v0.0.7 — Advanced Horizons](specs/v0.0.7.md)
 - [v0.0.8 — Scale](specs/v0.0.8.md)
+- [GPU-Driven Voxel Meshing and Rendering Spec v1](<GPU-Driven Voxel Meshing and Rendering Spec v1.md>)
 
 # Design
 
@@ -40,6 +42,7 @@
 - [Terrain build plan](design/terrain-build-plan.md)
 - [Terrain build prompt](prompt/terrain-build-prompt.md)
 - [Seed-native LOD hierarchy](design/lod-hierarchy.md)
+  - [LOD hierarchy design review](dev/lod-hierarchy-review.md)
 - [Terrain reference notes](design/terrain-lessons.md)
 - [Modular structure](design/modular-structure.md)
 - [Visibility audit](design/visibility-audit.md)
@@ -59,6 +62,7 @@
 - [Debugging](dev/debugging.md)
 - [Profiling](dev/profiling.md)
 - [Benchmark results](dev/benchmarks.md)
+- [Performance backlog](dev/performance-backlog.md)
 - [Culling](dev/culling.md)
 - [CI](dev/ci.md)
 - [Testing](dev/testing.md)
@@ -72,6 +76,9 @@
 - [Engine research](dev/research/README.md)
   - [Memory](dev/research/memory.md)
   - [Rendering](dev/research/rendering.md)
+  - [GPU-driven meshing](dev/research/gpu-driven-meshing.md)
+  - [Meshing](dev/research/meshing.md)
+  - [Geometry representation](dev/research/geometry-representation.md)
   - [Scheduling and streaming](dev/research/scheduling.md)
   - [World generation](dev/research/worldgen.md)
   - [Simulation and tooling](dev/research/simulation-and-tooling.md)
@@ -92,9 +99,10 @@
   - [0011 — Voxel lighting with baked AO](decisions/0011-voxel-light-and-baked-ao.md)
   - [0012 — fastnoise-lite with OpenSimplex2](decisions/0012-fastnoise-lite-and-opensimplex2.md)
   - [0013 — Finite player-centred chunk streaming](decisions/0013-player-centred-chunk-streaming.md)
-  - [0014 - Seed-native multi-level LOD sections](decisions/0014-seed-native-lod-hierarchy.md)
-- [0015 - Per-face texture references are presentation-only](decisions/0015-texture-references-are-presentation.md)
-- [0016 - Block texture mipmap and sampling policy](decisions/0016-block-texture-mipmap-policy.md)
+  - [0014 — Seed-native multi-level LOD sections](decisions/0014-seed-native-lod-hierarchy.md)
+  - [0015 — Per-face texture references are presentation-only](decisions/0015-texture-references-are-presentation.md)
+  - [0016 — Block texture mipmap and sampling policy](decisions/0016-block-texture-mipmap-policy.md)
+  - [0017 — Quad pool and indirect draws](decisions/0017-quad-pool-and-indirect-draws.md)
   - [Template](decisions/0000-template.md)
 
 # Contributing

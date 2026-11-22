@@ -5,6 +5,7 @@
 //! world, generation, and mesher modules, so neither `startup` nor `app` needs
 //! the other in order to use the helpers.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use glam::{IVec2, IVec3, Vec3};
@@ -105,14 +106,29 @@ pub(crate) fn insert_generated_chunk(
 }
 
 /// Saves a column's modified chunks, then drops the column from the world and queue.
+#[cfg(test)]
 pub(crate) fn release_column(
     world: &mut World,
     queue: &mut MeshQueue,
     directory: &Path,
     column: IVec2,
 ) -> Result<(), SaveError> {
+    release_column_tracked(world, queue, directory, &mut HashSet::new(), column)
+}
+
+/// Saves a column and records every chunk that now has a file on disk.
+pub(crate) fn release_column_tracked(
+    world: &mut World,
+    queue: &mut MeshQueue,
+    directory: &Path,
+    saved: &mut HashSet<ChunkCoord>,
+    column: IVec2,
+) -> Result<(), SaveError> {
     for y in 0..CHUNK_COLUMN {
-        world.save_chunk(directory, ChunkCoord::new(column.x, y, column.y))?;
+        let chunk = ChunkCoord::new(column.x, y, column.y);
+        if world.save_chunk(directory, chunk)? {
+            saved.insert(chunk);
+        }
     }
     queue.cancel_generation(column);
     for y in 0..CHUNK_COLUMN {

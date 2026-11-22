@@ -8,7 +8,7 @@ use glam::IVec2;
 use crate::content;
 use crate::hydro;
 use crate::mesher2;
-use crate::section;
+use crate::terrain_section as section;
 
 use super::super::content::demo_materials;
 use super::super::patch::TerrainDemo;

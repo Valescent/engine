@@ -5,17 +5,16 @@
 //! block, LOD1 on `16` cells of `2 × 2 × 2` blocks.
 
 use std::collections::HashMap;
+use std::ops::RangeInclusive;
+use std::sync::Arc;
 
 use glam::IVec3;
 
 use crate::block::Block;
 use crate::light::LightField;
+use crate::quad::{FLAG_WATER, QuadRecord};
 use crate::voxel::Vertex;
-use crate::world::{CHUNK_SIZE, ChunkCoord, World};
-
-// The snapshot lives beside `Chunk`; the re-export keeps `mesh::ChunkSnapshot`
-// paths working for the mesher and the startup path.
-pub(crate) use crate::world::ChunkSnapshot;
+use crate::world::{CHUNK_SIZE, CHUNK_STORAGE_BYTES, Chunk, ChunkCoord, World, packed_block};
 
 /// Distance in chunk units at or below which a chunk renders at LOD0.
 pub(crate) const LOD0_DISTANCE: f32 = 4.0;
@@ -99,6 +98,50 @@ pub(crate) fn select_lod(current: Option<Lod>, distance: f32) -> Lod {
     }
 }
 
+/// Immutable full-resolution copy of one chunk's blocks.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ChunkSnapshot {
+    cells: Arc<Vec<u8>>,
+    water: bool,
+}
+
+impl ChunkSnapshot {
+    /// Copies a chunk out of the world. A missing chunk becomes all air.
+    pub(crate) fn new(world: &World, chunk: ChunkCoord) -> Self {
+        let chunk_data = world.chunk(chunk);
+        let cells = chunk_data.map_or_else(
+            || Arc::new(vec![0; CHUNK_STORAGE_BYTES]),
+            Chunk::shared_storage,
+        );
+        Self {
+            cells,
+            water: chunk_data.is_some_and(Chunk::has_water),
+        }
+    }
+
+    /// Wraps an existing packed grid without copying it.
+    pub(crate) fn from_chunk(data: &Chunk) -> Self {
+        Self {
+            cells: data.shared_storage(),
+            water: data.has_water(),
+        }
+    }
+
+    /// Returns the block at a chunk-local coordinate, or air outside the chunk.
+    pub(crate) fn block(&self, local: IVec3) -> Block {
+        if in_chunk(local) {
+            packed_block(&self.cells, index(local))
+        } else {
+            Block::Air
+        }
+    }
+
+    /// Whether the source chunk held any water.
+    pub(crate) fn has_water(&self) -> bool {
+        self.water
+    }
+}
+
 /// The one-cell border around a chunk, keyed by the owning chunk's local
 /// coordinates (so a `-X` neighbour lands at `x = -1`).
 #[derive(Clone, Debug, Default)]
@@ -107,7 +150,7 @@ pub(crate) struct BorderBlocks {
 }
 
 impl BorderBlocks {
-    /// Copies the solid border cells of the six neighbouring chunks.
+    /// Copies the non-air border cells of the six neighbouring chunks.
     pub(crate) fn new(world: &World, chunk: ChunkCoord) -> Self {
         let mut blocks = HashMap::new();
         for normal in FACE_NORMALS {
@@ -118,7 +161,7 @@ impl BorderBlocks {
                 for v in 0..CHUNK_SIZE {
                     let local = face_local(normal, u, v);
                     let block = data.block(local);
-                    if block.is_solid() {
+                    if block != Block::Air {
                         blocks.insert(local + normal * CHUNK_SIZE, block);
                     }
                 }
@@ -131,6 +174,67 @@ impl BorderBlocks {
     pub(crate) fn block(&self, local: IVec3) -> Block {
         self.blocks.get(&local).copied().unwrap_or(Block::Air)
     }
+}
+
+/// Builds one non-indexed greedy water mesh for a coarse section grid.
+///
+/// `y_range` limits the sample layers scanned. It must cover every water
+/// sample; callers pass a conservative range so empty ranges are skipped
+/// without changing which faces are emitted.
+pub(crate) fn build_section_water_mesh(
+    snapshot: &ChunkSnapshot,
+    border: &BorderBlocks,
+    light: Option<&LightField>,
+    scale: f32,
+    y_range: RangeInclusive<i32>,
+) -> MeshData {
+    if !snapshot.has_water() {
+        return MeshData::default();
+    }
+    let full_block = |local: IVec3| full_block(snapshot, border, local);
+    let matches = |block: Block| block == Block::Water;
+    let exposed = |cell: IVec3, normal: IVec3| full_block(cell + normal) == Block::Air;
+    let corners = |anchor: IVec3, face: usize| water_corners(&full_block, light, anchor, face);
+    greedy(
+        CHUNK_SIZE,
+        scale,
+        &full_block,
+        &matches,
+        &exposed,
+        &|cell| cell,
+        &corners,
+        crate::quad::FLAG_WATER,
+        y_range,
+    )
+}
+
+/// Builds one non-indexed greedy mesh for a coarse section sample grid.
+///
+/// `scale` is the section's sample spacing in blocks. Positions and UVs are in
+/// sample units multiplied by `scale`; face order, AO, and light packing match
+/// the chunk mesher. `y_range` has the same contract as the water variant.
+pub(crate) fn build_section_mesh(
+    snapshot: &ChunkSnapshot,
+    border: &BorderBlocks,
+    light: Option<&LightField>,
+    scale: f32,
+    y_range: RangeInclusive<i32>,
+) -> MeshData {
+    let full_block = |local: IVec3| full_block(snapshot, border, local);
+    let matches = Block::is_solid;
+    let exposed = |cell: IVec3, normal: IVec3| !full_block(cell + normal).is_solid();
+    let corners = |anchor: IVec3, face: usize| corner_values(&full_block, light, anchor, face);
+    greedy(
+        CHUNK_SIZE,
+        scale,
+        &full_block,
+        &matches,
+        &exposed,
+        &|cell| cell,
+        &corners,
+        0,
+        y_range,
+    )
 }
 
 /// Builds one non-indexed greedy mesh for a chunk snapshot.
@@ -159,6 +263,8 @@ pub(crate) fn build_mesh(
                 &exposed,
                 &|cell| cell,
                 &corners,
+                0,
+                0..=lod.cell_count() - 1,
             )
         }
         Lod::Lod1 | Lod::Lod2 => {
@@ -187,6 +293,8 @@ pub(crate) fn build_mesh(
                 &exposed,
                 &anchor,
                 &corners,
+                0,
+                0..=lod.cell_count() - 1,
             )
         }
     }
@@ -199,6 +307,10 @@ pub(crate) fn build_water_mesh(
     border: &BorderBlocks,
     light: Option<&LightField>,
 ) -> MeshData {
+    if !snapshot.has_water() {
+        return MeshData::default();
+    }
+
     let full_block = |local: IVec3| full_block(snapshot, border, local);
     let matches = |block: Block| block == Block::Water;
     let exposed = |cell: IVec3, normal: IVec3| full_block(cell + normal) == Block::Air;
@@ -212,6 +324,8 @@ pub(crate) fn build_water_mesh(
         &exposed,
         &|cell| cell,
         &corners,
+        FLAG_WATER,
+        0..=CHUNK_SIZE - 1,
     )
 }
 
@@ -272,6 +386,8 @@ const FACE_NORMALS: [IVec3; 6] = [
 pub(crate) struct MeshData {
     pub(crate) vertices: Vec<Vertex>,
     pub(crate) indices: Vec<u32>,
+    /// The ADR-0017 records for the same quads, uploaded by the quad-pool renderer.
+    pub(crate) quads: Vec<QuadRecord>,
 }
 
 impl MeshData {
@@ -285,6 +401,7 @@ impl MeshData {
 /// `anchor` maps a cell to the full-resolution coordinate whose light and AO
 /// are sampled; LOD0 uses the cell itself and LOD1 uses its representative
 /// block. `full_block_at` resolves solidity for that sampling.
+#[allow(clippy::too_many_arguments)]
 fn greedy(
     n: i32,
     scale: f32,
@@ -293,14 +410,32 @@ fn greedy(
     exposed: &impl Fn(IVec3, IVec3) -> bool,
     anchor: &impl Fn(IVec3) -> IVec3,
     corners: &impl Fn(IVec3, usize) -> [u32; 4],
+    flags: u32,
+    y_range: RangeInclusive<i32>,
 ) -> MeshData {
     let cells = usize::try_from(n * n).expect("mask fits");
     let mut mesh = MeshData::default();
+    let mut mask: Vec<Option<MaskKey>> = vec![None; cells];
+    let y_min = (*y_range.start()).clamp(0, n - 1);
+    let y_max = (*y_range.end()).clamp(0, n - 1);
 
     for (face, normal) in FACE_NORMALS.into_iter().enumerate() {
+        // Faces `+Y`/`-Y` slice along Y and scan the full XZ grid; every other
+        // face has Y as its `v` axis. Skipping the out-of-range layers is
+        // exact because a matching block cannot exist outside the caller's
+        // conservative range, so the mask entries stay `None`.
+        let y_is_slice = matches!(face, 2 | 3);
         for slice in 0..n {
-            let mut mask: Vec<Option<MaskKey>> = vec![None; cells];
-            for v in 0..n {
+            if y_is_slice && !(y_min..=y_max).contains(&slice) {
+                continue;
+            }
+            mask.fill(None);
+            let (v_start, v_end) = if y_is_slice {
+                (0, n - 1)
+            } else {
+                (y_min, y_max)
+            };
+            for v in v_start..=v_end {
                 for u in 0..n {
                     let cell = cell_coord(face, slice, u, v);
                     let block = block_at(cell);
@@ -350,6 +485,7 @@ fn greedy(
                         scale,
                         key.layer,
                         key.corners,
+                        flags,
                     );
                 }
             }
@@ -379,34 +515,79 @@ fn corner_values(
     anchor: IVec3,
     face: usize,
 ) -> [u32; 4] {
-    let outside = anchor + FACE_NORMALS[face];
-    let (u_axis, v_axis) = face_axes(face);
+    let ring = FaceNeighbourhood::new(block_at, light, anchor, face);
     [(-1, -1), (-1, 1), (1, 1), (1, -1)].map(|(su, sv)| {
-        let side_a = outside + u_axis * su;
-        let side_b = outside + v_axis * sv;
-        let diagonal = side_a + v_axis * sv;
-        let solid_a = block_at(side_a).is_solid();
-        let solid_b = block_at(side_b).is_solid();
-        let solid_diagonal = block_at(diagonal).is_solid();
+        let (sky, block, ao) = ring.corner(su, sv);
+        pack_light_ao(sky, block, ao)
+    })
+}
+
+/// Solidity and light of the nine cells around a face's outside cell.
+///
+/// Every corner of a face samples this 3x3 ring, so gathering it once avoids
+/// re-reading the same cells for each corner.
+struct FaceNeighbourhood {
+    solid: [[bool; 3]; 3],
+    sky: [[u8; 3]; 3],
+    block: [[u8; 3]; 3],
+}
+
+impl FaceNeighbourhood {
+    fn new(
+        block_at: &impl Fn(IVec3) -> Block,
+        light: Option<&LightField>,
+        anchor: IVec3,
+        face: usize,
+    ) -> Self {
+        let outside = anchor + FACE_NORMALS[face];
+        let (u_axis, v_axis) = face_axes(face);
+        let mut neighbourhood = Self {
+            solid: [[false; 3]; 3],
+            sky: [[0; 3]; 3],
+            block: [[0; 3]; 3],
+        };
+        for su in -1..=1 {
+            for sv in -1..=1 {
+                let i = ring_index(su);
+                let j = ring_index(sv);
+                let cell = outside + u_axis * su + v_axis * sv;
+                let solid = block_at(cell).is_solid();
+                neighbourhood.solid[i][j] = solid;
+                if !solid && let Some(light) = light {
+                    neighbourhood.sky[i][j] = light.sky(cell);
+                    neighbourhood.block[i][j] = light.block(cell);
+                }
+            }
+        }
+        neighbourhood
+    }
+
+    /// Sky, block, and AO for the corner in direction `(su, sv)`.
+    fn corner(&self, su: i32, sv: i32) -> (u8, u8, u8) {
+        let i = ring_index(su);
+        let j = ring_index(sv);
+        let solid_a = self.solid[i][1];
+        let solid_b = self.solid[1][j];
+        let solid_diagonal = self.solid[i][j];
         let ao = if solid_a && solid_b {
             0
         } else {
             3 - (u8::from(solid_a) + u8::from(solid_b) + u8::from(solid_diagonal))
         };
+        let sky = self.sky[i][1]
+            .max(self.sky[1][j])
+            .max(self.sky[i][j])
+            .max(self.sky[1][1]);
+        let block = self.block[i][1]
+            .max(self.block[1][j])
+            .max(self.block[i][j])
+            .max(self.block[1][1]);
+        (sky, block, ao)
+    }
+}
 
-        let mut sky = 0;
-        let mut block = 0;
-        if let Some(light) = light {
-            for candidate in [outside, side_a, side_b, diagonal] {
-                if block_at(candidate).is_solid() {
-                    continue;
-                }
-                sky = sky.max(light.sky(candidate));
-                block = block.max(light.block(candidate));
-            }
-        }
-        pack_light_ao(sky, block, ao)
-    })
+fn ring_index(delta: i32) -> usize {
+    usize::try_from(delta + 1).expect("ring index fits")
 }
 
 /// Packs sky light, block light, and AO into the vertex field.
@@ -422,22 +603,11 @@ fn water_corners(
     anchor: IVec3,
     face: usize,
 ) -> [u32; 4] {
-    let outside = anchor + FACE_NORMALS[face];
-    let (u_axis, v_axis) = face_axes(face);
+    let ring = FaceNeighbourhood::new(block_at, None, anchor, face);
     let (sky, block) = light.map_or((0, 0), |light| (light.sky(anchor), light.block(anchor)));
 
     [(-1, -1), (-1, 1), (1, 1), (1, -1)].map(|(su, sv)| {
-        let side_a = outside + u_axis * su;
-        let side_b = outside + v_axis * sv;
-        let diagonal = side_a + v_axis * sv;
-        let solid_a = block_at(side_a).is_solid();
-        let solid_b = block_at(side_b).is_solid();
-        let solid_diagonal = block_at(diagonal).is_solid();
-        let ao = if solid_a && solid_b {
-            0
-        } else {
-            3 - (u8::from(solid_a) + u8::from(solid_b) + u8::from(solid_diagonal))
-        };
+        let (_, _, ao) = ring.corner(su, sv);
         pack_light_ao(sky, block, ao)
     })
 }
@@ -474,6 +644,7 @@ fn face_layer(block: Block, normal: IVec3) -> u32 {
 
 /// Emits one merged quad with UVs in block units.
 #[allow(clippy::cast_precision_loss)]
+#[allow(clippy::too_many_arguments)]
 fn push_quad(
     mesh: &mut MeshData,
     face: usize,
@@ -482,6 +653,7 @@ fn push_quad(
     scale: f32,
     layer: u32,
     corner_light: [u32; 4],
+    flags: u32,
 ) {
     let (slice, u0, v0, width, height) = quad;
     let corners = quad_corners(face, slice, u0, v0, width, height);
@@ -490,6 +662,16 @@ fn push_quad(
     let uvs = [[0.0, 0.0], [0.0, vs], [us, vs], [us, 0.0]];
     let normal = normal.as_vec3().to_array();
     let base = u32::try_from(mesh.vertices.len()).expect("vertex count fits in u32");
+
+    mesh.quads.push(QuadRecord::new(
+        cell_coord(face, slice, u0, v0),
+        u32::try_from(width).expect("width fits"),
+        u32::try_from(height).expect("height fits"),
+        u8::try_from(face).expect("face fits"),
+        flags,
+        u8::try_from(layer).expect("layer fits"),
+        corner_light,
+    ));
 
     for index in 0..4 {
         mesh.vertices.push(Vertex::new(
@@ -552,6 +734,10 @@ fn in_chunk(local: IVec3) -> bool {
 
 fn in_grid(local: IVec3, size: i32) -> bool {
     local.cmpge(IVec3::ZERO).all() && local.cmplt(IVec3::splat(size)).all()
+}
+
+fn index(local: IVec3) -> usize {
+    index_in(local, CHUNK_SIZE)
 }
 
 fn index_in(local: IVec3, size: i32) -> usize {
@@ -681,6 +867,55 @@ mod tests {
             ])
         );
         assert_eq!(vertices.len(), 24);
+    }
+
+    #[test]
+    fn quad_records_match_the_emitted_vertices() {
+        let world = world_with(&[(IVec3::new(5, 5, 5), Block::Stone)]);
+        let chunk = chunk_at(IVec3::new(5, 5, 5));
+        let snapshot = ChunkSnapshot::new(&world, chunk);
+        let border = BorderBlocks::default();
+        let mesh = build_mesh(&snapshot, &border, None, Lod::Lod0);
+
+        assert_eq!(mesh.quads.len(), 6);
+        assert_eq!(mesh.vertices.len(), 24);
+        for (index, quad) in mesh.quads.iter().enumerate() {
+            assert_eq!(quad.position(), IVec3::new(5, 5, 5));
+            assert_eq!((quad.width(), quad.height()), (1, 1));
+            assert!(!quad.has_flag(FLAG_WATER));
+
+            let corners = quad.corners();
+            for (corner, cell) in corners.iter().enumerate() {
+                let vertex = &mesh.vertices[index * 4 + corner];
+                assert_eq!(
+                    vertex.cell,
+                    [
+                        u8::try_from(cell.x).unwrap(),
+                        u8::try_from(cell.y).unwrap(),
+                        u8::try_from(cell.z).unwrap()
+                    ]
+                );
+                assert_eq!(u32::from(vertex.face), u32::from(quad.face()));
+                assert_eq!(u32::from(vertex.texture_layer), u32::from(quad.layer()));
+                let (sky, block, ao) = quad.corner(corner);
+                assert_eq!(vertex.light_ao, pack_light_ao(sky, block, ao));
+            }
+        }
+    }
+
+    #[test]
+    fn water_quad_records_are_flagged() {
+        let world = world_with(&[(IVec3::new(2, 2, 2), Block::Water)]);
+        let chunk = chunk_at(IVec3::new(2, 2, 2));
+        let snapshot = ChunkSnapshot::new(&world, chunk);
+        let border = BorderBlocks::default();
+
+        let water = build_water_mesh(&snapshot, &border, None);
+        assert_ne!(water.quads.len(), 0);
+        assert!(water.quads.iter().all(|quad| quad.has_flag(FLAG_WATER)));
+
+        let opaque = build_mesh(&snapshot, &border, None, Lod::Lod0);
+        assert!(opaque.quads.iter().all(|quad| !quad.has_flag(FLAG_WATER)));
     }
 
     #[test]
@@ -1050,11 +1285,64 @@ mod tests {
     }
 
     #[test]
+    fn water_at_a_chunk_border_suppresses_the_shared_face() {
+        let chunk = chunk_at(IVec3::new(31, 5, 0));
+        let border_water = world_with(&[
+            (IVec3::new(31, 5, 0), Block::Water),
+            (IVec3::new(32, 5, 0), Block::Water),
+        ]);
+        let shared = build_water_mesh(
+            &ChunkSnapshot::new(&border_water, chunk),
+            &BorderBlocks::new(&border_water, chunk),
+            None,
+        );
+        assert!(
+            !shared
+                .quads
+                .iter()
+                .any(|quad| quad.position() == IVec3::new(31, 5, 0) && quad.face() == 0),
+            "the +X face of (31, 5, 0) is shared with the neighbour's water"
+        );
+
+        let lone = world_with(&[(IVec3::new(31, 5, 0), Block::Water)]);
+        let alone = build_water_mesh(
+            &ChunkSnapshot::new(&lone, chunk),
+            &BorderBlocks::new(&lone, chunk),
+            None,
+        );
+        assert!(
+            alone
+                .quads
+                .iter()
+                .any(|quad| quad.position() == IVec3::new(31, 5, 0) && quad.face() == 0),
+            "a lone water cell still emits its +X face"
+        );
+    }
+
+    #[test]
     fn water_meshes_have_no_opaque_faces() {
         let world = world_with(&[(IVec3::ZERO, Block::Water)]);
         let opaque = mesh(&world, chunk_at(IVec3::ZERO), Lod::Lod0);
 
         assert_eq!(opaque, Vec::new());
+    }
+
+    #[test]
+    fn water_mesh_is_empty_for_a_dry_chunk_and_populated_for_water() {
+        let chunk = chunk_at(IVec3::ZERO);
+        let dry_world = world_with(&[(IVec3::ZERO, Block::Stone)]);
+
+        let dry = ChunkSnapshot::new(&dry_world, chunk);
+        assert!(!dry.has_water());
+        assert!(build_water_mesh(&dry, &BorderBlocks::new(&dry_world, chunk), None).is_empty());
+
+        let missing = ChunkSnapshot::new(&dry_world, chunk.offset(IVec3::X));
+        assert!(!missing.has_water());
+
+        let wet_world = world_with(&[(IVec3::ZERO, Block::Water)]);
+        let wet = ChunkSnapshot::new(&wet_world, chunk);
+        assert!(wet.has_water());
+        assert!(!build_water_mesh(&wet, &BorderBlocks::new(&wet_world, chunk), None).is_empty());
     }
 
     #[test]

@@ -3,7 +3,7 @@
 //! Light is derived state. It is recomputed from blocks and never saved.
 //! Propagation runs over a 3x3x3 chunk neighbourhood so values on the one-cell
 //! border of a chunk are exact, then the centre chunk plus border is extracted
-//! as a [`LightField`].
+//! as a `LightField`.
 
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
@@ -11,10 +11,11 @@ use std::time::Duration;
 use glam::IVec3;
 
 use crate::block::Block;
-use crate::world::{
-    CHUNK_COLUMN, CHUNK_SIZE, ChunkCoord, ChunkSnapshot, PackedLight, World, field_index,
-};
-pub(crate) use crate::world::{LightField, MAX_LIGHT};
+use crate::mesh::ChunkSnapshot;
+use crate::world::{CHUNK_COLUMN, CHUNK_SIZE, Chunk, ChunkCoord, World, packed_block};
+
+/// Maximum light level.
+pub(crate) const MAX_LIGHT: u8 = 15;
 
 /// Block light emitted by a `Lamp`.
 pub(crate) const LAMP_LIGHT: u8 = 14;
@@ -24,6 +25,13 @@ const SIZE: i32 = CHUNK_SIZE;
 
 /// Cells per axis of the 3x3x3 propagation grid.
 const GRID: i32 = SIZE * 3;
+
+/// Cells per axis of the stored field: the chunk plus one border cell.
+const PADDED: i32 = CHUNK_SIZE + 2;
+
+/// Cells per axis of the coarse BFS grid: the padded field plus a solid
+/// sentinel layer on every side, so neighbour lookups need no bounds checks.
+const COARSE_GRID: i32 = PADDED + 2;
 
 const NEIGHBOURS: [IVec3; 6] = [
     IVec3::X,
@@ -78,13 +86,193 @@ pub(crate) struct LightResult {
     pub(crate) elapsed: Duration,
 }
 
+/// Sky and block light for a chunk plus one border cell.
+///
+/// Cells are indexed by chunk-local coordinates in `-1..=32` and stored as one
+/// nibble per cell; the border is what meshing samples across chunk edges. The
+/// block plane is omitted when the neighbourhood contains no lamp, which covers
+/// every generated chunk.
+#[derive(Clone, Debug)]
+pub(crate) struct LightField {
+    sky: PackedLight,
+    block: Option<PackedLight>,
+}
+
+impl LightField {
+    /// Bytes held by the packed planes that exist.
+    pub(crate) fn resident_bytes(&self) -> usize {
+        self.sky.resident_bytes() + self.block.as_ref().map_or(0, PackedLight::resident_bytes)
+    }
+
+    /// Sky light at a local coordinate in `-1..=32`.
+    pub(crate) fn sky(&self, local: IVec3) -> u8 {
+        self.sky.get(field_index(local))
+    }
+
+    /// Coarse BFS sky light for one `32³` section sample grid.
+    ///
+    /// Every non-solid sample above the highest solid sample in its column is
+    /// open to the section sky and seeds [`MAX_LIGHT`]. Light then spreads
+    /// six-connected through non-solid samples: `Water` keeps the value and
+    /// every other non-solid sample loses one level, matching [`spread`] for L0
+    /// chunks.
+    ///
+    /// The halo (`-1..=32`) is part of the BFS grid so the mesher's border
+    /// samples are defined without touching another section. A halo sample
+    /// reuses the nearest interior edge sample, so a solid edge stays solid and
+    /// an open edge stays open; a halo column above the edge column's highest
+    /// solid sample is seeded with [`MAX_LIGHT`]. This is conservative: the halo
+    /// never invents light below an edge top, while the sky above a solid edge
+    /// top (including `y = 32`) stays open.
+    pub(crate) fn coarse(samples: &Chunk) -> Self {
+        let stride = usize::try_from(COARSE_GRID).expect("coarse grid size fits");
+        let plane = stride * stride;
+        let cells = plane * stride;
+        let columns = usize::try_from(SIZE * SIZE).expect("coarse columns fit in usize");
+        let size = usize::try_from(SIZE).expect("section size fits");
+        let storage = samples.shared_storage();
+
+        // The outermost layer stays `Stone`, so BFS neighbours never need a
+        // bounds check: every step off the halo lands in a solid sentinel.
+        let mut blocks = vec![Block::Stone; cells];
+        let mut ceiling = vec![-1_i32; columns];
+        for x in 0..SIZE {
+            for z in 0..SIZE {
+                let column = usize::try_from(x * SIZE + z).expect("column fits");
+                let mut source = usize::try_from(x * SIZE * SIZE + z).expect("sample fits");
+                let mut destination = coarse_index(IVec3::new(x, 0, z));
+                for y in 0..SIZE {
+                    let sample = packed_block(&storage, source);
+                    blocks[destination] = sample;
+                    if sample.is_solid() {
+                        ceiling[column] = y;
+                    }
+                    source += size;
+                    destination += stride;
+                }
+            }
+        }
+        copy_halo_blocks(&mut blocks);
+
+        let mut values = vec![0_u8; cells];
+        let step = isize::try_from(stride).expect("coarse grid size fits");
+        let slice = isize::try_from(plane).expect("coarse plane fits");
+        let offsets = [1, -1, step, -step, slice, -slice];
+        for x in -1..=SIZE {
+            for z in -1..=SIZE {
+                let edge_x = x.clamp(0, SIZE - 1);
+                let edge_z = z.clamp(0, SIZE - 1);
+                let column = usize::try_from(edge_x * SIZE + edge_z).expect("column fits");
+                let first = ceiling[column] + 1;
+                let mut index = coarse_index(IVec3::new(x, first, z));
+                for _ in first..=SIZE {
+                    values[index] = MAX_LIGHT;
+                    index += stride;
+                }
+            }
+        }
+        // Only shadowed non-solid cells that touch an open-sky cell can start
+        // a descent. Seeding just those keeps flat terrain out of the BFS.
+        let mut buckets: [Vec<u32>; 16] = std::array::from_fn(|_| Vec::new());
+        for (index, block) in blocks.iter().copied().enumerate() {
+            if block.is_solid() || values[index] != 0 {
+                continue;
+            }
+            if offsets
+                .iter()
+                .all(|offset| values[index.wrapping_add_signed(*offset)] != MAX_LIGHT)
+            {
+                continue;
+            }
+            let value = if block == Block::Water {
+                MAX_LIGHT
+            } else {
+                MAX_LIGHT - 1
+            };
+            values[index] = value;
+            buckets[usize::from(value)].push(u32::try_from(index).expect("coarse index fits"));
+        }
+        spread_coarse(&blocks, &mut values, &mut buckets, offsets);
+
+        let mut field = PackedLight::new();
+        let mut position = 0;
+        for x in -1..=SIZE {
+            let mut base = coarse_index(IVec3::new(x, -1, -1));
+            for _ in -1..=SIZE {
+                for (offset, _) in (-1..=SIZE).enumerate() {
+                    field.set(position, values[base + offset]);
+                    position += 1;
+                }
+                base += stride;
+            }
+        }
+        Self {
+            sky: field,
+            block: None,
+        }
+    }
+
+    /// Block light at a local coordinate in `-1..=32`.
+    pub(crate) fn block(&self, local: IVec3) -> u8 {
+        self.block
+            .as_ref()
+            .map_or(0, |plane| plane.get(field_index(local)))
+    }
+}
+
+/// A plane of four-bit light values, two cells per byte.
+#[derive(Clone, Debug, Default)]
+struct PackedLight {
+    cells: Box<[u8]>,
+}
+
+impl PackedLight {
+    fn new() -> Self {
+        let cells = usize::try_from(PADDED * PADDED * PADDED).expect("light field fits in usize");
+        Self {
+            cells: vec![0; cells.div_ceil(2)].into_boxed_slice(),
+        }
+    }
+
+    fn resident_bytes(&self) -> usize {
+        self.cells.len()
+    }
+
+    fn get(&self, index: usize) -> u8 {
+        let byte = self.cells[index / 2];
+        if index.is_multiple_of(2) {
+            byte & 0x0F
+        } else {
+            byte >> 4
+        }
+    }
+
+    fn set(&mut self, index: usize, value: u8) {
+        debug_assert!(value <= MAX_LIGHT);
+        let slot = &mut self.cells[index / 2];
+        if index.is_multiple_of(2) {
+            *slot = (*slot & 0xF0) | value;
+        } else {
+            *slot = (*slot & 0x0F) | (value << 4);
+        }
+    }
+}
+
 /// Computes light for one chunk from an immutable snapshot.
 pub(crate) fn compute(snapshot: &LightSnapshot, chunk: ChunkCoord) -> LightField {
     let cells = usize::try_from(GRID * GRID * GRID).expect("light grid fits in usize");
     let base = chunk.world_origin() - IVec3::splat(SIZE);
 
     let mut blocks = vec![Block::Air; cells];
-    let mut ceiling: HashMap<(i32, i32), i32> = HashMap::new();
+    let columns = usize::try_from(GRID * GRID).expect("light grid columns fit in usize");
+    let column_stride = usize::try_from(GRID).expect("grid size fits");
+    // Highest solid world y per grid column; `i32::MIN` means open to the sky.
+    let mut ceiling = vec![i32::MIN; columns];
+    let mut sky = vec![0_u8; cells];
+    let mut block_light: Option<Vec<u8>> = None;
+    let mut sky_queue = VecDeque::new();
+    let mut block_queue = VecDeque::new();
+
     for (coordinate, data) in &snapshot.cells {
         let origin = coordinate.world_origin();
         let offset = origin - base;
@@ -93,61 +281,53 @@ pub(crate) fn compute(snapshot: &LightSnapshot, chunk: ChunkCoord) -> LightField
             if block == Block::Air {
                 continue;
             }
+            let grid_cell = offset + cell;
             if block.is_solid() {
                 let world = origin + cell;
-                ceiling
-                    .entry((world.x, world.z))
-                    .and_modify(|top| *top = (*top).max(world.y))
-                    .or_insert(world.y);
+                let x = usize::try_from(grid_cell.x).expect("in-grid coordinate fits");
+                let z = usize::try_from(grid_cell.z).expect("in-grid coordinate fits");
+                let top = &mut ceiling[x * column_stride + z];
+                *top = (*top).max(world.y);
             }
-            let grid_cell = offset + cell;
-            if in_grid(grid_cell) {
-                blocks[grid_index(grid_cell)] = block;
+            if !in_grid(grid_cell) {
+                continue;
+            }
+            let index = grid_index(grid_cell);
+            blocks[index] = block;
+            if block == Block::Lamp {
+                block_light.get_or_insert_with(|| vec![0_u8; cells])[index] = LAMP_LIGHT;
+                block_queue.push_back((grid_cell, LAMP_LIGHT));
             }
         }
     }
 
-    let mut sky = vec![0_u8; cells];
-    let mut block_light = vec![0_u8; cells];
-    let mut sky_queue = VecDeque::new();
-    let mut block_queue = VecDeque::new();
-
+    // Every cell above its column ceiling is open sky. Enqueue the ones that
+    // touch a shadowed non-solid cell in the same pass; the old code scanned
+    // the full grid again just to find them.
     for x in 0..GRID {
         for z in 0..GRID {
-            let column = (base.x + x, base.z + z);
-            let ceiling_y = ceiling.get(&column).copied();
-            for y in 0..GRID {
+            let x_index = usize::try_from(x).expect("in-grid coordinate fits");
+            let z_index = usize::try_from(z).expect("in-grid coordinate fits");
+            let ceiling_y = ceiling[x_index * column_stride + z_index];
+            let start = if ceiling_y == i32::MIN {
+                0
+            } else {
+                (ceiling_y - base.y + 1).clamp(0, GRID)
+            };
+            for y in start..GRID {
                 let cell = IVec3::new(x, y, z);
-                let index = grid_index(cell);
-                let block = blocks[index];
-                if block.is_solid() {
-                    if block == Block::Lamp {
-                        block_light[index] = LAMP_LIGHT;
-                        block_queue.push_back((cell, LAMP_LIGHT));
-                    }
-                    continue;
-                }
-                let world_y = base.y + y;
-                if ceiling_y.is_none_or(|top| world_y > top) {
-                    sky[index] = MAX_LIGHT;
-                }
-            }
-        }
-    }
-
-    for x in 0..GRID {
-        for y in 0..GRID {
-            for z in 0..GRID {
-                let cell = IVec3::new(x, y, z);
-                if sky[grid_index(cell)] != MAX_LIGHT {
-                    continue;
-                }
-                if NEIGHBOURS.iter().any(|offset| {
+                sky[grid_index(cell)] = MAX_LIGHT;
+                let boundary = NEIGHBOURS.iter().any(|offset| {
                     let neighbour = cell + *offset;
-                    in_grid(neighbour)
-                        && !blocks[grid_index(neighbour)].is_solid()
-                        && sky[grid_index(neighbour)] != MAX_LIGHT
-                }) {
+                    if !in_grid(neighbour) || blocks[grid_index(neighbour)].is_solid() {
+                        return false;
+                    }
+                    let nx = usize::try_from(neighbour.x).expect("in-grid coordinate fits");
+                    let nz = usize::try_from(neighbour.z).expect("in-grid coordinate fits");
+                    let neighbour_ceiling = ceiling[nx * column_stride + nz];
+                    neighbour_ceiling != i32::MIN && base.y + neighbour.y <= neighbour_ceiling
+                });
+                if boundary {
                     sky_queue.push_back((cell, MAX_LIGHT));
                 }
             }
@@ -155,11 +335,14 @@ pub(crate) fn compute(snapshot: &LightSnapshot, chunk: ChunkCoord) -> LightField
     }
 
     spread(&blocks, &mut sky, &mut sky_queue);
-    spread(&blocks, &mut block_light, &mut block_queue);
+    let block = block_light.map(|mut values| {
+        spread(&blocks, &mut values, &mut block_queue);
+        extract(&values)
+    });
 
     LightField {
         sky: extract(&sky),
-        block: extract(&block_light),
+        block,
     }
 }
 
@@ -194,6 +377,85 @@ fn spread(blocks: &[Block], values: &mut [u8], queue: &mut VecDeque<(IVec3, u8)>
     }
 }
 
+/// Copies the nearest interior edge sample into the halo of `blocks`.
+///
+/// The six halo faces are filled once each; edge and corner halo samples take
+/// the closest interior sample by clamping their in-plane coordinates. A solid
+/// edge therefore stays solid and an open edge stays open.
+fn copy_halo_blocks(blocks: &mut [Block]) {
+    let last = SIZE - 1;
+    let edge = |coordinate: i32| coordinate.clamp(0, last);
+    for y in -1..=SIZE {
+        for z in -1..=SIZE {
+            let (ey, ez) = (edge(y), edge(z));
+            blocks[coarse_index(IVec3::new(-1, y, z))] =
+                blocks[coarse_index(IVec3::new(0, ey, ez))];
+            blocks[coarse_index(IVec3::new(SIZE, y, z))] =
+                blocks[coarse_index(IVec3::new(last, ey, ez))];
+        }
+    }
+    for x in 0..SIZE {
+        for y in -1..=SIZE {
+            let ey = edge(y);
+            blocks[coarse_index(IVec3::new(x, y, -1))] = blocks[coarse_index(IVec3::new(x, ey, 0))];
+            blocks[coarse_index(IVec3::new(x, y, SIZE))] =
+                blocks[coarse_index(IVec3::new(x, ey, last))];
+        }
+    }
+    for x in 0..SIZE {
+        for z in 0..SIZE {
+            blocks[coarse_index(IVec3::new(x, -1, z))] = blocks[coarse_index(IVec3::new(x, 0, z))];
+            blocks[coarse_index(IVec3::new(x, SIZE, z))] =
+                blocks[coarse_index(IVec3::new(x, last, z))];
+        }
+    }
+}
+
+/// Spreads coarse sky values over the halo-padded section grid.
+///
+/// Mirrors [`spread`]: a step into `Water` keeps the value and every other step
+/// loses one level. Buckets run from [`MAX_LIGHT`] down to one, so a cell is
+/// finalized the first time it is reached with its highest value; the solid
+/// sentinel layer around the grid replaces bounds checks.
+fn spread_coarse(
+    blocks: &[Block],
+    values: &mut [u8],
+    buckets: &mut [Vec<u32>; 16],
+    offsets: [isize; 6],
+) {
+    for level in (1..=MAX_LIGHT).rev() {
+        let bucket = usize::from(level);
+        let mut index_in_bucket = 0;
+        while index_in_bucket < buckets[bucket].len() {
+            let index =
+                usize::try_from(buckets[bucket][index_in_bucket]).expect("coarse index fits");
+            index_in_bucket += 1;
+            let next = level - 1;
+            for offset in offsets {
+                let neighbour = index.wrapping_add_signed(offset);
+                let block = blocks[neighbour];
+                if block.is_solid() {
+                    continue;
+                }
+                let value = if block == Block::Water { level } else { next };
+                if value > values[neighbour] {
+                    values[neighbour] = value;
+                    buckets[usize::from(value)]
+                        .push(u32::try_from(neighbour).expect("coarse index fits"));
+                }
+            }
+        }
+    }
+}
+
+fn coarse_index(cell: IVec3) -> usize {
+    let stride = usize::try_from(COARSE_GRID).expect("coarse grid size fits");
+    let x = usize::try_from(cell.x + 2).expect("coarse coordinate fits");
+    let y = usize::try_from(cell.y + 2).expect("coarse coordinate fits");
+    let z = usize::try_from(cell.z + 2).expect("coarse coordinate fits");
+    (x * stride + y) * stride + z
+}
+
 fn extract(values: &[u8]) -> PackedLight {
     let mut field = PackedLight::new();
     for local in grid_coords() {
@@ -224,31 +486,18 @@ fn grid_index(cell: IVec3) -> usize {
     (x * stride + y) * stride + z
 }
 
-/// Recomputes sky and block light for every stored chunk.
-///
-/// Light is derived state, so this runs after loading and whenever a world is
-/// built in memory. The method lives beside the light algorithm; the world only
-/// owns the cache.
-impl World {
-    pub(crate) fn relight(&mut self) {
-        let fields: Vec<(ChunkCoord, LightField)> = self
-            .iter_chunks()
-            .map(|(chunk, _)| {
-                let snapshot = LightSnapshot::new(self, chunk);
-                (chunk, compute(&snapshot, chunk))
-            })
-            .collect();
-        self.clear_light_fields();
-        for (chunk, field) in fields {
-            self.set_light_field(chunk, field);
-        }
-    }
+fn field_index(local: IVec3) -> usize {
+    let padded = local + IVec3::ONE;
+    let stride = usize::try_from(PADDED).expect("field size fits");
+    let x = usize::try_from(padded.x).expect("field coordinate fits");
+    let y = usize::try_from(padded.y).expect("field coordinate fits");
+    let z = usize::try_from(padded.z).expect("field coordinate fits");
+    (x * stride + y) * stride + z
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world::PADDED;
 
     fn world_with(blocks: &[(IVec3, Block)]) -> World {
         let mut world = World::default();
@@ -310,6 +559,47 @@ mod tests {
         assert_eq!(field.sky(IVec3::new(SIZE, 1, SIZE)), MAX_LIGHT);
         assert_eq!(field.sky(IVec3::new(0, 0, 0)), 0);
         assert_eq!(field.block(IVec3::new(-1, -1, -1)), 0);
+    }
+
+    #[test]
+    fn chunks_without_lamps_omit_the_block_plane() {
+        let mut world = World::default();
+        for x in 0..8 {
+            for z in 0..8 {
+                world.set_block(IVec3::new(x, 0, z), Block::Stone);
+            }
+        }
+        let light = field(&world, chunk_at(IVec3::ZERO));
+
+        let plane = usize::try_from(PADDED * PADDED * PADDED)
+            .expect("plane fits")
+            .div_ceil(2);
+        assert_eq!(light.resident_bytes(), plane);
+        assert_eq!(light.block(IVec3::new(3, 3, 3)), 0);
+    }
+
+    #[test]
+    fn lamps_keep_the_block_plane() {
+        let world = world_with(&[(IVec3::new(4, 4, 4), Block::Lamp)]);
+        let light = field(&world, chunk_at(IVec3::ZERO));
+
+        let plane = usize::try_from(PADDED * PADDED * PADDED)
+            .expect("plane fits")
+            .div_ceil(2);
+        assert_eq!(light.resident_bytes(), plane * 2);
+        assert_eq!(light.block(IVec3::new(5, 4, 4)), 13);
+    }
+
+    #[test]
+    fn lamps_above_the_grid_omit_the_block_plane() {
+        let world = world_with(&[(IVec3::new(4, 70, 4), Block::Lamp)]);
+        let light = field(&world, chunk_at(IVec3::ZERO));
+
+        let plane = usize::try_from(PADDED * PADDED * PADDED)
+            .expect("plane fits")
+            .div_ceil(2);
+        assert_eq!(light.resident_bytes(), plane);
+        assert_eq!(light.block(IVec3::new(4, 1, 4)), 0);
     }
 
     #[test]

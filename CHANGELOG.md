@@ -5,7 +5,43 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.0.9] - 2026-11-21
+
+### Added
+
+- The LOD hierarchy foundation: `SectionKey` level math, a level-1 coarse generator with a modified-chunk overlay, per-column coarse light, and a `32³` sample-space mesh path. One level-1 section uses 32 KiB of samples + 19.2 KiB of light for 2,193 quads; the eight LOD1 chunks covering the same volume use 281.5 KiB of samples + light for 3,613 quads.
+- The quad pool accepts coarse section nodes through `NodeKey`. `ENGINE_HIERARCHY=1` stops L0 at `ENGINE_DETAIL_CHUNKS` (default 16), selects level-1/2 sections out to 2 km with projected-size hysteresis, retains parents until all eight children are ready, keeps ready children hidden until the swap, meshes coarse water, and rebuilds sections from the modified/saved chunk overlay on edits. The settled west view is 0.466 ms / 0.235 ms GPU, 3.58 M vertices, 2 draws, and 30.94 MiB of allocated geometry; L0 at detail 16 is 85.9 MB resident.
+- Levels 3-4 extend the hierarchy to 8 km with recursive projected refinement, parent retention, 256 m and 512 m sections, and an 8M-quad (96 MB) hierarchy pool. Children above the 128-block world are filtered; coarse BFS light replaces the per-column 0/15 field (about 120 µs per section) and water stays lit through the seabed top. With the section horizon, the settled 8 km west view is 0.62-0.63 ms / 0.365 ms GPU, 5.86 M vertices, 1,358 visible nodes, 2 draws, 74.62 MiB allocated geometry, and 94.24 MiB geometry reservation.
+- The 12-byte quad record from ADR-0017 is implemented as pack/unpack with unit tests.
+
+### Changed
+
+- Chunk geometry now renders from a 12-byte quad pool with vertex pulling and indirect draws: at distance 32, draw calls fall from 3,409 to 2, resident geometry from 100.9 MB to 37.6 MiB, visible geometry from 30.1 MB to 7.52 MiB, and frame CPU from 4.3 ms to 1.9 ms. The per-chunk vertex and index path remains as the fallback.
+- Chunk-top horizon culling is now on by default (`ENGINE_HORIZON_CULL=0` disables it). Occluders use the minimum column top, so spawn captures on seeds 42 and 7 and a strafe view match the horizon-off image. It removes a large share of visible chunks at distance 32.
+- The horizon pass now covers hierarchy sections. `Section::bounds` reports the lowest solid column top and the highest visible top; water is visible but not an occluder. At the spawn 8 km view it removes 552 of 1,330 in-frustum sections (-41%), 3.54 M of 9.40 M visible vertices (-38%), and 6.75 MiB of visible geometry, cutting the GPU scene from 0.780 ms to 0.365 ms. The coverage rule only claims a bin when the occluder interval fully contains it, so it is conservative. `bench_horizon_sections` reproduces the counts without a window.
+- Coarse section generation, light, and meshing now run as background jobs on the shared worker pool, with up to eleven in flight and uploads on the main thread. Bounds-limited section meshing and bulk column generation cut the far level-3 build from 1,793/1,784/1,139 µs (generate/opaque/water) to 1,135/642/248 µs. The settled 8 km hierarchy (4,908 sections) fills in 7.8 s with the shared 16-result upload budget (5.69 s with the earlier separate 8 + 8 budgets), and the steady frame is 0.62-0.63 ms with a 0.365 ms GPU scene. The frame log reports `sections_in_flight`.
+- The horizon caches its occluded chunk and section sets at each 250 ms rebuild, so a settled frame does hash lookups instead of rerunning the azimuth-bin scan for every node. The quad renderer also iterates a compact list of slots with geometry instead of all 20,480. The cached path is retained, but the conservative full-bin coverage rule raises the combined 8 km frame to 0.62-0.63 ms; the rebuild itself is ~2.58 ms every 250 ms.
+- Streaming keeps a cached candidate list until the player crosses a column or a column unloads, and marks a column ready from mesh acceptance instead of scanning every loaded column each frame. The settled distance-32 frame falls from 2.5 ms to 0.67 ms, and headless wall time falls to 7.6 s at distance 24 and 12.2 s at 32.
+- The mesher gathers each face's 3x3 corner neighbourhood once instead of reading it for every corner and every light candidate. LOD0 ground meshing falls from 1.72 ms to 1.13 ms, LOD1 ground from 0.53 ms to 0.28 ms, and flat slab LOD1 from 0.29 ms to 0.14 ms with identical output.
+- Streaming lists the saved-chunk directory once at startup instead of probing the filesystem for every generated chunk, and records the chunks written by unloads and `Ctrl+S`. A distance-32 load no longer makes about 9,300 failed reads.
+- The light job finds lamps during the block fill and seeds sky light only above each column ceiling, removing a full `96³` pass; snapshot construction shares chunk storage behind an `Arc`. Ground-chunk light falls from 4.37 ms to 3.55 ms and the distance-32 settle from 12.1-12.8 s to 11.9 s.
+- Quad-pool slots are stored densely with a chunk-to-position map instead of a per-chunk `HashMap`, and the two indirect-argument lists are reused each frame. The frame log reports `stream_ms`, `levels_ms`, and `render_ms`; at distance 32 the render call is 0.47-0.60 ms of a 0.59-0.60 ms frame and streaming/level work is below 0.001 ms.
+- The frame log reports reserved and peak quad-pool bytes. The settled distance-32 peak is 2.36 M quads (28.32 MB) against the 3.2 M-quad reservation, so the cap already carries the planned 35% slack.
+- GPU timing is always available when the adapter supports timestamp queries, and the frame log reports `gpu_ms`. The quad pipeline uses a shared `u16` index pattern for meshes up to 16,383 quads, cutting vertex invocations from six to four per quad: the settled distance-32 GPU scene falls from 0.38-0.59 ms to 0.253 ms and the frame from 0.62-0.65 ms to 0.48 ms, with identical visible chunks and vertices. Larger meshes keep the non-indexed path.
+
+### Fixed
+
+- A chunk no longer stays at its coarsest LOD after the player walks near and away: `select_active` pruned the other LOD ranges while the queue still reported them as built, and selection only ran on upload. Active LOD and the queue's built entries are now kept in sync.
+- The indirect arguments buffer covers both the opaque and water batches; the water write previously ran past the buffer once more than 16,384 chunks had geometry.
+- The chunk slot table holds 20,480 entries, covering the 19,044 chunks reachable at render distance 32, and a failed upload stops after eight attempts instead of requesting the same mesh every frame.
+- Loading or unloading a column invalidates the light and meshes of its eight neighbours, so the bright or dark band left where a missing column was treated as open sky is corrected. Light work waits until the 3x3 column neighbourhood is settled, which keeps headless settle at 11.1 s at distance 24 and 20.4 s at 32 instead of 26.4 s and 47.4 s.
+- Water faces are no longer emitted twice at a shared chunk border; the mesher's border snapshot now carries water as well as solids.
+- Horizon culling uses the water surface height, so a coastal chunk is not culled while its water is still visible.
+- Saving clears the modified set and loading no longer marks saved chunks modified, so an unchanged world is not rewritten on exit.
+- The fallback spawn scans solids only, so a water column spawns on the ground.
+- The v2 `VCHK` fixture builds a real version-2 stream and covers the lamp and water ids.
+
+## [0.0.8] - 2026-11-20
 
 ### Added
 
@@ -59,6 +95,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `pipeline` and `volume` are split the same way: `pipeline/{terrain,stages,hydro,tests}` and `volume/{detail,caves,spans,tests}`, with a pinned column/section digest added for pipeline and the existing golden columns covering volume. Files over 1,000 lines are down from 22 to 17.
 - `features` is split into `discover`/`apply`/`masks` behind an unchanged parent, and `renderer` into `chunk`/`frame`/`origin`/`pipeline`/`terrain`/`texture` with the shader `include` paths adjusted and every `renderer::` item re-exported; all 19 renderer tests moved with their subjects. The size checker now excludes the frozen `src/v0/**` from its warnings, leaving 14 files over 1,000 lines.
 - A non-blocking CI size-budget check reports Rust files over 1,000 lines (currently 21) instead of failing; it tightens into a gate once the tree is under budget.
+
+### Changed
+
+- Chunk block storage is four-bit packed (16 KiB per chunk) with `VCHK` unchanged. Blocks plus light drop from 381 MB to 191 MB at `render_distance_chunks = 24` and from 669 MB to 335 MB at `32`; meshing costs about 15-25% more per chunk because of the nibble decode.
+- Light fields store the sky plane for every chunk and the block-light plane only when a lamp is in range, cutting typical resident light from 39 KiB to 19 KiB per chunk. A lamp restores the full field for the 27 chunks around it.
+- Water meshes are built only for chunks that contain water; dry chunks skip the full-grid water scan (about 0.37 ms each). Water mesh jobs are still full resolution and are not distance-limited.
+- The renderer caches resident geometry bytes, tests each chunk's frustum once per frame for both opaque and water draws, and drops non-active LOD meshes after a replacement is uploaded. Settled frame time at distance 32 falls from 9.06 ms to about 5 ms on the reference machine; distance 24 is unchanged at about 2.3 ms.
+- Light jobs skip the block-light working grid when no lamp is in range and use a flat ceiling array instead of a hash map. Headless settle time falls from 15.1 s to 12.2 s at distance 24 and from 29.1 s to 24.4 s at 32.
+- Chunk level work drains under a 2 ms per-frame budget in a deterministic order, a chunk leaves the queue while its job runs and returns when the result is accepted, and active-LOD selection happens on upload instead of scanning every loaded chunk each frame. Settled distance-32 frame time falls to about 4.3 ms and no frame logs a slow work phase; headless wall time falls to 11.7 s at distance 24 and 21.6 s at 32.
+- Index buffers are shared: one `u16` quad pattern replaces the per-chunk index buffers, so resident geometry at distance 32 falls from 125.9 MB to 100.9 MB and visible geometry from 37.6 MB to 30.1 MB. Chunks above 65,535 vertices keep a `u32` fallback buffer.
+- Mesh uploads rose from 2 to 8 per frame; the old cap limited first-load streaming, and the new value keeps distance-32 settle at the worker rate.
 
 ### Fixed
 

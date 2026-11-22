@@ -35,6 +35,14 @@ impl Block {
         !matches!(self, Self::Air | Self::Water)
     }
 
+    /// Whether the block counts as terrain rather than a tree for horizon tops.
+    ///
+    /// Trees are narrow and tall; treating a canopy as a solid wall would cull
+    /// real terrain behind it. Excluding them can only draw more, never less.
+    pub(crate) fn is_terrain(self) -> bool {
+        self.is_solid() && !matches!(self, Self::Wood | Self::Leaves)
+    }
+
     /// Returns the face layers for a solid block, or `None` for air.
     pub(crate) fn layers(self) -> Option<FaceLayers> {
         let uniform = |layer| FaceLayers {

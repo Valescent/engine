@@ -14,7 +14,7 @@ use crate::light2;
 use crate::mesher2;
 use crate::pipeline;
 use crate::residency;
-use crate::section;
+use crate::terrain_section as section;
 
 use super::lod::demo_lod_sets;
 use super::patch::mesh_bytes;
@@ -720,7 +720,7 @@ mod tests {
 
     use crate::light2;
     use crate::pipeline;
-    use crate::section;
+    use crate::terrain_section as section;
 
     use super::super::content::demo_materials;
     use super::super::patch::{demo_column_light, demo_fine_column};

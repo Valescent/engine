@@ -20,6 +20,7 @@ One file per decision. Each record states the context, the decision, the alterna
 | [0014](0014-seed-native-lod-hierarchy.md) | Seed-native multi-level LOD sections | Accepted |
 | [0015](0015-texture-references-are-presentation.md) | Per-face texture references are presentation-only | Accepted |
 | [0016](0016-block-texture-mipmap-policy.md) | Block texture mipmap and sampling policy | Accepted |
+| [0017](0017-quad-pool-and-indirect-draws.md) | Quad pool with vertex pulling and indirect draws | Accepted; implemented in v0.0.9 slice 4 |
 
 ## Conventions
 

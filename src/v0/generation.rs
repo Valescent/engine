@@ -134,6 +134,7 @@ impl Generator {
     pub(crate) fn generate_chunk(&self, chunk: ChunkCoord) -> Chunk {
         let origin = chunk.world_origin();
         let mut blocks = Chunk::default();
+        let mut column_tops = [u8::MAX; (CHUNK_SIZE * CHUNK_SIZE) as usize];
         let first = origin.y.max(0);
         let last = (origin.y + CHUNK_SIZE - 1).min(WORLD_HEIGHT - 1);
         if first > last {
@@ -161,6 +162,12 @@ impl Generator {
                         Block::Air
                     };
 
+                    if block.is_terrain() {
+                        let local_y = u8::try_from(world_y - origin.y).expect("local y fits in u8");
+                        let index = usize::try_from(lx * CHUNK_SIZE + lz)
+                            .expect("column index fits in usize");
+                        column_tops[index] = local_y;
+                    }
                     blocks.set_block(IVec3::new(lx, world_y - origin.y, lz), block);
                 }
             }
@@ -186,6 +193,15 @@ impl Generator {
             self.plant_tree(&mut blocks, chunk, IVec3::new(local_x, 0, local_z), trunk);
         }
 
+        let mut minimum = i32::MAX;
+        for top in column_tops {
+            if top == u8::MAX {
+                minimum = -1;
+                break;
+            }
+            minimum = minimum.min(i32::from(top));
+        }
+        blocks.set_terrain_min(minimum);
         blocks
     }
 
@@ -310,7 +326,7 @@ fn field(seed: u64, tag: u64, frequency: f32, octaves: i32) -> FastNoiseLite {
 }
 
 /// Surface block for a biome at `depth` blocks below the terrain height.
-fn surface_block(biome: Biome, depth: i32) -> Block {
+pub(crate) fn surface_block(biome: Biome, depth: i32) -> Block {
     match biome {
         Biome::Plains => {
             if depth == 0 {
@@ -531,6 +547,37 @@ mod tests {
             );
             assert_eq!(chunk_block(&generator, x, SEA_LEVEL, z), Some(Block::Water));
             assert_eq!(chunk_block(&generator, x, SEA_LEVEL + 1, z), None);
+            tested += 1;
+            if tested == 3 {
+                break;
+            }
+        }
+
+        assert!(tested > 0);
+    }
+
+    #[test]
+    fn water_only_generated_chunks_are_not_horizon_occluders() {
+        let generator = Generator::new(7);
+        let mut tested = 0;
+
+        for x in 0..2048 {
+            let z = 0;
+            if generator.height(x, z) >= SEA_LEVEL {
+                continue;
+            }
+            let chunk = ChunkCoord::new(
+                x.div_euclid(CHUNK_SIZE),
+                SEA_LEVEL.div_euclid(CHUNK_SIZE),
+                z.div_euclid(CHUNK_SIZE),
+            );
+            let blocks = generator.generate_chunk(chunk);
+            assert!(blocks.has_water(), "{chunk:?}");
+            assert_eq!(
+                blocks.terrain_min(),
+                -1,
+                "ocean chunk {chunk:?} must not occlude land"
+            );
             tested += 1;
             if tested == 3 {
                 break;
