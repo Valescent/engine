@@ -1,4 +1,3 @@
-
 use std::time::Duration;
 
 use super::capture::{capture_bytes_per_row, capture_delay, write_bmp};

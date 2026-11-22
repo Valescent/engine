@@ -18,7 +18,8 @@ use crate::quad::{ChunkInfo, QuadRecord};
 use crate::renderer::FrameStats;
 use crate::section::SectionKey;
 use crate::world::{CHUNK_SIZE, ChunkCoord};
-
+mod pipeline;
+use self::pipeline::create_pipeline;
 /// A pool slot is either an L0 chunk or a coarse section.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum NodeKey {
@@ -79,7 +80,6 @@ struct DrawIndexedArgs {
 
 /// One frame may write four lists: opaque and water, each indexed or plain.
 const ARGS_BYTES: u64 = SLOT_COUNT as u64 * 4 * size_of::<DrawIndexedArgs>() as u64;
-const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 const _: () = assert!(ARGS_BYTES >= SLOT_COUNT as u64 * 4 * size_of::<DrawIndexedArgs>() as u64);
 
@@ -992,62 +992,6 @@ impl QuadRenderer {
         self.write_info(queue, index, &info);
         refresh_active(&mut self.slots, &mut self.active_slots, position);
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn create_pipeline(
-    device: &wgpu::Device,
-    config: &wgpu::SurfaceConfiguration,
-    camera_layout: &wgpu::BindGroupLayout,
-    quad_layout: &wgpu::BindGroupLayout,
-    texture_layout: &wgpu::BindGroupLayout,
-    shader: &wgpu::ShaderModule,
-    label: &str,
-    vertex_entry: &str,
-    fragment_entry: &str,
-    blend: Option<wgpu::BlendState>,
-    depth_write: bool,
-    depth_compare: wgpu::CompareFunction,
-) -> wgpu::RenderPipeline {
-    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("quad pipeline layout"),
-        bind_group_layouts: &[Some(camera_layout), Some(quad_layout), Some(texture_layout)],
-        immediate_size: 0,
-    });
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(label),
-        layout: Some(&layout),
-        vertex: wgpu::VertexState {
-            module: shader,
-            entry_point: Some(vertex_entry),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            buffers: &[],
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: shader,
-            entry_point: Some(fragment_entry),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: config.format,
-                blend,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        primitive: wgpu::PrimitiveState {
-            cull_mode: Some(wgpu::Face::Back),
-            ..Default::default()
-        },
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: DEPTH_FORMAT,
-            depth_write_enabled: Some(depth_write),
-            depth_compare: Some(depth_compare),
-            stencil: wgpu::StencilState::default(),
-            bias: wgpu::DepthBiasState::default(),
-        }),
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-        cache: None,
-    })
 }
 
 #[cfg(test)]
