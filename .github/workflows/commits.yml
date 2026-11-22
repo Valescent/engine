@@ -27,6 +27,10 @@ jobs:
         uses: cocogitto/cocogitto-action@v4
         with:
           command: check
+          # Check only the commits introduced by this PR or push. A squash
+          # merge on main is a normal one-parent commit, so a since-latest-tag
+          # scan would re-check historical release squash messages.
+          args: ${{ github.event_name == 'pull_request' && format('{0}..HEAD', github.event.pull_request.base.sha) || format('{0}..HEAD', github.event.before) }}
 
   changelog:
     name: Changelog
