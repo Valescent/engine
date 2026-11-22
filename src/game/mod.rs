@@ -13,6 +13,7 @@ mod state;
 mod tools;
 
 pub(crate) use drops::drops_for;
+pub(crate) use inventory::{HOTBAR_SLOTS, Inventory};
 pub(crate) use item::{ItemKind, ItemRegistry};
 pub(crate) use save::quarantine;
 pub(crate) use state::GameState;
