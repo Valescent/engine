@@ -60,7 +60,7 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: always() && (needs.changes.outputs.code == 'true' || needs.changes.result != 'success')
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -101,7 +101,7 @@ jobs:
   dependencies:
     name: Dependencies
     needs: changes
-    if: needs.changes.outputs.cargo == 'true'
+    if: always() && (needs.changes.outputs.cargo == 'true' || needs.changes.result != 'success')
     runs-on: ubuntu-latest
     steps:
       - name: Check out
@@ -123,7 +123,7 @@ jobs:
   terrain:
     name: Terrain gates
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: always() && (needs.changes.outputs.code == 'true' || needs.changes.result != 'success')
     runs-on: ubuntu-latest
     steps:
       - name: Check out
