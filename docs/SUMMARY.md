@@ -21,7 +21,8 @@
   - [v0.0.6 — Atmosphere](dev/v0.0.6-scope.md)
   - [v0.0.7 — Advanced Horizons](dev/v0.0.7-scope.md)
   - [v0.0.8 — Scale](dev/v0.0.8-scope.md)
-  - [v0.0.9 — Far View](dev/v0.0.9-scope.md)
+  - [v0.0.9 – Far View](dev/v0.0.9-scope.md)
+  - [v0.0.10 – Basic mechanics](dev/v0.0.10-scope.md)
   - [Milestone template](dev/milestone-template.md)
 
 # Specs
@@ -103,7 +104,10 @@
   - [0014 — Seed-native multi-level LOD sections](decisions/0014-seed-native-lod-hierarchy.md)
   - [0015 — Per-face texture references are presentation-only](decisions/0015-texture-references-are-presentation.md)
   - [0016 — Block texture mipmap and sampling policy](decisions/0016-block-texture-mipmap-policy.md)
-  - [0017 — Quad pool and indirect draws](decisions/0017-quad-pool-and-indirect-draws.md)
+  - [0017 – Quad pool and indirect draws](decisions/0017-quad-pool-and-indirect-draws.md)
+  - [0018 – egui for game UI](decisions/0018-egui-for-game-ui.md)
+  - [0019 – kira for game audio](decisions/0019-kira-for-game-audio.md)
+  - [0020 – Minimal entity runtime](decisions/0020-minimal-entity-runtime.md)
   - [Template](decisions/0000-template.md)
 
 # Contributing
