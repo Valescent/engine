@@ -27,7 +27,7 @@ preview shows the ring layout.
 chunks (51.8%) against a synthetic 256x256 depth pyramid, including all 1,406 chunks the CPU ground
 truth marks occluded. An empty depth pyramid reproduces the CPU frustum set exactly (2,815 of 2,815).
 The pass writes `DrawIndexedIndirectArgs` with `first_instance = chunk_id`, so the chunk table lookup
-is already in the shape ADR-0015 needs. It needs Vulkan and `INDIRECT_FIRST_INSTANCE`.
+is already in the shape ADR-0017 needs. It needs Vulkan and `INDIRECT_FIRST_INSTANCE`.
 
 ## Ground rules
 
