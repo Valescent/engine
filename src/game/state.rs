@@ -262,6 +262,7 @@ mod tests {
             registry.stack("core:dirt", 2).unwrap(),
             Vec3::new(1.0, 2.0, 3.0),
             Vec3::ZERO,
+            &registry,
         );
         state
             .save(&path, 42, Vec3::new(4.0, 5.0, 6.0), 0.5, -0.25, &registry)
@@ -316,7 +317,7 @@ mod tests {
             .expect("a wooden pickaxe drops stone");
         state
             .entities
-            .spawn(stone, Vec3::new(0.5, 1.0, 0.5), Vec3::ZERO);
+            .spawn(stone, Vec3::new(0.5, 1.0, 0.5), Vec3::ZERO, &registry);
         let picked = state.pickup(Vec3::new(0.5, 1.0, 0.5), &registry);
         assert_eq!(picked, 1);
 

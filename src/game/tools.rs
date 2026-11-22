@@ -67,10 +67,22 @@ pub(crate) fn break_seconds(hardness: f32, block: &str, tool: Option<Tool>) -> f
 }
 
 /// Whether the held tool meets the block's minimum tier and can yield a drop.
+///
+/// A minimum tier of zero always drops, including by hand. Above zero the tool
+/// must match the block's preferred class as well as its tier: a wooden axe
+/// does not mine stone just because it is wooden.
 pub(crate) fn can_drop(block: &str, tool: Option<Tool>) -> bool {
     let rule = break_rule(block);
-    let tier = tool.map_or(0, |tool| tool.tier);
-    tier >= rule.min_tier
+    if rule.min_tier == 0 {
+        return true;
+    }
+    let Some(tool) = tool else {
+        return false;
+    };
+    if rule.class != ToolClass::Hand && tool.class != rule.class {
+        return false;
+    }
+    tool.tier >= rule.min_tier
 }
 
 #[cfg(test)]
@@ -119,6 +131,23 @@ mod tests {
         assert!(!can_drop("core:stone", hand));
         assert!(can_drop("core:stone", wood));
         assert!(!can_drop("core:ore_iron", wood));
+    }
+
+    #[test]
+    fn a_wrong_tool_class_does_not_satisfy_the_tier() {
+        let axe = Some(Tool {
+            class: ToolClass::Axe,
+            tier: 2,
+        });
+        let pickaxe = Some(Tool {
+            class: ToolClass::Pickaxe,
+            tier: 1,
+        });
+
+        assert!(!can_drop("core:stone", axe));
+        assert!(can_drop("core:stone", pickaxe));
+        assert!(can_drop("core:wood", axe));
+        assert!(can_drop("core:dirt", None));
     }
 
     #[test]

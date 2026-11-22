@@ -152,9 +152,12 @@ impl App {
         }
         self.game.damage_selected();
         for stack in drops {
-            self.game
-                .entities
-                .spawn(stack, block_centre(cell), spread_velocity(cell));
+            self.game.entities.spawn(
+                stack,
+                block_centre(cell),
+                spread_velocity(cell),
+                &self.items,
+            );
         }
     }
 
