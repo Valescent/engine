@@ -34,6 +34,7 @@ comparable. See [Benchmark results](../benchmarks.md).
 | [Scheduling](scheduling.md) | Reusable light scratch and worker-side chaining | Less allocation and fewer round trips | Medium | Low |
 | [World generation](worldgen.md) | Two-phase features and cached 2D fields | Structures and cheaper generation | Medium-high | Medium |
 | [Simulation and tooling](simulation-and-tooling.md) | Fixed timestep, headless runner, perf gates | Determinism and regressions caught early | Low-medium | Low |
+| [Engine architecture notes](engine-architecture.md) | Source build order, data-oriented tables, binary greedy, per-face meshes, single draw, region saves | A map of what is already adopted and what remains | Reference | None |
 
 ## Method
 

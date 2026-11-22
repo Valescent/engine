@@ -114,8 +114,8 @@ The inventory has 37 slots:
 | `9..36` | 27 | Main inventory |
 | `36` | 1 | Offhand |
 
-The selected hotbar index is `0..8`. There is no cursor stack yet; the split and move operations
-exist for the 0.0.10.2 inventory screen.
+The selected hotbar index is `0..8`. The inventory screen uses a held cursor stack for
+pick/place/swap; split and move remain state APIs used by the screen.
 
 ### Operations
 
@@ -133,6 +133,39 @@ exist for the 0.0.10.2 inventory screen.
 
 A partial add is not an error: the caller receives the leftover and may leave it on the ground.
 `EntityStore::pickup` uses that rule, so a full inventory does not destroy a drop.
+
+## Crafting
+
+**Status:** Phase 1 is scoped for `0.0.10.3`; the full design is in
+[the crafting system](../design/crafting-system.md).
+
+Crafting uses one grammar for every recipe:
+
+```text
+station · tier · pattern · output · cost · unlock · discipline
+```
+
+Phase 1 uses `Station::Inventory` (2x2), `Station::Workbench` (3x3), `Tier::T1`,
+`CraftCost::Instant`, and `Unlock::Start`. The fields are present from day one so Phase 2 can add
+station tiers, costs, and discovery without reshaping every recipe.
+
+- **Patterns.** Shaped recipes trim the occupied grid and match at any offset; a 2x2 grid cannot
+  make a 3x3 recipe. Tagged recipes match a multiset of item tags. Hybrid patterns are deferred.
+- **Tags.** Phase 1 has `wood`, `planks`, `stone`, and `fuel`.
+- **Surfaces.** The inventory gains a 2x2 grid and output slot. A placed `core:workbench` opens a
+  3x3 screen. Closing either screen returns the grid and cursor to the inventory.
+- **Recipe book.** Every Phase 1 recipe is known at start. The book shows ingredients, station,
+  tier, discipline, and a craftable/missing state; it has search and one-click craft. It does not
+  save glimpsed or unknown recipes yet.
+- **Salvage.** A static table returns a small amount of material from tools, workbench, and torches.
+  It is not reverse-engineering and does not recover affixes or quality.
+- **New blocks.** `core:planks`, `core:workbench`, and `core:torch` join the content pack. The
+  torch emits light and needs a solid support. `core:furnace` and smelting are Phase 2.
+
+Quality, rarity, sub-rarity, affixes, catalysts, discipline XP, station upgrades, experimentation,
+ruins/boss recipes, reverse-engineering, queues, portable stations, and automation are **not** in
+Phase 1. They need the item-instance side table, a player-save version, and their own releases;
+see [the crafting design](../design/crafting-system.md).
 
 ## Tools, hardness, and breaks
 
@@ -427,10 +460,11 @@ quit/reopen persistence. The full manual pass belongs to `0.0.10.6`.
 
 ## Next checkpoints
 
-- **`0.0.10.2`** adds egui, the HUD, the inventory and crafting screens, drag and drop, shift-click,
-  tooltips, keyboard navigation, and UI-first input routing.
-- **`0.0.10.3`** adds recipes, the workbench, durability repair, and the wood-to-stone progression
-  chain, including `core:planks`, `core:torch`, `core:workbench`, and `core:furnace`.
+- **`0.0.10.2`** added egui, the HUD, the inventory, drag and drop, shift-click, tooltips,
+  keyboard navigation, and UI-first input routing.
+- **`0.0.10.3`** adds crafting Phase 1: the universal grammar, shaped/tagged recipes, the 2x2
+  inventory grid, 3x3 workbench, known recipe book, tags, salvage, and the wood-to-stone chain. It
+  adds `core:planks`, `core:workbench`, and `core:torch`; the furnace is Phase 2.
 - **`0.0.10.4`** adds health, stamina, fall damage, drowning hooks, death, and respawn.
 - **`0.0.10.5`** adds kira audio, the first sounds, settings, and keybinds.
 - **`0.0.10.6`** adds save migrations, the full acceptance run, docs, changelog, and the release.

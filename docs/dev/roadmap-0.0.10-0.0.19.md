@@ -127,20 +127,37 @@ and save/restore the run.
   - [ ] Subtask: Gamepad-safe focus order and rebindable keys.
 - [ ] Task: Persist inventory and hotbar state.
 
-### 0.0.10.3 Crafting and tools
+### 0.0.10.3 Crafting Phase 1
 
-- [ ] Task: Add data-driven recipes.
-  - [ ] Subtask: Shaped and shapeless recipes; tags and alternatives.
-  - [ ] Subtask: Recipe validation and duplicate detection at load.
-- [ ] Task: Add crafting surfaces.
-  - [ ] Subtask: 2x2 inventory crafting and 3x3 workbench.
-  - [ ] Subtask: Recipe book, search, and one-click craft.
-- [ ] Task: Add tools and durability.
-  - [ ] Subtask: Tool tiers, harvest levels, and durability loss.
-  - [ ] Subtask: Repair and item damage display.
-- [ ] Task: Add the first progression chain.
-  - [ ] Subtask: Wood -> planks -> sticks -> wooden pickaxe.
-  - [ ] Subtask: Stone -> stone tools -> furnace and torches.
+The full adapted design is in [crafting-system.md](../design/crafting-system.md). This checkpoint is
+the source's "basic crafting" prototype: one station, one grammar, shaped and tagged recipes, a
+known-recipe book, and a small salvage table. Quality, rarity, disciplines, discovery, queues, and
+automation are **not** in 0.0.10.
+
+- [ ] Task: Add the universal recipe grammar.
+  - [ ] Subtask: `station`, `tier`, `pattern`, `output`, `cost`, `unlock`, and `discipline` fields.
+  - [ ] Subtask: Shaped, tagged, and hybrid pattern types; Phase 1 uses shaped and tagged.
+  - [ ] Subtask: Stable recipe names, tags, alternatives, validation, and duplicate detection at load.
+- [ ] Task: Add the 2x2 inventory grid and the 3x3 workbench.
+  - [ ] Subtask: Workbench block, right-click opens the 3x3 screen, close returns the grid.
+  - [ ] Subtask: Recipe preview, output slot, `Craft`, and `Craft x10`.
+- [ ] Task: Add the known-recipe book.
+  - [ ] Subtask: Search, craftable/missing state, ingredients, station, tier, and discipline.
+  - [ ] Subtask: One-click craft from the inventory; no glimpsed/unknown persistence yet.
+- [ ] Task: Add Phase 1 tags and blocks.
+  - [ ] Subtask: `wood`, `planks`, `stone`, and `fuel` tags.
+  - [ ] Subtask: `core:planks`, `core:workbench`, and `core:torch` records; torch is a light-emitting cross-quad.
+  - [ ] Subtask: `core:planks` x4, sticks, workbench, torches, eight wooden/stone tools.
+- [ ] Task: Add a static salvage table.
+  - [ ] Subtask: Tools return one material and one stick; workbench and torch returns are fixed.
+  - [ ] Subtask: No reverse-engineering, affix recovery, or quality salvage.
+- [ ] Task: Test the chain.
+  - [ ] Subtask: Wood -> planks -> sticks -> workbench -> wooden pickaxe -> stone tools.
+  - [ ] Subtask: 3x3 recipe rejected by the 2x2 grid; tagged alternatives; full-inventory rollback.
+  - [ ] Subtask: New block ids and the shifted water id.
+
+The furnace, campfire, anvil, quality/rarity, discipline XP, discovery, queues, portable stations,
+and automation are Phase 2+; see [crafting-system.md](../design/crafting-system.md#11-later-phases-and-release-mapping).
 
 ### 0.0.10.4 Player state and survival
 
@@ -676,6 +693,33 @@ save/reload.
 
 ---
 
+## Crafting after 0.0.10
+
+The [crafting design](../design/crafting-system.md) has seven prototype phases. Only Phase 1 fits
+inside 0.0.10. The remaining phases need their own releases and a roadmap decision:
+
+| Phase | Content | Proposed home |
+|---|---|---|
+| 2 | Campfire, Furnace, Anvil; station tiers; material tags and quality inheritance; item-instance side table and save v2 | First post-0.0.19 crafting release |
+| 3 | Experimentation, ruins, bosses, reverse-engineering; persistent known/glimpsed/unknown recipe book | First post-0.0.19 crafting release |
+| 4 | Eight disciplines, recipe pools, discipline XP | First post-0.0.19 crafting release |
+| 5 | Batch crafting, queues, portable stations | Second post-0.0.19 release |
+| 6 | Engineering automation and auto-crafting | Second post-0.0.19 release |
+| 7 | Resonance-locked recipes and endgame crafting | After Resonance exists |
+
+The current ladder ends at 0.0.19. Adding Phases 2-7 therefore means new `0.0.x` releases after it
+(for example 0.0.20 crafting depth, 0.0.21 bulk and queues, 0.0.22 automation and endgame), or a
+revised roadmap that inserts them and shifts later features. That is not committed by this page.
+
+The item-instance side table is the gate for Phase 2. It replaces the current
+`ItemStack { item, count, durability }` with an optional instance record for quality, rarity,
+sub-rarity, affixes, and durability, and bumps the player save. Phase 1 deliberately avoids that
+change.
+
+The wider Voxel RPG design also includes attributes, resonance, combat, rarity, survival, 24
+biomes, and an 80-system backlog. Those systems are not in the current 0.0.10-0.0.19 plan. Treat
+them as a separate product-roadmap decision, not as implied commitments of the crafting page.
+
 ## Open decisions
 
 These need an ADR or a short decision note before the owning release starts:
@@ -688,6 +732,12 @@ These need an ADR or a short decision note before the owning release starts:
 - **Cloud technique.** Raymarch vs froxel, temporal requirements, and quality tiers.
 - **Water model.** Height-field water vs voxel water; flow and tide coupling.
 - **Environment save block.** Versioning, migration, and authority for time/weather/tides.
+- **Crafting item instances.** Side table versus fat stack for quality, rarity, and affixes; when to
+  bump the player save.
+- **Crafting data source.** In-code validated tables for Phase 1, then authored data once the
+  content pipeline exists.
+- **Furnace scope.** Placeholder block in Phase 1, or a real smelting station in Phase 2 with block
+  entities, fuel, and a queue.
 - **Target hardware.** Minimum GPU, CPU, memory, and resolution for the hero scene.
 - **Multiplayer.** Explicitly out of scope unless a later decision adds it.
 

@@ -375,9 +375,12 @@ See [v0.0.10 scope](dev/v0.0.10-scope.md) for the deliverables and acceptance cr
 #### 2. UI and crafting (`0.0.10.2`, `0.0.10.3`)
 - [x] egui foundation, HUD, and UI-first input hook
 - [x] Inventory screen with drag/drop, shift-click, tooltips, and keyboard navigation
-- [ ] Crafting, pause, and death screens
-- [ ] Shaped and shapeless recipes, 2x2 and 3x3 surfaces, recipe book
-- [ ] Tool durability and the wood-to-stone progression chain
+- [ ] Crafting Phase 1: universal recipe grammar, shaped/tagged patterns, 2x2/3x3, workbench, known recipe book, tags, salvage
+- [ ] Pause and death screens
+- [ ] The wood-to-stone tool progression and crafted tools
+
+See [the crafting system design](design/crafting-system.md) for the full grammar, disciplines,
+stations, quality model, discovery, and the Phase 2-7 mapping. Only Phase 1 is committed to 0.0.10.
 
 #### 3. Survival and presentation (`0.0.10.4`, `0.0.10.5`)
 - [ ] Health, stamina, fall damage, drowning hooks, death, and respawn

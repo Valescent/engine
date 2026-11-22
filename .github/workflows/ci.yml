@@ -29,8 +29,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Docs-only changes skip the Rust jobs. The required check names still
-      # report as skipped, which branch protection treats as successful.
+      # Docs-only changes skip the Rust steps. The matrix jobs still start so
+      # the required `Test (<os>)` checks report success instead of a missing
+      # literal `Test (${{ matrix.os }})` check.
       - name: Detect changed paths
         id: filter
         uses: dorny/paths-filter@v3
@@ -60,7 +61,7 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     needs: changes
-    if: always() && (needs.changes.outputs.code == 'true' || needs.changes.result != 'success')
+    if: always()
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -77,15 +78,17 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Format
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-latest' && (needs.changes.outputs.code == 'true' || needs.changes.result != 'success')
         run: cargo fmt --all -- --check
 
       # `tracy` is a default feature but builds a C++ client and stays local
       # (ADR-0006); every CI cargo command disables default features.
       - name: Clippy
+        if: needs.changes.outputs.code == 'true' || needs.changes.result != 'success'
         run: cargo clippy --all-targets --locked --no-default-features -- -D warnings
 
       - name: Test
+        if: needs.changes.outputs.code == 'true' || needs.changes.result != 'success'
         run: cargo test --locked --no-default-features
 
       # Strict rustdoc gate for the narrowed surface. `terrain-core` is clean
@@ -93,7 +96,7 @@ jobs:
       # links under `src/v0/`, so only the core crate is gated here. See
       # docs/dev/ci.md#strict-rustdoc-gate.
       - name: Documentation (terrain-core)
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-latest' && (needs.changes.outputs.code == 'true' || needs.changes.result != 'success')
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc -p terrain-core --no-deps --no-default-features
