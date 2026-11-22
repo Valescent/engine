@@ -1,4 +1,4 @@
-//! Quad pool allocation for ADR-0015.
+//! Quad pool allocation for ADR-0017.
 //!
 //! The pool is a flat array of 12-byte quad records. It is divided into pages of
 //! [`PAGE_QUADS`] quads; a chunk reserves a contiguous run of pages and stores the

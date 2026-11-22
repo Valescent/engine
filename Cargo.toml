@@ -1,12 +1,18 @@
 [package]
 name = "engine"
 version = "0.0.9"
+default-run = "engine"
 edition = "2024"
 rust-version = "1.99.1"
 description = "A voxel engine written in Rust."
 repository = "https://github.com/Valescent/engine"
 license-file = "LICENSE"
 publish = false
+
+[workspace]
+members = [".", "crates/terrain-core"]
+default-members = [".", "crates/terrain-core"]
+resolver = "3"
 
 [dependencies]
 bytemuck = { version = "1.25", features = ["derive"] }
@@ -16,16 +22,18 @@ pollster = "1"
 profiling = { version = "=1.0.18", default-features = false }
 rayon = { version = "1.12.0", optional = true }
 thiserror = "2"
-tracy-client = { version = "=0.18.4", optional = true, default-features = false, features = ["enable", "ondemand", "only-localhost"] }
-tracy-client-sys = { version = "=0.28.0", optional = true, default-features = false }
+tracy-client = { version = "=0.19.0", optional = true, default-features = false, features = ["enable", "ondemand", "only-localhost"] }
+tracy-client-sys = { version = "=0.30.1", optional = true, default-features = false }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+terrain-core = { version = "0.0.7", path = "crates/terrain-core" }
 wgpu = "30"
 wgpu-profiler = { version = "=0.28.0" }
 winit = { version = "0.30", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
 fastnoise-lite = "1.1.1"
 
 [features]
+default = ["tracy"]
 tracy = [
     "profiling/profile-with-tracy",
     "dep:tracy-client",

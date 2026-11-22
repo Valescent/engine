@@ -264,7 +264,7 @@ Cheap wins found independently of the spec, and their status:
 | Lazy block-light grid and a flat ceiling array in the light job | Landed |
 | Budgeted, deterministic level work and selection on upload | Landed |
 | One shared static index buffer | Landed |
-| Quad pool with 12-byte records (ADR-0015) | Landed: 2 draws, 37.6 MiB, 1.9 ms at distance 32 |
+| Quad pool with 12-byte records (ADR-0017) | Landed: 2 draws, 37.6 MiB, 1.9 ms at distance 32 |
 
 Measured effect of the landed items: the settled distance-32 frame fell from 9.06 ms to 4.30-4.35 ms
 on the reference machine, resident geometry fell from 125.9 MB to 100.9 MB, and visible geometry from

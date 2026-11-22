@@ -5,22 +5,23 @@ queries to the same view, so a slow frame can be attributed to CPU work or GPU w
 guessed at. [ADR-0006](../decisions/0006-tracy-for-profiling.md) selects this pair. The GPU timing
 also works without Tracy: the default build reports it as `gpu_ms` in the frame log.
 
-> **Status: current.** The default build always creates a `wgpu-profiler` GPU context when the
-> adapter supports timestamp queries and reports the scene-pass time as `gpu_ms` in the
-> once-per-second frame log; no Tracy client is needed. `cargo run --features tracy` additionally
-> starts the Tracy client, registers the frame marks, spans, plots, and memory events, and attaches
-> the same GPU zones to the Tracy timeline. An adapter without timestamp queries logs a warning and
-> leaves `gpu_ms` at zero.
+> **Status: current; `tracy` is a default feature.** A debug build (`cargo run`, `cargo run --bin
+> engine`) starts the Tracy client and, if `tracy-capture` is available, automatically records a
+> trace into `reports/tracy/run-<unix>.tracy`. Release builds are still instrumented because Cargo
+> has no profile-conditional features, but they do not auto-capture or install the profiled
+> allocator. CI and shipped binaries build with `--no-default-features`, where profiling compiles
+> to no-op macros.
 
 | Area | Status |
 |---|---|
-| Tracy CPU timeline | Current (`tracy` feature) |
-| `wgpu-profiler` GPU zones | Current in the default build when timestamps are supported; `gpu_ms` log and Tracy zones |
-| `tracy` Cargo feature | Current; local builds only, not in CI |
-| Timestamp-query device features | Requested by default, intersected with adapter support |
-| Memory allocations | Current with `tracy`; `ProfiledAllocator` in `src/main.rs` |
-| Plots | Current with `tracy`; `frame_ms`, `gpu_ms`, `visible_chunks`, `draw_calls`, `visible_vertices`, `rebuild_ms`, `upload_ms`, `mesh_jobs`, `generated_columns`, `generation_ms` |
-| Frame-timing log | Current; includes `gpu_ms`; see [Debugging](debugging.md#logging) |
+| Tracy CPU timeline | Current (`tracy` default feature) |
+| `wgpu-profiler` GPU zones | Current (`tracy` default feature, when timestamps are supported) |
+| `tracy` Cargo feature | Current; default for debug builds, disabled in CI with `--no-default-features` |
+| Automatic capture | Current; debug builds write `reports/tracy/run-<unix>.tracy` |
+| Timestamp-query device features | Requested only with `tracy`, intersected with adapter support |
+| Memory allocations | Current; `ProfiledAllocator` in `src/main.rs` |
+| Plots | Current; `frame_ms`, `gpu_ms`, `visible_chunks`, `draw_calls`, `visible_vertices`, `geometry_bytes`, `visible_geometry_bytes`, `rebuild_ms`, `upload_ms`, `mesh_jobs`, `generated_columns`, `generation_ms`, `terrain_sections_uploaded` |
+| Frame-timing log | Current; see [Debugging](debugging.md#logging) |
 | `pool_sim` benchmark | Current; see [Benchmark results](benchmarks.md) |
 | Frame debuggers (RenderDoc, Nsight, PIX) | Complementary external tools; see ADR-0006 |
 
@@ -28,10 +29,10 @@ also works without Tracy: the default build reports it as `gpu_ms` in the frame 
 
 Both gates from the original plan are decided.
 
-- **CI does not build the feature.** The `CI` workflow runs Clippy, tests, and docs without
-  `--all-features`; do not add it back. The `tracy` feature compiles Tracy's C++ client, and
-  ADR-0006 keeps profiling builds local. Run the instrumented checks yourself with
-  `cargo clippy --all-targets --features tracy -- -D warnings`.
+- **CI does not build the feature.** `tracy` is a default feature, so the `CI` workflow passes
+  `--no-default-features` to every cargo command. Do not drop that flag or add `--all-features`.
+  The feature compiles Tracy's C++ client, and ADR-0006 keeps profiling builds local. Run the
+  instrumented checks yourself with `cargo clippy --all-targets -- -D warnings`.
 - **Broadcast remains compiled in.** `wgpu-profiler` and `profiling` keep `tracy-client`'s
   default features, so `broadcast` stays enabled even with `only-localhost`. The client binds to
   loopback and broadcasts to `127.255.255.255`, so traffic stays on the machine. That meets the
@@ -94,6 +95,7 @@ span.
 
 ```toml
 [features]
+default = ["tracy"]
 tracy = [
     "profiling/profile-with-tracy",
     "dep:tracy-client",
@@ -135,7 +137,7 @@ let _tracy_client = tracy_client::Client::start();
 `src/main.rs` also installs the memory profiler, which must live in the binary crate:
 
 ```rust
-#[cfg(feature = "tracy")]
+#[cfg(all(feature = "tracy", debug_assertions))]
 #[global_allocator]
 static GLOBAL: tracy_client::ProfiledAllocator<std::alloc::System> =
     tracy_client::ProfiledAllocator::new(std::alloc::System, 0);
@@ -276,18 +278,36 @@ pub(crate) fn frame_ms(value: f64) {
 | `mesh_jobs` | Mesh jobs currently in flight |
 | `generated_columns` | Columns committed to the world this frame |
 | `generation_ms` | Worker generation time received this frame |
+| `terrain_sections_uploaded` | New or rewritten terrain sections this frame |
 
 Plots are emitted every frame. Do not add a plot per chunk.
 
 ## Run Tracy
 
+Debug builds capture automatically. `src/main.rs` starts the client, then spawns
+`tracy-capture` before `engine::run()`; the capture connects over loopback and writes a trace to
+`reports/tracy/run-<unix>.tracy`. `reports/` is git-ignored.
+
 ```console
-cargo run --features tracy
-cargo run --release --features tracy
+cargo run --bin engine                    # debug: profiling on, capture on
+cargo run --release                       # release: profiling on, no auto-capture
+cargo run --release --no-default-features # release: no profiling
+cargo run --no-default-features           # debug: no profiling, no capture
 ```
 
-Start the engine, then `tracy-profiler.exe`. With `ondemand`, collection begins when the GUI
-connects and the client connects automatically over loopback. The GUI then shows:
+| Variable | Default | Meaning |
+|---|---|---|
+| `TRACY_CAPTURE_SECONDS` | `30` | Capture length; `0` disables the automatic capture while leaving profiling on. |
+| `TRACY_CAPTURE` | unset | Absolute path to `tracy-capture`; checked before `PATH` and `%TEMP%\tracy`. |
+
+`tracy-capture` is searched in `TRACY_CAPTURE`, then every `PATH` entry, then
+`%TEMP%\tracy\`. If it is missing, the engine still runs and prints a warning. The capture is a
+child process, so the engine can exit before the timer expires; close it only after the trace file
+has been written.
+
+Open a saved trace with the matching GUI (`tracy-profiler.exe` 0.13.1). With `ondemand`,
+collection begins when a capture or GUI connects and the client connects automatically over
+loopback. The GUI then shows:
 
 - the CPU timeline, including `frame`, `player update`, `mesh request`, `mesh upload`, `encode`,
   and the `chunk worker` lanes;

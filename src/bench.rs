@@ -42,7 +42,7 @@ pub(crate) struct Row {
     p95_us: f64,
     /// Quads in the measured mesh.
     quads: usize,
-    /// ADR-0015 quad records emitted alongside the vertices.
+    /// ADR-0017 quad records emitted alongside the vertices.
     records: usize,
     /// Indices in the measured mesh.
     indices: usize,

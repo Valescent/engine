@@ -3,7 +3,7 @@
 //! Light is derived state. It is recomputed from blocks and never saved.
 //! Propagation runs over a 3x3x3 chunk neighbourhood so values on the one-cell
 //! border of a chunk are exact, then the centre chunk plus border is extracted
-//! as a [`LightField`].
+//! as a `LightField`.
 
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;

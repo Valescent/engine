@@ -835,7 +835,6 @@ impl World {
     }
 
     /// Marks a loaded chunk as modified.
-    #[cfg(test)]
     pub(crate) fn mark_modified(&mut self, chunk: ChunkCoord) {
         self.modified.insert(chunk);
     }
@@ -855,6 +854,12 @@ impl World {
     #[cfg(test)]
     pub(crate) fn modified_count(&self) -> usize {
         self.modified.len()
+    }
+}
+
+impl crate::player::BlockSource for World {
+    fn solid_blocks_in(&self, min: IVec3, max: IVec3) -> Vec<IVec3> {
+        World::solid_blocks_in(self, min, max)
     }
 }
 

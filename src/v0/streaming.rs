@@ -54,6 +54,10 @@ impl Streaming {
         self.render_distance
     }
 
+    pub(crate) fn loaded(&self) -> impl Iterator<Item = IVec2> + '_ {
+        self.loaded.iter().copied()
+    }
+
     pub(crate) fn loaded_count(&self) -> usize {
         self.loaded.len()
     }

@@ -2,14 +2,14 @@
 
 use glam::{IVec3, Vec3};
 
-use crate::world::World;
-
 pub(crate) const PLAYER_WIDTH: f32 = 0.6;
 pub(crate) const PLAYER_HEIGHT: f32 = 1.8;
 pub(crate) const EYE_HEIGHT: f32 = 1.62;
 pub(crate) const WALK_SPEED: f32 = 4.5;
 pub(crate) const GRAVITY: f32 = 24.0;
 pub(crate) const JUMP_VELOCITY: f32 = 8.0;
+/// Horizontal and vertical speed while the debug fly toggle is on.
+pub(crate) const FLY_SPEED: f32 = 12.0;
 
 const HALF_WIDTH: f32 = PLAYER_WIDTH / 2.0;
 const COLLISION_EPSILON: f32 = 1e-4;
@@ -42,12 +42,22 @@ impl Aabb {
     }
 }
 
+/// The block queries movement needs.
+///
+/// Implemented by the legacy [`World`] and by the new-terrain collision index, so
+/// the player does not care which world is live (`F1.5` keeps one baseline).
+pub(crate) trait BlockSource {
+    fn solid_blocks_in(&self, min: IVec3, max: IVec3) -> Vec<IVec3>;
+}
+
 /// Player physics state. `position` is the centre of the feet.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Player {
     pub(crate) position: Vec3,
     pub(crate) velocity: Vec3,
     pub(crate) on_ground: bool,
+    /// Debug fly: no gravity, no collision, `Space` up and `Ctrl` down.
+    pub(crate) flying: bool,
 }
 
 /// One frame of walking input.
@@ -56,6 +66,8 @@ pub(crate) struct PlayerInput {
     pub(crate) forward: f32,
     pub(crate) right: f32,
     pub(crate) jump: bool,
+    /// `Ctrl` while flying: descend. Ignored on foot.
+    pub(crate) descend: bool,
     pub(crate) yaw: f32,
 }
 
@@ -65,7 +77,16 @@ impl Player {
             position,
             velocity: Vec3::ZERO,
             on_ground: false,
+            flying: false,
         }
+    }
+
+    /// Toggles debug flight. Leaving it restores gravity and collision; entering
+    /// it clears vertical motion so a frame cannot apply both.
+    pub(crate) fn toggle_fly(&mut self) {
+        self.flying = !self.flying;
+        self.velocity = Vec3::ZERO;
+        self.on_ground = false;
     }
 
     pub(crate) fn eye_position(&self) -> Vec3 {
@@ -77,14 +98,14 @@ impl Player {
     }
 
     #[cfg(test)]
-    pub(crate) fn update(&mut self, world: &World, input: PlayerInput, delta: f32) {
+    pub(crate) fn update(&mut self, world: &dyn BlockSource, input: PlayerInput, delta: f32) {
         self.update_guarded(world, input, delta, &|_| true);
     }
 
     /// Updates movement, rejecting any axis that enters an unready column.
     pub(crate) fn update_guarded(
         &mut self,
-        world: &World,
+        world: &dyn BlockSource,
         input: PlayerInput,
         delta: f32,
         ready: &impl Fn(Vec3) -> bool,
@@ -97,8 +118,19 @@ impl Player {
         let forward = Vec3::new(yaw_sin, 0.0, -yaw_cos);
         let right = Vec3::new(yaw_cos, 0.0, yaw_sin);
         let direction = (forward * input.forward + right * input.right).normalize_or_zero();
-        self.velocity.x = direction.x * WALK_SPEED;
-        self.velocity.z = direction.z * WALK_SPEED;
+        let speed = if self.flying { FLY_SPEED } else { WALK_SPEED };
+        self.velocity.x = direction.x * speed;
+        self.velocity.z = direction.z * speed;
+
+        if self.flying {
+            // Debug flight: no gravity, no collision, no ready-column guard.
+            let up = if input.jump { 1.0 } else { 0.0 };
+            let down = if input.descend { 1.0 } else { 0.0 };
+            self.velocity.y = (up - down) * FLY_SPEED;
+            self.position += self.velocity * delta;
+            self.on_ground = false;
+            return;
+        }
 
         if input.jump && self.on_ground {
             self.velocity.y = JUMP_VELOCITY;
@@ -119,7 +151,7 @@ impl Player {
         }
     }
 
-    fn move_axis(&mut self, world: &World, axis: usize, distance: f32) {
+    fn move_axis(&mut self, world: &dyn BlockSource, axis: usize, distance: f32) {
         if distance == 0.0 {
             return;
         }
@@ -190,6 +222,7 @@ fn overlaps_other_axes(aabb: Aabb, block: IVec3, axis: usize) -> bool {
 mod tests {
     use super::*;
     use crate::block::Block;
+    use crate::world::World;
 
     fn world_with(blocks: &[IVec3]) -> World {
         let mut world = World::default();
@@ -204,8 +237,44 @@ mod tests {
             forward: 0.0,
             right: 0.0,
             jump,
+            descend: false,
             yaw: 0.0,
         }
+    }
+
+    #[test]
+    fn flying_ignores_gravity_and_moves_vertically() {
+        let mut player = Player::new(Vec3::new(16.0, 200.0, 16.0));
+        player.toggle_fly();
+        assert!(player.flying);
+
+        // Up: `jump` rises at FLY_SPEED, with no gravity term.
+        player.update(&World::default(), no_input(true), 0.5);
+        assert!(
+            (player.position.y - 206.0).abs() < 1e-4,
+            "{:?}",
+            player.position.y
+        );
+
+        // Down: `descend` falls at the same speed.
+        let mut down = no_input(false);
+        down.descend = true;
+        player.update(&World::default(), down, 0.5);
+        assert!(
+            (player.position.y - 200.0).abs() < 1e-4,
+            "{:?}",
+            player.position.y
+        );
+
+        // Neither key: hover, no gravity.
+        player.update(&World::default(), no_input(false), 1.0);
+        assert!((player.position.y - 200.0).abs() < 1e-4);
+
+        // Leaving flight restores gravity on the next frame.
+        player.toggle_fly();
+        assert!(!player.flying);
+        player.update(&World::default(), no_input(false), 0.5);
+        assert!(player.position.y < 200.0);
     }
 
     #[test]
@@ -221,6 +290,7 @@ mod tests {
             forward: 0.0,
             right: 1.0,
             jump: false,
+            descend: false,
             yaw: 0.0,
         };
         let ready = |position: Vec3| position.x < 31.0;
@@ -323,6 +393,7 @@ mod tests {
                 forward: 1.0,
                 right: 0.0,
                 jump: false,
+                descend: false,
                 yaw: std::f32::consts::FRAC_PI_2,
             },
             1.0,
@@ -348,6 +419,7 @@ mod tests {
                 forward: 1.0,
                 right: 0.0,
                 jump: false,
+                descend: false,
                 yaw: std::f32::consts::FRAC_PI_2,
             },
             1.0,
@@ -388,6 +460,7 @@ mod tests {
                 forward: 1.0,
                 right: 1.0,
                 jump: false,
+                descend: false,
                 yaw: std::f32::consts::FRAC_PI_2,
             },
             1.0,

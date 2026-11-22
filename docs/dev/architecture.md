@@ -2,33 +2,91 @@
 
 The engine is a small `winit` and `wgpu` application. This page describes the current modules, ownership, and frame flow. Update it when module boundaries or resource ownership change.
 
+## Workspace crates
+
+The repository is a two-package workspace rooted at the `engine` package:
+
+| Crate | Responsibility |
+|---|---|
+| `engine` | `winit` application, renderer, camera, player, legacy v0 world/chunk stack, and the `engine::terrain` facade over the terrain stack. It depends on `terrain-core`. |
+| `terrain-core` (`crates/terrain-core`) | Headless terrain description, generation, storage, lighting, meshing, and save stack, plus the `terrain-gen` binary. It has no window, GPU, audio, or renderer dependency. |
+
+`terrain-core` is a normal dependency (not a dev-dependency). `engine` exposes its modules through the public `engine::terrain` facade, so external code uses paths such as `engine::terrain::pipeline::Terrain`, `engine::terrain::light2`, and `engine::terrain::section`. Internally, `src/lib.rs` keeps `pub(crate) use terrain_core::{...}`, so `crate::pipeline` and the other flat paths still resolve inside the crate; they are not public API. The `terrain-gen` binary lives in `terrain-core`; CI checks that its normal dependency tree contains no `wgpu`, `winit`, `wgpu-profiler`, or `tracy-client`.
+
 ## Modules
+
+```text
+src/
+├── main.rs                 # thin binary shell
+├── lib.rs                  # crate docs, mod declarations, pub use
+├── startup.rs              # run, config, seed, world choice, demo open
+├── app/
+│   ├── mod.rs              # App, ApplicationHandler, lifecycle, RunError
+│   ├── input.rs            # key/mouse mapping, capture, hotbar, edit actions
+│   └── frame.rs            # tick/redraw order, timing, overlay, streaming
+├── demo/
+│   ├── mod.rs              # DemoRuntime seam, frame/stats, constants, re-exports
+│   ├── patch.rs            # TerrainDemo, block access, light/mesh apply, LOD apply
+│   ├── build.rs            # incremental relight/remesh over an edit batch
+│   ├── lod.rs              # LOD0/1/2 bands, clipped LOD1, LOD2
+│   ├── stream.rs           # column ring, worker pool, jobs
+│   ├── edit.rs             # edit queue, journal/section save queueing
+│   ├── persist.rs          # replay, repair prompt, recovered journal
+│   └── content.rs          # material table, collision table, texture layers
+├── v0/                     # frozen legacy stack
+├── renderer.rs             # Renderer, RendererError, re-exports, draw passes
+├── renderer/
+│   ├── chunk.rs            # legacy per-chunk LOD/water meshes and origins
+│   ├── frame.rs            # frame uniform, camera bind group, depth, stats
+│   ├── origin.rs           # absolute origin uniforms, camera-relative bookkeeping
+│   ├── pipeline.rs         # shader modules, bind group layouts, pipelines
+│   ├── terrain.rs          # packed-quad sections, quad decode, upload plan
+│   └── texture.rs          # procedural block texture array
+├── camera.rs, player.rs, raycast.rs, sky.rs, overlay.rs, frustum.rs
+├── block.rs, config.rs, headless.rs, metrics.rs
+└── *.wgsl                  # shaders stay with the renderer
+```
 
 | Path | Responsibility |
 |---|---|
 | `src/main.rs` | Thin binary entry point; calls `engine::run()`. |
-| `src/lib.rs` | Public entry point, `winit` application handler, input, interaction, frame loop, save-on-exit, and error aggregation. See [Public API](public-api.md). |
+| `src/lib.rs` | Crate table of contents: crate docs, `mod` declarations, the `pub(crate)` terrain re-exports, and the public surface (`run`, `RunError`, `RendererError`, `ChunkCoord`, `SaveError`, `v0`, and the `terrain` facade). No logic. See [Public API](public-api.md). |
+| `src/startup.rs` | `run`, tracing setup, configuration and seed loading, world choice (saved, generated, or stress), the `DemoRuntime::open` hand-off, and the headless hand-off. |
+| `src/app/mod.rs` | `App` (fields and construction), the `winit` application handler and window-event dispatch, window/renderer lifecycle, `RunError`, and the module declarations. |
+| `src/app/input.rs` | Key mapping, cursor capture/release, focus and mouse-look handling, hotbar selection, movement-key helpers, repair-key mapping, and the break/place/demo-edit actions. |
+| `src/app/frame.rs` | Per-frame work: tick and redraw order, frame delta and timing accumulation, `FrameAccumulator`, overlay text and stats, resize, mesh request/upload and column streaming, and the demo-to-renderer upload adapter. |
+| `src/demo/mod.rs` | `DemoRuntime`, the demo's one app-facing seam: it owns the patch, ring, save worker, repair prompt, pending rebuild, and edit queue, and exposes `open`, `tick`, `edit`, `save`, `shutdown`, `repair`, `stats`, and the read-only overlay/upload accessors. Also `DemoFrame`, `DemoStats`, shared constants, and the runtime tests. |
+| `src/demo/patch.rs` | `TerrainDemo` state, resident columns, block access and collision, light/mesh installation, LOD selection, and the light table. |
+| `src/demo/build.rs` | The incremental rebuild over a batch of edits: the 3x3 light scope, the 26-neighbour remesh, `DemoEdit`/`DemoPatch`/`DemoRebuild`, and their tests. |
+| `src/demo/content.rs` | The material table and face-texture layer map from the v1 pack, the collision (`solid`) table, and the material test. |
+| `src/demo/lod.rs` | LOD0/1/2 band selection, complete and clipped LOD1 regions, LOD2 derivation, and LOD tests. |
+| `src/demo/stream.rs` | The column ring: worker pool, generation and light/mesh jobs, the coarse job, snapshots, in-flight bookkeeping, and build/window tests. |
+| `src/demo/edit.rs` | The edit queue and journal/section save queueing per edit, with its queue test. |
+| `src/demo/persist.rs` | Save replay, the repair prompt, the recovered-journal path that runs before the ring opens, and replay tests. |
 | `src/camera.rs` | Look state, yaw/pitch math, view-projection, and tests. Position comes from the player eye. |
 | `src/block.rs` | Block types, stable IDs, hotbar mapping, and face texture layers. |
 | `src/player.rs` | Player physics, gravity, jumping, swept AABB collision, and tests. |
 | `src/overlay.rs` | Screen-space debug text geometry and font. |
 | `src/raycast.rs` | DDA voxel traversal, hit result, tie-breaking, and tests. |
-| `src/world.rs` | Chunk and block storage, coordinate conversion, dirty-chunk tracking, the modified set, `VCHK` save/load, and seed file handling. |
-| `src/mesh.rs` | Greedy meshing, the 2x2x2 LOD1 and 4x4x4 LOD2 downsamples, sample-space section meshing, LOD selection, chunk snapshots, border blocks, and tests. |
-| `src/mesher.rs` | Mesh, light, and generation jobs, revisions, the bounded micropool `WorkerPool`, finished-result collection, and tests. |
+| `src/v0/mod.rs` | The frozen v0 stack: module list and docs. Removed once the terrain demo becomes the default run path. |
+| `src/v0/world.rs` | Chunk and block storage, coordinate conversion, dirty-chunk tracking, the modified set, `VCHK` save/load, and seed file handling. |
+| `src/v0/light.rs` | Four-bit packed sky/block light, BFS propagation, padded `LightField` accessors, and direct-light snapshots. |
+| `src/v0/mesh.rs` | Greedy meshing, the 2x2x2 LOD1 and 4x4x4 LOD2 downsamples, LOD selection, chunk snapshots, border blocks, and tests. |
+| `src/v0/mesher.rs` | Mesh, light, and generation jobs, revisions, the bounded micropool `WorkerPool`, finished-result collection, and tests. |
+| `src/v0/generation.rs` | Seeded noise fields, height, biomes, caves, water fill, trees, and the spawn column. |
+| `src/v0/streaming.rs` | Player-centred load rings, forward-first ordering, unload hysteresis, readiness, and the movement guard. |
+| `src/v0/voxel.rs` | The packed 12-byte chunk vertex, the highlight mesh, and the v0.0.4 face-culled mesher kept as a test reference. |
 | `src/section.rs` | `SectionKey` level/extent/origin/parent/child math, seed-native coarse generation, the modified-chunk edit overlay, coarse light, and section meshes. |
 | `src/hierarchy.rs` | Projected section selection, readiness, hysteresis, parent retention, hidden children, build order, and eviction. |
 | `src/frustum.rs` | Six-plane frustum extraction and conservative AABB tests. |
 | `src/horizon.rs` | Column-top horizon bins and the conservative occlusion test for L0 chunks and hierarchy sections. |
 | `src/metrics.rs` | Tracy plots for frame, GPU, chunk, draw, rebuild, upload, and queue metrics; no-ops without the `tracy` feature. |
-| `src/light.rs` | Four-bit packed sky/block light, BFS propagation, padded `LightField` accessors, and direct-light snapshots. |
-| `src/generation.rs` | Seeded noise fields, height, biomes, caves, water fill, trees, and the spawn column. |
-| `src/streaming.rs` | Player-centred load rings, forward-first ordering, unload hysteresis, readiness, and the movement guard. |
 | `src/config.rs` | `config.toml` parsing for the render distance. |
 | `src/headless.rs` | Windowless fixed-step run selected by `ENGINE_HEADLESS=1`; drives generation, streaming, light, and meshing, then prints one `HEADLESS` summary line. |
+| `crates/terrain-core/src/save.rs`, `crates/terrain-core/src/world_save.rs` | Section files, backup rotation, journal file, replay/trimming, `WorldSave`, save worker, repair, migration/report. See [Terrain v1 runtime](terrain-v1.md) and [Save format](save-format.md). |
+| `crates/terrain-core/src/light2.rs`, `crates/terrain-core/src/mesher2.rs`, `crates/terrain-core/src/lod.rs`, `crates/terrain-core/src/section.rs`, `src/terrain_draw.wgsl` | v1 column light, greedy mesher, coarse LOD, section storage, packed-quad shader. The shader stays with the renderer. |
 | `src/sky.rs` | Day/night cycle, sun direction, sky/ambient/sun colours, and the CPU fog formula. |
-| `src/voxel.rs` | The packed 12-byte chunk vertex, the highlight mesh, and the v0.0.4 face-culled mesher kept as a test reference. |
-| `src/renderer.rs` | `wgpu` device/surface setup, pipelines, block texture array, buffers, depth texture, resizing, capture readback, and draw submission. |
+| `src/renderer.rs`, `src/renderer/` | `renderer.rs`: `wgpu` device/surface setup, `Renderer` and its methods, re-exports, and draw submission. `renderer/chunk.rs`: legacy chunk LOD/water buffers and origin uniforms. `renderer/frame.rs`: frame uniform, camera bind group, depth texture, present mode, and stats. `renderer/origin.rs`: absolute origin uniforms and camera-relative bookkeeping. `renderer/pipeline.rs`: shader modules, bind group layouts, and pipelines. `renderer/terrain.rs`: packed-quad sections, quad decode, and the upload plan. `renderer/texture.rs`: the procedural block texture array. |
 | `src/quad.rs` | The 12-byte quad record and 48-byte chunk-info layout. |
 | `src/quad_renderer.rs` | Quad-pool uploads keyed by `NodeKey`, the chunk-info table, indirect arguments, visibility, and the two draws. |
 | `src/pool.rs` | Flat 64-quad pages with a coalescing free list and frames-in-flight retirement. |
@@ -37,9 +95,56 @@ The engine is a small `winit` and `wgpu` application. This page describes the cu
 | `src/highlight.wgsl` | Line-list block outline. |
 | `src/overlay.wgsl` | Screen-space overlay quads. |
 
+`src/v0/` groups the frozen legacy stack. `src/lib.rs` declares `mod v0;` and re-exports
+`v0::{generation, light, mesh, mesher, streaming, voxel, world}`, so paths such as `crate::world`
+and `engine::world` resolve exactly as before. v0 is still the default run path when `TERRAIN_DEMO`
+is unset; it receives fixes only, and the whole directory is removed when the terrain demo becomes
+the default. The move is behaviour-preserving and does not change the save format.
+
+`src/startup.rs`, `src/app/`, and `src/demo/` split the old crate-root logic by responsibility.
+`lib.rs` is now a table of contents; `startup` owns environment switches and world choice, `app`
+owns `winit`/`wgpu` and the frame loop, and `demo` owns the v1 patch, ring, LOD, edits, and saves.
+`demo` does not name `winit`, `wgpu`, or `renderer`; `app` translates its state into renderer
+submissions. These modules are private, so the public surface is unchanged.
+
+### The `DemoRuntime` seam
+
+`App` holds one `demo: Option<DemoRuntime>` and no demo state of its own. `DemoRuntime` (in
+`demo/mod.rs`) owns the thirty-field `TerrainDemo` patch, the `RingStream`, the `SaveWorker`, the
+`RepairPrompt`, the in-flight `DemoRebuild`, and the queued `DemoEdit`s. Its interface is:
+
+| Method | Purpose |
+|---|---|
+| `open(seed, column, view_radius)` | Open or create the saved world, replay recovered edits, start the worker pool and ring. |
+| `tick(now, player_column, focused)` | Poll the rebuild, drain ring jobs, plan the bounded generate/build/evict batch, run the coarse and upload throttles, and return a `DemoFrame`. |
+| `edit(cell, id)` | Apply one block change, queue its journal/section save, and start the coalescing rebuild. |
+| `shutdown()` | Flush the save worker on `Ctrl+S` and window close. |
+| `repair(action, player_column)` | Apply the repair choice, reload sections, and restart the save worker. |
+| `stats()` | The once-per-second overlay counters and the ring-complete edge. |
+| `is_ready`, `is_solid`, `sections`, `air`, `repair_key`, `advance_lod` | Read-only or LOD accessors for movement, raycasts, the overlay, and the upload adapter. |
+
+`DemoFrame` carries the two side effects the runtime cannot perform itself: `spawn` (the app places
+the player) and `upload` (the app calls `upload_terrain_demo`). The demo never stores a renderer, so
+the dependency edge stays `app -> demo` and `app -> renderer`; `demo` sees only `terrain-core`, the
+player's `BlockSource`, and the content pack.
+
+### `terrain-core` modules
+
+| Path | Responsibility |
+|---|---|
+| `description.rs`, `header.rs`, `section.rs`, `content.rs` | World description, header bytes, section records, and the v1 content pack. |
+| `hash.rs`, `error.rs`, `metrics2.rs` | Deterministic hashing, typed errors, and pipeline counters/overlays. |
+| `lattice.rs`, `noise.rs`, `curve.rs`, `graph/` | Macro lattice, noise fields, curves, and the generation graph. |
+| `climate.rs`, `height.rs`, `surface.rs`, `strata.rs`, `volume.rs`, `features/`, `hydro/` | Column generation from climate through surface, strata, caves, features, and water. |
+| `pipeline.rs` | The fixed-order column pipeline and its world hydrology handle. |
+| `light2.rs`, `padded.rs`, `mesher2.rs`, `lod.rs`, `revisions.rs`, `residency.rs` | Column light, padded scratch, greedy meshing, coarse LOD, revisions, and residency policy. |
+| `editlog.rs`, `save.rs`, `world_save.rs` | Edit journal, section store, backup/repair, migration, and save workers. |
+| `src/terrain_gen.rs` (binary `terrain-gen`) | Headless acceptance harness; goldens live in `crates/terrain-core/tests/golden/`. |
+
 ## Ownership
 
-- `App` owns the window handle, renderer, world, player, camera, sky clock, selected block, input state, mesh queue, worker pool, hierarchy selection and uploaded-section set, horizon bins, and frame timing.
+- `App` owns the window handle, renderer, world, player, camera, sky clock, selected block, input state, mesh queue, worker pool, hierarchy selection and uploaded-section set, horizon bins, frame timing, and one `Option<DemoRuntime>`.
+- `DemoRuntime` owns the v1 patch, column ring and workers, save worker, repair prompt, pending rebuild, and edit queue. It returns a `DemoFrame` instead of holding the renderer.
 - `Renderer` owns the `wgpu` instance, surface, device, queue, surface configuration, chunk and highlight pipelines, camera uniform, the quad-pool renderer, the per-chunk fallback buffers and origin uniforms, the block texture array, and depth attachment.
 - `Camera` owns only look state; it does not read the clock or input devices.
 - `Player` owns feet position, velocity, and ground state; it does not read input devices.
@@ -53,8 +158,8 @@ The renderer holds an `Arc<Window>` and creates a `Surface<'static>` from it. Th
 ## Startup
 
 1. `main` calls `engine::run`.
-2. `run` initialises tracing and reads `config.toml`. It then loads `world/seed` (creating one when the world is new) and generates the spawn column; saved chunk files are applied over the generated blocks. `ENGINE_STRESS_SCENE=1` builds the in-memory stress scene instead and skips world I/O.
-3. `run` creates the `winit` event loop and `App`.
+2. `startup::run` initialises tracing and reads `config.toml`. It then loads `world/seed` (creating one when the world is new) and generates the spawn column; saved chunk files are applied over the generated blocks. `ENGINE_STRESS_SCENE=1` builds the in-memory stress scene instead and skips world I/O. `TERRAIN_DEMO=1` opens or creates the v1 world, replays recovered edits, and starts the column ring.
+3. `startup::run` creates the `winit` event loop and the `App` from `app.rs`.
 4. `App::resumed` creates the window and renderer.
 5. The renderer selects an adapter, requests a device and queue, configures the surface, builds the pipelines and the texture array, and starts no chunk mesh work itself.
 6. `App` starts the micropool worker pool and queues an urgent LOD0 job for every loaded chunk. Meshes appear as workers finish.
@@ -89,6 +194,12 @@ RedrawRequested
        -> present
   -> request the next redraw
 ```
+
+With `TERRAIN_DEMO=1`, `DemoRuntime::tick` runs before the player step and in place of the v0
+streaming phases: it applies a landed rebuild, drains at most 16 ring jobs, plans the next batch
+through `residency::RingBudget::v1`, then runs the coarse (250 ms) and upload (100 ms) throttles. It
+reports the spawn and upload through a `DemoFrame`; the app performs `set_spawn` and
+`upload_terrain_demo`. The v0 world still streams underneath, but the demo path is what draws.
 
 - Continuous redraw runs while the window is visible, including when it is unfocused, so profilers and external tools keep receiving frames. Input stays gated on focus.
 - The loop pauses only when the window is occluded.
@@ -136,7 +247,7 @@ See [Coordinates](coordinates.md) for the full conventions, including chunk and 
 - The chunk pipeline uses `Depth32Float`, depth write enabled, and `Less` depth comparison.
 - Bind group 0 holds a 160-byte frame uniform: view-projection, sky, ambient, and sun colours, sun direction, an unlit flag, the far plane, time of day, and the camera position.
 - The per-chunk fallback gives each non-empty chunk an origin uniform in bind group 1 and up to four vertex meshes: LOD0, LOD1, LOD2, and an optional transparent water mesh. Index buffers are shared until a larger chunk allocates its own. The vertex shader adds the origin to the chunk-local vertex position. The renderer uses this path when the adapter lacks storage buffers, `INDIRECT_FIRST_INSTANCE`, or indirect execution.
-- The primary path is the quad pool from [ADR-0015](../decisions/0015-quad-pool-and-indirect-draws.md). Bind group 1 is a 48-byte-per-node info table plus the 12-byte quad pool. The vertex shader pulls one record per four indexed vertices through a shared `u16` index pattern; meshes above 16,383 quads keep the six-vertex non-indexed path. The CPU writes the opaque and water argument lists and normally records one `multi_draw_indexed_indirect` per pass, for two draws total; a mesh above 16,383 quads adds a non-indexed draw in that pass. Slots are dense and swap-removed; the renderer reports resident and visible geometry bytes, draw calls, and the pool high-water mark once per second.
+- The primary path is the quad pool from [ADR-0017](../decisions/0017-quad-pool-and-indirect-draws.md). Bind group 1 is a 48-byte-per-node info table plus the 12-byte quad pool. The vertex shader pulls one record per four indexed vertices through a shared `u16` index pattern; meshes above 16,383 quads keep the six-vertex non-indexed path. The CPU writes the opaque and water argument lists and normally records one `multi_draw_indexed_indirect` per pass, for two draws total; a mesh above 16,383 quads adds a non-indexed draw in that pass. Slots are dense and swap-removed; the renderer reports resident and visible geometry bytes, draw calls, and the pool high-water mark once per second.
 - `NodeKey::{Chunk, Section}` shares one pool. Section slots stay resident while a retained parent is drawn but are hidden (`visible = false`) until the selection swaps them in. The hierarchy uses a larger pool reservation (8M quads) than the distance-32 path (3.2M). See the [hierarchy design](../design/lod-hierarchy.md), [design review](lod-hierarchy-review.md), and [ADR-0014](../decisions/0014-seed-native-lod-hierarchy.md).
 - Horizon culling builds column-top bins every 250 ms and is on by default (`ENGINE_HORIZON_CULL=0` disables it). It rejects L0 chunks and, with the hierarchy on, uploaded sections. Section occluders use the lowest solid column top and candidates the highest visible top, so water never hides land behind it. An occluder only marks an azimuth bin it fully contains; a candidate is tested against every bin its footprint intersects. The occluded sets are cached at build time, so a settled frame does hash lookups; the quad renderer iterates only slots with geometry.
 - The clear colour follows the interpolated sky colour, so fog blends into the distance instead of ending against a fixed backdrop.

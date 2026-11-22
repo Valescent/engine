@@ -60,6 +60,10 @@ mod imp {
     pub(crate) fn generation_ms(value: f64) {
         plot(plot_name!("generation_ms"), value);
     }
+
+    pub(crate) fn terrain_sections_uploaded(value: f64) {
+        plot(plot_name!("terrain_sections_uploaded"), value);
+    }
 }
 
 #[cfg(not(feature = "tracy"))]
@@ -83,6 +87,7 @@ mod imp {
         mesh_jobs,
         generated_columns,
         generation_ms,
+        terrain_sections_uploaded,
     );
 }
 

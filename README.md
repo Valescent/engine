@@ -2,7 +2,7 @@
 
 A voxel engine written in Rust.
 
-**Status: pre-alpha.** `0.0.1` through `0.0.9` are implemented; `0.0.1` through `0.0.7` are released, and the `0.0.8`/`0.0.9` release notes are prepared on the release branch with the PR open. The world is procedurally generated from a saved seed, streams in and out around the player, and keeps player edits. It has voxel lighting, ambient occlusion, a day/night cycle, distance fog, transparent animated water, and a chunk LOD path, with an optional seed-native hierarchy that reaches 8 km.
+**Status: pre-alpha.** `0.0.1` through `0.0.9` are implemented; `0.0.1` through `0.0.7` are released, and the `0.0.8`/`0.0.9` release notes are prepared on the release branch with the PR open. The world is procedurally generated from a saved seed, streams in and out around the player, and keeps player edits. It has voxel lighting, ambient occlusion, a day/night cycle, distance fog, transparent animated water, and three LOD levels out to a configurable render distance, with an optional seed-native hierarchy that reaches 8 km. The spec-driven v1 terrain stack runs as an opt-in demo with LOD1, tile streaming, and its own save format.
 
 This is **source-available, not open source**. The code is under the [PolyForm Shield License 1.0.0](LICENSE): you may read, run, modify, and redistribute it, but not use it to provide a product that competes with it. PolyForm Shield is not OSI-approved.
 
@@ -60,6 +60,21 @@ quads, 94.24 MiB of geometry reservation). The horizon removes 552 of 1,330 in-f
 
 See [`docs/dev/controls.md`](docs/dev/controls.md) for the full binding table.
 
+### Terrain v1 demo
+
+The v1 terrain stack runs as an opt-in demo on top of the legacy scene:
+
+```console
+$env:TERRAIN_DEMO = "1"
+$env:ENGINE_STRESS_SCENE = "1"   # only when world/seed is absent
+cargo run --bin engine
+```
+
+It builds a 128x128 patch in about 0.9 s, streams neighbouring tiles with prefetch, draws distance
+LOD1, and saves edits under `world/terrain-demo/` (header, description, sections, journal). Editing
+is asynchronous with an incremental light/mesh rebuild (~24 ms release). A corrupt section shows an
+in-app `R`/`Q`/`S` repair prompt. See [`docs/dev/terrain-v1.md`](docs/dev/terrain-v1.md).
+
 ## Development
 
 ```console
@@ -68,14 +83,16 @@ cargo clippy --all-targets --locked -- -D warnings
 cargo fmt --all
 ```
 
-Profile a local build with Tracy (CPU spans, memory events, GPU timer zones, and plots):
+Profile a local build with Tracy (CPU spans, memory events, GPU timer zones, and plots).
+Debug builds profile by default and save a trace to `reports/tracy/`:
 
 ```console
-cargo run --features tracy
+cargo run --bin engine
 ```
 
-Start the [Tracy GUI](https://github.com/wolfpld/tracy/releases/tag/v0.13.1) first or after the
-engine; the client connects over loopback. The feature is local-only and not built in CI. See
+Open a trace with the [Tracy GUI](https://github.com/wolfpld/tracy/releases/tag/v0.13.1). Set
+`TRACY_CAPTURE_SECONDS=0` to keep profiling on without capturing, or build with
+`--no-default-features` to turn profiling off. CI always disables the feature. See
 [`docs/dev/profiling.md`](docs/dev/profiling.md).
 
 Enable the commit-message hook once per clone:

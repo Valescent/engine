@@ -1,4 +1,4 @@
-// Vertex pulling for the ADR-0015 quad pool.
+// Vertex pulling for the ADR-0017 quad pool.
 //
 // One quad record per six vertices. The record layout, corner order, and light
 // packing mirror `src/quad.rs`; the CPU tests pin that mirror.

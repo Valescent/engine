@@ -394,11 +394,12 @@ dependencies = [
  "pollster",
  "profiling",
  "rayon",
+ "terrain-core",
  "thiserror 2.0.21",
  "tracing",
  "tracing-subscriber",
- "tracy-client",
- "tracy-client-sys",
+ "tracy-client 0.19.0",
+ "tracy-client-sys 0.30.1",
  "wgpu",
  "wgpu-profiler",
  "winit",
@@ -1368,9 +1369,9 @@ dependencies = [
 
 [[package]]
 name = "pollster"
-version = "1.0.1"
+version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc6355899e1c9462875b6757c79f3caa011a1fdae12bbb1a2e72dd1f234f8336"
+checksum = "3c2c80c4e3afbec8224b9d3e641fbf3a5690cc7595b887b0a27a926bb357ed5c"
 
 [[package]]
 name = "portable-atomic"
@@ -1418,7 +1419,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 dependencies = [
  "profiling-procmacros",
- "tracy-client",
+ "tracy-client 0.18.5",
 ]
 
 [[package]]
@@ -1804,6 +1805,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "terrain-core"
+version = "0.0.7"
+dependencies = [
+ "fastnoise-lite",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1954,20 +1963,41 @@ dependencies = [
 
 [[package]]
 name = "tracy-client"
-version = "0.18.4"
+version = "0.18.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4f6fc3baeac5d86ab90c772e9e30620fc653bf1864295029921a15ef478e6a5"
+checksum = "6131992ff3e2cb96f407eb4eb005427ba15e2687260d99089b90e60e33169ce0"
 dependencies = [
  "loom",
  "once_cell",
- "tracy-client-sys",
+ "tracy-client-sys 0.29.0",
+]
+
+[[package]]
+name = "tracy-client"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d93fd676d8946eaeaff4881d26d2240a8d106fcaccbd47cb9f1389e3561ba490"
+dependencies = [
+ "loom",
+ "once_cell",
+ "tracy-client-sys 0.30.1",
 ]
 
 [[package]]
 name = "tracy-client-sys"
-version = "0.28.0"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5f7c95348f20c1c913d72157b3c6dee6ea3e30b3d19502c5a7f6d3f160dacbf"
+checksum = "ab27f167b093214c68413a2e0bcd318f0591af475597405ff68138ba0a433379"
+dependencies = [
+ "cc",
+ "windows-targets",
+]
+
+[[package]]
+name = "tracy-client-sys"
+version = "0.30.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08f4b6d2481c5e266e9def4c10e1680dbdfdd69523ed555a83d6675953a2785e"
 dependencies = [
  "cc",
  "windows-targets",
@@ -2385,7 +2415,7 @@ checksum = "a15a635a2a2ec0b9787589f17dbbffaa7960e779bcf0348a67f73c3e7665f9eb"
 dependencies = [
  "parking_lot",
  "thiserror 2.0.21",
- "tracy-client",
+ "tracy-client 0.18.5",
  "wgpu",
 ]
 

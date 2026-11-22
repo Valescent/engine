@@ -241,7 +241,7 @@ padding.
 
 ## Changing the vertex layout
 
-1. Update `Vertex` in `src/voxel.rs`. Keep `#[repr(C)]`, `Pod`, and `Zeroable`.
+1. Update `Vertex` in `src/v0/voxel.rs`. Keep `#[repr(C)]`, `Pod`, and `Zeroable`.
 2. Update the mesher and its tests. The v0.0.3, v0.0.4, and v0.0.6 specs pin the field order and
    byte sizes for their milestones; v0.0.8 changes the live layout without changing those
    historical contracts.

@@ -37,19 +37,23 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: cargo fmt --all -- --check
 
-      # The tracy profiling feature builds a C++ client and stays local (ADR-0006);
-      # do not switch these back to --all-features.
+      # `tracy` is a default feature but builds a C++ client and stays local
+      # (ADR-0006); every CI cargo command disables default features.
       - name: Clippy
-        run: cargo clippy --all-targets --locked -- -D warnings
+        run: cargo clippy --all-targets --locked --no-default-features -- -D warnings
 
       - name: Test
-        run: cargo test --locked
+        run: cargo test --locked --no-default-features
 
-      - name: Documentation
+      # Strict rustdoc gate for the narrowed surface. `terrain-core` is clean
+      # under `-D warnings`; the engine still has pre-existing private-item doc
+      # links under `src/v0/`, so only the core crate is gated here. See
+      # docs/dev/ci.md#strict-rustdoc-gate.
+      - name: Documentation (terrain-core)
         if: matrix.os == 'ubuntu-latest'
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --no-deps
+        run: cargo doc -p terrain-core --no-deps --no-default-features
 
   dependencies:
     name: Dependencies
@@ -70,3 +74,55 @@ jobs:
 
       - name: Check spelling
         uses: crate-ci/typos@v1.52.2
+
+  terrain:
+    name: Terrain gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Show toolchain
+        run: rustup show
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Size budget checker self-test
+        run: sh scripts/size-budgets.test.sh
+
+      # Hard gate as of 2026-11-21: no counted Rust file exceeds 1,000 lines,
+      # so a regression now fails the job. The 600-line advisory tier still
+      # only reports (docs/design/modular-structure.md §5.6).
+      - name: Size budgets
+        run: sh scripts/size-budgets.sh
+
+      - name: Crate graph (terrain-core is headless)
+        run: |
+          set -euo pipefail
+          tree=$(cargo tree -p terrain-core -e normal --locked --no-default-features)
+          if printf '%s\n' "$tree" | grep -Eq 'wgpu|winit|tracy-client'; then
+            printf '%s\n' "$tree" | grep -E 'wgpu|winit|tracy-client' >&2
+            echo "::error::terrain-core must not resolve wgpu, winit, wgpu-profiler, or tracy-client; terrain-gen would inherit a window, GPU, or profiler dependency" >&2
+            exit 1
+          fi
+          echo "terrain-core resolves no wgpu, winit, wgpu-profiler, or tracy-client"
+
+      - name: Golden hashes
+        run: cargo run --locked --quiet --no-default-features --bin terrain-gen -- golden check
+
+      - name: Seams
+        run: cargo run --locked --quiet --no-default-features --bin terrain-gen -- seams --window 5x5 --seeds 3
+
+      - name: Seed sweep
+        run: cargo run --locked --quiet --no-default-features --bin terrain-gen -- sweep --tier pr
+
+      - name: Threshold counters
+        run: cargo run --locked --quiet --no-default-features --bin terrain-gen -- counters --tier pr
+
+      - name: Thread and order invariance
+        run: |
+          set -euo pipefail
+          one=$(cargo run --locked --quiet --no-default-features --bin terrain-gen -- gen --seed 7 --from 0 0 --size 8 --threads 1 --order forward)
+          many=$(cargo run --locked --quiet --no-default-features --bin terrain-gen -- gen --seed 7 --from 0 0 --size 8 --threads 4 --order shuffled)
+          test "$one" = "$many"

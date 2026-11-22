@@ -26,10 +26,10 @@ The current model is a Minecraft-class lighting model with better plumbing.
 
 | Area | Current behaviour | Where |
 |---|---|---|
-| Sky and block light | 4-bit BFS flood fill over a `3x3x3` chunk neighbourhood, one nibble per cell | `src/light.rs` |
+| Sky and block light | 4-bit BFS flood fill over a `3x3x3` chunk neighbourhood, one nibble per cell | `src/v0/light.rs` |
 | Propagation | Six-connected, one level per step, water passes without attenuation | `spread` in `light.rs` |
 | Storage | Derived, never saved, recomputed per chunk on the worker pool | `LightSnapshot`, `LightJob` |
-| Vertex light | Sky, block, and 2-bit corner AO packed into one `u32` | `src/mesh.rs` |
+| Vertex light | Sky, block, and 2-bit corner AO packed into one `u32` | `src/v0/mesh.rs` |
 | Shading | `albedo * ao * (ambient * sky + sun * N·L * sky + moon * N·L * sky + lamp * block)` | `src/shader.wgsl` |
 | Sun | A direction and colour, no visibility test | `sky.rs` |
 | Fog | Linear blend to the sky colour between 70% and 100% of the far plane | `shader.wgsl` |

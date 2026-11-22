@@ -1,7 +1,7 @@
 # Geometry representation research
 
 The shared quad pool with vertex pulling and multi-draw indirect landed in v0.0.9 slice 4
-([ADR-0015](../../decisions/0015-quad-pool-and-indirect-draws.md)): 12 bytes per quad instead of 60,
+([ADR-0017](../../decisions/0017-quad-pool-and-indirect-draws.md)): 12 bytes per quad instead of 60,
 which took resident distance-32 geometry from 100.9 MB to 37.6 MiB (125.9 MB before shared index
 buffers) and draws from 3,409 to 2. This report asks what comes after that, and whether any modern or
 theoretical representation changes the plan. The one record experiment left open is the 8-byte form,
@@ -67,7 +67,7 @@ disconnected voxel clusters merge poorly, which argues against meshlet-style sim
 The [Hi-Z prototype](../../../prototypes/chunk-lod-hi-z/) validates the culling half: a compute pass
 over 4,096 chunk AABBs culls 51.8% of the frustum-visible set against a synthetic depth pyramid, with
 an exact match to the CPU frustum set when the pyramid is empty. It writes the indirect records in
-the shape [ADR-0015](../../decisions/0015-quad-pool-and-indirect-draws.md) needs.
+the shape [ADR-0017](../../decisions/0017-quad-pool-and-indirect-draws.md) needs.
 
 ### 2. Far heightfield or horizon ring
 

@@ -1,6 +1,10 @@
 [default]
 extend-ignore-re = ["(?m)^\\s*//\\s*spellchecker:disable-line.*$"]
 
+[files]
+# Golden files are hashes: random hex triggers the dictionary.
+extend-exclude = ["crates/terrain-core/tests/golden"]
+
 [type.css.extend-words]
 # mdBook ships this misspelled CSS variable name; renaming it breaks the theme.
 existant = "existant"

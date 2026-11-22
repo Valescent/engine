@@ -72,6 +72,10 @@ in both stderr and the file.
   [Shader authoring](shaders.md#validate).
 - World save/load errors are typed `SaveError`s; see
   [World management](world-management.md#corruption-recovery).
+- Terrain v1 persistence errors are typed `TerrainError`s on `Stage::Persistence`. Run
+  `RUST_LOG=engine=debug` with `TERRAIN_DEMO=1` to log `terrain rebuild applied` (light/mesh/upload
+  times, patch count), `terrain stream tile build started/ready/swapped`, and repair/migration
+  outcomes. Saves live in `world/terrain-demo/`; see [Terrain v1 runtime](terrain-v1.md).
 - Surface acquisition that reports validation logs an error and skips that frame.
 - There is no panic hook, crash reporter, or minidump writer.
 - Set `RUST_BACKTRACE=1` or `RUST_BACKTRACE=full` to print a standard Rust backtrace on panic.
@@ -88,7 +92,9 @@ in both stderr and the file.
   loop. It is a decision aid, not a regression gate: keep both backends in one run on the same
   machine, and do not add it to CI. Recorded runs and the entry template are in
   [Benchmark results](benchmarks.md).
-- Tracy CPU, memory, and GPU profiling is available with `cargo run --features tracy`. See [Profiling](profiling.md).
+- Tracy CPU, memory, and GPU profiling is on by default in debug builds, which also save a trace
+  under `reports/tracy/`. See [Profiling](profiling.md). The terrain path adds
+  `terrain_sections_uploaded` and logs its startup phase split.
 
 ### Tracy
 

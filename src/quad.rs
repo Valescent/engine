@@ -1,4 +1,4 @@
-//! The 12-byte quad record from ADR-0015.
+//! The 12-byte quad record from ADR-0017.
 //!
 //! Three `u32` words per merged quad, laid out so the vertex shader can pull
 //! one record per six vertices and reconstruct the corners. The CPU mesher
@@ -52,7 +52,7 @@ fn corner_uv(face: u8, corner: usize) -> (u32, u32) {
     }
 }
 
-/// One merged quad in the layout fixed by ADR-0015.
+/// One merged quad in the layout fixed by ADR-0017.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Pod, Zeroable)]
 pub(crate) struct QuadRecord {

@@ -14,6 +14,9 @@ is the methodology; this page is the run log.
 | Worker-pool decision | [ADR-0009](../decisions/0009-micropool-for-chunk-workers.md) |
 | Engine run (v0.0.5) | Historical baseline; see [Engine run](#engine-run-v005-release) |
 | Engine run (v0.0.8) | Current; see [Engine run](#engine-run-v008-release) |
+| Terrain v1 demo | Current; see [Terrain v1 demo](#terrain-v1-demo-2026-11-20) |
+| Terrain blend calibration | Current; passes the v1 target; see [Terrain blend calibration](#terrain-blend-calibration-2026-11-20) |
+| Terrain PR counters | Current; gated by the `CI` terrain job; see [Terrain PR counters](#terrain-pr-counters-2026-11-20) |
 | Headless run (v0.0.8) | Current; gated by the `Perf` workflow |
 
 ## Run it
@@ -318,6 +321,93 @@ cost, not wall time.
 `resident_bytes` covers stored blocks and light fields only; meshes and GPU buffers are not
 included. The **Perf** workflow runs both scenes on every `main` push and gates on a generous
 budget (625 ready columns, mean under 20 ms, p95 under 50 ms, under 200 MB of blocks and light).
+## Terrain blend calibration (2026-11-20)
+
+`terrain-gen calibrate-blend` measures `W_blocks` from `w = 0.5` to `w = 0.95`, doubled, per
+unordered biome pair. The definition is in [Terrain tools](terrain-tools.md#calibrate-blend).
+This run used the whole 2048-block world window (`--from -1024 -1024 --size 2048`) and the
+default 16-block anchor stride:
+
+```console
+cargo run --locked --quiet --no-default-features --bin terrain-gen -- calibrate-blend --seeds 16
+```
+
+| Pair | Transects | Median | p10 | p90 | Assessment |
+|---|---:|---:|---:|---:|---|
+| 0-1 (plains/forest) | 11,736 | 23.59 | 18.77 | 32.85 | passes |
+| 0-2 (plains/desert) | 3,663 | 23.86 | 15.71 | 44.79 | passes |
+| 0-3 (plains/tundra) | 2,184 | 24.43 | 17.66 | 53.46 | passes |
+| 1-3 (forest/tundra) | 2,249 | 23.33 | 15.04 | 37.69 | passes |
+| 2-3 (desert/tundra) | 37 | 23.83 | 14.63 | 57.68 | passes |
+
+The command exits `0`. All five pairs are assessed and inside median `20..=28`, p10 `>= 8`,
+and p90 `<= 64`.
+
+### What changed
+
+The audit found the transect scale correct: a synthetic two-centre table with a linear margin
+of 23.98 blocks closed form measured 23.90, so the tool neither halves nor doubles the width.
+Two measurement defects and one generation-data change closed the gap.
+
+1. **The border search skipped the nearest minimum.** After the anchor, the walk kept scanning
+   past an immediate rise until it found a lower value, which could be an unrelated border
+   dozens of blocks away. It now stops at the first rise after the descent (or after the
+   anchor), so a transect with no border inside the profile is discarded instead of measuring
+   a far one. This removed the 100-400-block tail.
+2. **The direction fit straddled the border.** `q` is a V across a pair border, so a plane
+   through both sides could be nearly tangential. The fit now uses only cells with the
+   anchor's ordered `(best, second)` pair, drops saturated cells, and has an intercept; the
+   window widens from `5 x 5` to `9 x 9` when fewer than four cells qualify.
+3. **`q` is now a block distance.** The margin is divided by its analytic gradient,
+   `grad m = 2 * [(T_b - T_s) grad T + ((H - H_s)/w_s - (H - H_b)/w_b) grad H]`, so a pair's
+   transition is a fixed number of blocks instead of a fixed `d2` margin. The ramp is
+   `BLEND_BLOCKS / (2 * 0.8042)` blocks, which makes a straight border measure exactly
+   `BLEND_BLOCKS = 24`. The two gradients are forward differences over one macro cell, which
+   keeps one stencil per global cell so a climate tile's border still matches its neighbour.
+
+The earlier data-only attempt (halving the raw `d2` width to `0.025`) reached medians 26-39 but
+left p90 at 117-161, so the normalising term was required. A later tuning pass moved the desert
+centre from `(0.85, 0.10)` to `(0.84, 0.15)` with weight `1.15`: seed 9 desert coverage rose from
+5.09% to 6.89%, and pair 2-3 p90 fell from 63.32 to 57.68 at 37 transects. The coverage rules
+(three biomes per seed, each at least 5% of land) still hold.
+
+The measured `q` is stored climate state and, in generator version 4, is the shipped
+transition: the column pipeline calls `biome_pick` once per column for the surface rules and
+once per column of the `3 x 3` feature footprint. The dither is observable in the output, not
+just in the tool: at seed `0x5EED` the plains/desert border near `(-870, -98)` produces grass on
+a column whose nearest centre is desert, and sand one block away. The golden `equator` section
+hash moved from `dd09269e8fc5b39c` to `6695e3a6f4b70767`, and `inland` from `9ed587e680447750` to
+`aa3f0a3aba9cd41f`; the PR counters are unchanged because a topsoil swap does not change solid,
+air, or water counts. The PR coverage test samples all 16 `sweep --tier pr` seeds; every seed
+keeps all four biomes, and the thinnest is desert on seed 9 at 6.89% of land, 1.89 points above
+the 5% floor. The next thinnest is seed 3 at 7.93%. The per-seed table is in
+[Terrain tools](terrain-tools.md#current-margins-16-seeds).
+
+The tool remains a measurement, not a PR gate: `Perf` runs it nightly as a diagnostic so a
+platform float difference stays visible without failing every pull request. See
+[CI](ci.md#perf-workflow).
+
+## Terrain PR counters (2026-11-20)
+
+`counters --tier pr` pins the deterministic part of the `Q1.1` metric list for the 16 PR seeds.
+The checked-in baseline is `crates/terrain-core/tests/golden/terrain-counters.json`; the selection rules are in
+[Terrain tools](terrain-tools.md#counters). The first baseline:
+
+| Counter | Value |
+|---|---:|
+| `blocks_air` | 579,022 |
+| `blocks_solid` | 182,722 |
+| `blocks_water` | 24,688 |
+| `columns` | 2,048 |
+| `lod0_columns` | 0 |
+| `queued_columns` | 0 |
+| `ready_columns` | 512 |
+| `resident_columns` | 512 |
+
+Wall-clock latencies, per-second rates, and runtime-only residency and worker-health counters are
+excluded because they are not deterministic for the headless workload. The baseline moved once
+for this change; later movements require `counters --tier pr --update` and a reason in the commit.
+
 ## 2026-11-17 runs
 
 - **Machine:** AMD Ryzen 5 7600, 6 cores / 12 logical processors, Windows 11 Home.
@@ -376,7 +466,129 @@ behaviour, not steady-state frame rate.
 **Verdict:** no meaningful difference on the real workload. micropool stays the default under
 ADR-0009; the rayon path exists only for A/B runs.
 
-## Run log
+## Terrain v1 demo (2026-11-20)
+
+Release build, 12 logical cores, `TERRAIN_DEMO=1`, 128x128 one-tile patch. Measured by
+`demo_build_phase_split`, `demo_rebuild_cost_split`, and the startup log.
+
+| Phase | Time |
+|---|---:|
+| `Terrain::new` | ~0 ms |
+| Field tile | 18 ms |
+| Column generation (12 workers) | 815 ms |
+| Column light | 31 ms |
+| Fine meshing | 31 ms |
+| Coarse LOD meshing | 45 ms |
+| **Startup build** | **~0.89 s** |
+
+With world-mode hydrology (generator version 2) the demo solves hydrology once and shares it:
+
+| Phase | Time |
+|---|---:|
+| Sample 262,144 macro heights | 66 ms |
+| Priority flood, D8, accumulation, lakes | 98 ms |
+| **One shared solve** | **~165 ms** |
+| **Startup build** | **~0.97 s** |
+
+| Edit rebuild (surface break) | Before | After |
+|---|---:|---:|
+| Sections remeshed | 27 | **1** |
+| Light | 49–56 ms | **22.1 ms** |
+| Mesh | 26–37 ms | **1.8 ms** |
+| **Total** | ~55 ms | **~24 ms** |
+
+- Spawn active set: 29 sections / 66,293 quads; far corner drawn at LOD1, 64 blocks away.
+- Working set: 350 MB with the demo vs 295 MB for the legacy stress scene; tile streaming (active
+  + three cached tiles) adds ~55 MB.
+- Startup before the tile alignment and worker fan-out was 5.14 s; generation was 3.54 s serial.
+- `stream` prefetch builds one tile (~0.9 s) at a time while the frame loop stays at ~60 FPS.
+
+## Column ring cold fill (2026-11-20)
+
+Release build, Ryzen 5 7600 (6 cores / 12 logical), Windows 11, RTX 4060. The demo streams the
+16-column ring (1,089 columns) with 12 worker threads:
+
+```console
+cargo build --release --locked --no-default-features
+$env:TERRAIN_DEMO = "1"; $env:ENGINE_SEED = "12345"
+$env:ENGINE_NO_VSYNC = "1"; $env:RUST_LOG = "info,engine=debug"
+target\release\engine.exe
+```
+
+The baseline (full neighbour relight) and narrow-border-relight binaries were run back to back on an
+idle machine, each with a fresh `world/`. Fill time is `column ring streaming starts` to
+`terrain ring complete`; build values come from the per-column `terrain column ready` logs.
+
+| Run | Fill | Build light median | Build light mean | Steady quads | Steady bytes |
+|---|---:|---:|---:|---:|---:|
+| Baseline: full neighbour relight | 50.7 s | 82.8 ms | 87.7 ms | 863,188 | 117,837,026 |
+| Narrow border relight | **45.6 s** | **41.5 ms** | **45.3 ms** | 863,274 | 118,198,162 |
+| Change | **-10.0%** | -49.9% | -48.3% | +0.01% | +0.31% |
+
+Generation is unchanged at 385.6 ms mean / 383.5 ms median per column. Mesh time is ~6 ms mean
+because columns outside the two-column fine radius are not meshed; the LOD0 columns in the ring
+still take ~10 ms. Worker time per column is therefore roughly:
+
+| Work | Per column | Share |
+|---|---:|---:|
+| Generation (`Terrain::section` x12) | ~386 ms | ~85% |
+| Build light (centre + 8 narrow border repairs) | ~45-60 ms | ~10-13% |
+| Mesh and apply | ~6 ms | ~1-2% |
+
+- **Worker throughput is the limiter, not the frame budget.** `in_flight` stays at the 16-job cap
+  while the frame loop runs at 500+ FPS, so `RingBudget::v1`'s two build starts per frame is never
+  reached. No adaptive budget change was needed.
+- **Generation dominates.** `pipeline::Terrain::section` builds all 1,024 columns of one section,
+  and `generate_column` asks for all 12 sections, so a column regenerates its base columns 12 times.
+  That path is unchanged here (it is in `crates/terrain-core/src/pipeline.rs`).
+- **Stale builds used to waste work.** About 25-31% of build results were discarded because a
+  column in their 5x5 neighbour snapshot arrived while the job ran; they were retried. The retry
+  pass below removes that waste without changing the accepted result.
+- **Steady state is unchanged in kind.** `terrain ring`: wanted 1089, resident 1089, ready 1089,
+  fine 25, coarse 197, lod2 96, in_flight 0. Both binaries vary by ~0.2% in quads/bytes between
+  runs because LOD apply order differs (the baseline itself measured 863,160 and 863,188 quads);
+  the relight path is pinned by `narrow_border_relight_matches_a_full_relight`, which compares every
+  neighbour's light and every affected section mesh against a full relight on seed `0x5EED`.
+
+### 2026-11-20 retry elimination
+
+A build used to start as soon as its column was generated. It snapshotted the 5x5 column window
+and threw the whole result away if any column in that window arrived while it ran, so a cold fill
+discarded 25-31% of build results and repeated the light/mesh work. Builds now wait until every
+column in their read window that the ring will generate is resident (`build_window_ready`); a
+mesh-only upgrade waits for and validates the 3x3 it reads, while a full light pass still uses the
+5x5. The build result itself is unchanged, so an accepted result is still exactly what the old
+code would install.
+
+Measured with the same command and a fresh `world/`; fill is `column ring streaming starts` to
+`terrain ring complete`, and builds issued are `terrain column ready` plus
+`discarded stale terrain build`. The host was shared during these runs, so the fill ranges are
+wide; use the medians, not one sample.
+
+| Radius | Runs | Builds issued | `discarded_stale` | Stale rate | Fill median (range) |
+|---|---:|---:|---:|---:|---:|
+| 12, before | 3 | 828 / 842 / 874 | 238 / 239 / 268 | 28.4-30.7% | 62.5 s (35.7-83.3) |
+| 12, after | 4 | 256-260 | 0 | **0%** | 60.4 s (27.8-106.1) |
+| 16, before | 2 | 1,386 / 1,441 | 341 / 379 | 24.6-26.3% | 82.4 s (65.4-99.4) |
+| 16, after | 2 | 385 / 409 | 0 | **0%** | 71.5 s (45.6-97.5) |
+
+The least-contended samples fell from 35.7 to 27.8 s at radius 12 and from 65.4 to 45.6 s at
+radius 16. Fill is still generation-bound, so wall-clock gains are smaller than the retry count
+suggests and noisy on a shared host.
+
+Steady ring after the change matches the baseline (settled `terrain ring` line, after the
+throttled coarse rebuild):
+
+| Radius | Steady quads | Steady bytes |
+|---|---:|---:|
+| 12, before | 724,045-724,074 | 71,599,892-71,649,276 |
+| 12, after | 724,137 | 71,453,172-71,502,324 |
+| 16, before | 863,429 | 118,199,402 |
+| 16, after | 863,440 | 117,920,962-118,035,650 |
+
+The retry waste is gone: radius 12 issues about 70% fewer build jobs and radius 16 about 72%
+fewer. `a_complete_window_build_matches_a_full_rebuild` checks the accepted light and centre mesh
+against a full rebuild on seed `0x5EED`.
 
 | Date | Commit | Machine | Rust | Command | Workers | Result |
 |---|---|---|---|---|---|---|
@@ -386,6 +598,7 @@ ADR-0009; the rayon path exists only for A/B runs.
 | 2026-11-17 | collision query fix | Ryzen 5 7600, 6C/12T, RTX 4060, Windows 11 | 1.99.1 | `ENGINE_NO_VSYNC=1 cargo run --release` | n/a | 4370 FPS mean, 0.229 ms frame; `player update` 0.9 us |
 | 2026-11-17 | `15ae656` | Ryzen 5 7600, 6C/12T, Windows 11 | 1.99.1 | `cargo bench --bench pool_sim -- both` (x2) | rayon 12, micropool 11 | `over = 0`; checksums identical; micropool saturated p99 4,249 / 4,397 vs rayon 4,309 / 8,581 |
 | 2026-11-17 | v0.0.5 + `rayon-pool` | Ryzen 5 7600, 6C/12T, RTX 4060, Windows 11 | 1.99.1 | `ENGINE_MESH_POOL=rayon` release captures | micropool 11 / rayon 12 | 72 startup jobs; per-job 887-970 us (micropool) vs 951-968 us (rayon); no frame difference |
+| 2026-11-20 | `dcab0ab` before / retry change after | Ryzen 5 7600, 6C/12T, RTX 4060, Windows 11 | 1.99.1 | `TERRAIN_DEMO=1 ENGINE_SEED=12345 ENGINE_NO_VSYNC=1` release | 12 | `discarded_stale` 25-31% -> 0; builds 874 -> 257 at 12 and 1,441 -> 385 at 16; steady quads/bytes unchanged |
 
 Add new runs below the latest row. Keep the raw output with the entry when possible.
 
@@ -579,7 +792,7 @@ per-chunk `u32` buffer.
 
 The run overlapped prototype compilation, so its frame sample (4.45-6.00 ms) is not used as a
 performance result; the geometry totals are exact. This removes 12 of the 60 bytes per quad and is a
-step toward ADR-0015's 12-byte quads, which remove the remaining 48.
+step toward ADR-0017's 12-byte quads, which remove the remaining 48.
 
 ### Upload cap
 
@@ -599,7 +812,7 @@ runs peaked at 6.76-6.97 ms.
 
 ### Quad record emission
 
-The mesher now writes ADR-0015's 12-byte record for every quad alongside the existing vertices and
+The mesher now writes ADR-0017's 12-byte record for every quad alongside the existing vertices and
 indices. `bench_mesh_build` reports the count, and every row has `records == quads`:
 
 | Fixture | LOD0 | Records | Water pass |
@@ -613,7 +826,7 @@ Against the pre-record numbers this is within run noise, with the surface fixtur
 others flat. The records add 12 bytes per quad to the transient worker output (about 24 KB for a
 2,000-quad chunk); nothing is uploaded to the GPU until the pool lands.
 
-### Quad pool (ADR-0015)
+### Quad pool (ADR-0017)
 
 Settled distance 32, seed 42, after the quad path replaced the per-chunk vertex and index buffers:
 

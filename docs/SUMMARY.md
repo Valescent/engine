@@ -25,7 +25,8 @@
 
 # Specs
 
-- [v0.0.3 — Chunks and Meshes](specs/v0.0.3.md)
+- [Terrain](specs/terrain.md)
+- [v0.0.3 - Chunks and Meshes](specs/v0.0.3.md)
 - [v0.0.4 — Playable](specs/v0.0.4.md)
 - [v0.0.5 — Scale and Performance](specs/v0.0.5.md)
 - [v0.0.6 — Atmosphere](specs/v0.0.6.md)
@@ -38,19 +39,26 @@
 - [Lighting pipeline](design/lighting-pipeline.md)
 - [Terrain pipeline](design/terrain-pipeline.md)
 - [Terrain interview notes](design/terrain-interview.md)
+- [Terrain build plan](design/terrain-build-plan.md)
+- [Terrain build prompt](prompt/terrain-build-prompt.md)
 - [Seed-native LOD hierarchy](design/lod-hierarchy.md)
   - [LOD hierarchy design review](dev/lod-hierarchy-review.md)
 - [Terrain reference notes](design/terrain-lessons.md)
+- [Modular structure](design/modular-structure.md)
+- [Visibility audit](design/visibility-audit.md)
 
 # Development
 
 - [Architecture overview](dev/architecture.md)
+- [Terrain v1 runtime](dev/terrain-v1.md)
+- [Terrain tools](dev/terrain-tools.md)
 - [Shader authoring](dev/shaders.md)
 - [Texture and asset pipeline](dev/textures.md)
 - [Coordinates](dev/coordinates.md)
 - [Controls](dev/controls.md)
 - [Configuration](dev/configuration.md)
 - [World management](dev/world-management.md)
+- [Save format](dev/save-format.md)
 - [Debugging](dev/debugging.md)
 - [Profiling](dev/profiling.md)
 - [Benchmark results](dev/benchmarks.md)
@@ -92,7 +100,9 @@
   - [0012 — fastnoise-lite with OpenSimplex2](decisions/0012-fastnoise-lite-and-opensimplex2.md)
   - [0013 — Finite player-centred chunk streaming](decisions/0013-player-centred-chunk-streaming.md)
   - [0014 — Seed-native multi-level LOD sections](decisions/0014-seed-native-lod-hierarchy.md)
-  - [0015 — Quad pool and indirect draws](decisions/0015-quad-pool-and-indirect-draws.md)
+  - [0015 — Per-face texture references are presentation-only](decisions/0015-texture-references-are-presentation.md)
+  - [0016 — Block texture mipmap and sampling policy](decisions/0016-block-texture-mipmap-policy.md)
+  - [0017 — Quad pool and indirect draws](decisions/0017-quad-pool-and-indirect-draws.md)
   - [Template](decisions/0000-template.md)
 
 # Contributing
