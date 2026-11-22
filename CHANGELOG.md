@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The 0.0.10 scope page and ADR-0018 (egui UI), ADR-0019 (kira audio), and ADR-0020 (minimal entity runtime) record the decisions for the rest of the release.
 
+### Fixed
+
+- A static headless run no longer stalls at five ready columns. Newly generated columns re-admit deferred light even when the player never crosses a chunk, so the distance-12 static settle returns to 625 of 625 ready columns in about 470 frames instead of timing out after 41,000.
+
 ## [0.0.9] - 2026-11-21
 
 ### Added
