@@ -301,7 +301,7 @@ mod tests {
     }
 
     #[test]
-    fn gather_place_save_and_reopen() {
+    fn gather_use_save_and_reopen() {
         let registry = registry();
         let pack = content::v1_default();
         let directory =
@@ -335,8 +335,8 @@ mod tests {
             registry.def(stone_id).kind,
             ItemKind::Block { .. }
         ));
-        let placed = state.inventory.remove(stone_slot, 1).unwrap();
-        assert_eq!(placed.count, 1);
+        let removed = state.inventory.remove(stone_slot, 1).unwrap();
+        assert_eq!(removed.count, 1);
         assert_eq!(state.inventory.count(stone_id), 0);
 
         state

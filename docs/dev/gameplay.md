@@ -390,11 +390,11 @@ Gameplay tests live beside the modules:
 | `drops` | Stone with a pickaxe, stone by hand, every drop resolves to a block item, unknown block. |
 | `entities` | Fall and land, pickup, full inventory, despawn, record round trip, spawn merging, distant/different drops. |
 | `save` | CRC check value, full round trip, corrupt payload, bad magic, unknown version, oversized entity count, file-system write/load/quarantine. |
-| `state` | Starting kit, fixed-tick break, cancel/reset, save/load, seed mismatch, scripted gather-place-save-reopen. |
+| `state` | Starting kit, fixed-tick break, cancel/reset, save/load, seed mismatch, scripted gather-use-save-reopen. |
 
 The scripted loop in `state` covers the release gate's headless half: spawn a stone drop from the
-current tool, pick it up, select the hotbar slot, place one item, save, reopen, and assert the
-player and inventory survived.
+current tool, pick it up, select the hotbar slot, consume one placeable item (the state-side half
+of placement), save, reopen, and assert the player and inventory survived.
 
 Manual acceptance uses the demo:
 

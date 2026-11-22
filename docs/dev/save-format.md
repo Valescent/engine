@@ -354,5 +354,5 @@ little-endian payload, file and directory fsync, write-temp and rename, and quar
 magic, version, checksum, malformed payload, unknown item, or oversized entity count. Tests cover
 the standard CRC check value, a full round trip, a corrupt payload, a bad magic, an unknown version,
 an oversized entity count, the file-system write/load/quarantine path, and a seed mismatch. The
-inventory slot records and dropped entities are covered by the scripted gather, place, save, and
+inventory slot records and dropped entities are covered by the scripted gather, consume, save, and
 reopen test in `src/game/state.rs`.

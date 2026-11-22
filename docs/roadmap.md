@@ -387,7 +387,7 @@ See [v0.0.10 scope](dev/v0.0.10-scope.md) for the deliverables and acceptance cr
 - [ ] Manual acceptance, docs, changelog, version bump, and release PR
 
 **Measured after `0.0.10.1`:** 469 engine library tests and 411 terrain-core library tests pass; the
-scripted gather-place-save-reopen loop is covered; a 15-second windowed demo run created both new
+scripted gather-use-save-reopen loop is covered; a 15-second windowed demo run created both new
 pipelines with no validation errors; the static distance-12 headless run settles at 625 of 625
 ready columns in 470 frames. The manual definition-of-done pass and the full save migration set
 remain open.
