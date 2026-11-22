@@ -12,6 +12,7 @@ mod camera;
 mod config;
 mod demo;
 mod frustum;
+mod game;
 mod headless;
 mod hierarchy;
 mod horizon;
