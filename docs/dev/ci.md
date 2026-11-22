@@ -40,7 +40,7 @@ headless measurement.
 ### Change filters
 
 The `changes` job runs `dorny/paths-filter@v3` and classifies the diff before any Rust work starts.
-The dependent jobs are skipped when their inputs did not change:
+The dependent jobs skip their work when their inputs did not change:
 
 | Output | Paths | Gates |
 |---|---|---|
@@ -48,10 +48,12 @@ The dependent jobs are skipped when their inputs did not change:
 | `cargo` | Cargo manifests/lock, `deny.toml`, `rust-toolchain.toml` | Dependencies |
 
 A docs-only pull request therefore builds and spell-checks the docs but does not compile Rust, run
-clippy, run Cargo tests, or run the terrain generator. The required check names still appear as
-skipped, which branch protection treats as successful. Changes to `.github/workflows/**` are
-counted as code so a CI edit exercises the full pipeline before it lands. If the filter job itself
-fails, the Rust jobs run anyway rather than silently skipping the gates.
+clippy, run Cargo tests, or run the terrain generator. The `Test (<os>)` matrix jobs still start and
+skip their Rust steps, so the required checks report success instead of a missing matrix name.
+`Dependencies` and `Terrain gates` keep fixed names and are skipped, which branch protection treats
+as successful. Changes to `.github/workflows/**` are counted as code so a CI edit exercises the full
+pipeline before it lands. If the filter job itself fails, the Rust jobs run anyway rather than
+silently skipping the gates.
 
 The `spelling` job always runs; it is cheap and covers docs and source. The `Docs` workflow also
 always runs because `Build` is a required check and mdBook catches broken `SUMMARY.md` entries.

@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The item physics probe uses the same `0.3 m` cube as the placeholder renderer instead of a slightly smaller box.
 - The player save fsyncs the file, fsyncs the parent directory on Unix, and rejects an oversized entity count before allocating.
 - A static headless run no longer stalls at five ready columns. Newly generated columns re-admit deferred light even when the player never crosses a chunk, so the distance-12 static settle returns to 625 of 625 ready columns in about 470 frames instead of timing out after 41,000.
+- A docs-only CI run now starts the `Test (<os>)` matrix jobs and skips their Rust steps, so the required OS checks report success instead of a missing literal matrix name. This unblocks docs-only pull requests without weakening the branch ruleset.
 
 ## [0.0.9] - 2026-11-21
 
