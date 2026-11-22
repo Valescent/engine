@@ -28,7 +28,7 @@ use crate::camera::Camera;
 use crate::config::{Config, ConfigError};
 use crate::content::ContentPack;
 use crate::demo::DemoRuntime;
-use crate::game::{GameState, ItemRegistry};
+use crate::game::{GameState, ItemRegistry, RecipeBook};
 use crate::hierarchy::{DEFAULT_DETAIL_CHUNKS, Hierarchy};
 use crate::horizon;
 use crate::mesh::Lod;
@@ -135,6 +135,8 @@ pub(crate) struct App {
     pub(crate) pack: ContentPack,
     /// Stable item ids for the built-in pack.
     pub(crate) items: ItemRegistry,
+    /// The compiled Phase 1 recipes, known from the start.
+    pub(crate) recipes: RecipeBook,
     /// Inventory, break progress, drops, and the fixed tick.
     pub(crate) game: GameState,
     pub(crate) break_held: bool,
@@ -190,11 +192,14 @@ impl App {
 
         let pack = crate::content::v1_default();
         let items = ItemRegistry::builtin(&pack);
-        let game = GameState::new(&items);
+        let recipes = RecipeBook::builtin(&items).expect("the built-in recipe table is valid");
+        let game = GameState::new();
         let egui_ctx = egui::Context::default();
         egui_ctx.set_visuals(egui::Visuals::dark());
         let mut ui = UiState::new();
-        if std::env::var("ENGINE_UI_INVENTORY").is_ok_and(|value| value == "1") {
+        if std::env::var("ENGINE_UI_WORKBENCH").is_ok_and(|value| value == "1") {
+            ui.open_workbench(0);
+        } else if std::env::var("ENGINE_UI_INVENTORY").is_ok_and(|value| value == "1") {
             ui.open_inventory(0);
         }
 
@@ -241,6 +246,7 @@ impl App {
             selected_block: Block::Stone,
             pack,
             items,
+            recipes,
             game,
             break_held: false,
             egui_ctx,
@@ -480,6 +486,7 @@ impl ApplicationHandler for App {
         }
         match event {
             WindowEvent::CloseRequested => {
+                self.stow_ui_items();
                 self.save_world(true);
                 self.save_game();
                 self.release_cursor();

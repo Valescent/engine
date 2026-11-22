@@ -46,16 +46,12 @@ pub(crate) struct LoadedGame {
 }
 
 impl GameState {
-    /// Creates a new run with the temporary starting kit.
+    /// Creates a new run with an empty inventory.
     ///
-    /// The wooden pickaxe exists only until crafting lands in `0.0.10.3`; it
-    /// proves the minimum-tier rule while stone is otherwise unobtainable.
-    pub(crate) fn new(registry: &ItemRegistry) -> Self {
-        let mut state = Self::default();
-        if let Some(pickaxe) = registry.stack("core:wooden_pickaxe", 1) {
-            let _ = state.inventory.add(pickaxe, registry);
-        }
-        state
+    /// The wood-to-stone chain now starts by hand: punch a tree, craft planks
+    /// and sticks, place a workbench, and make the first wooden pickaxe.
+    pub(crate) fn new() -> Self {
+        Self::default()
     }
 
     /// Sets the block the player is currently holding the break button on.
@@ -207,19 +203,15 @@ mod tests {
     }
 
     #[test]
-    fn a_new_run_starts_with_the_temporary_pickaxe() {
-        let registry = registry();
-        let state = GameState::new(&registry);
-
-        assert_eq!(
-            registry.name(state.inventory.selected().unwrap().item),
-            "core:wooden_pickaxe"
-        );
+    fn a_new_run_starts_with_an_empty_inventory() {
+        let state = GameState::new();
+        assert!(state.inventory.selected().is_none());
+        assert_eq!(state.inventory.iter().count(), 0);
     }
 
     #[test]
     fn a_break_completes_on_the_fixed_tick() {
-        let mut state = GameState::new(&registry());
+        let mut state = GameState::new();
         let cell = IVec3::new(1, 2, 3);
         state.set_break_target(cell, 0.1, true);
 
@@ -233,7 +225,7 @@ mod tests {
 
     #[test]
     fn releasing_or_changing_the_target_cancels_progress() {
-        let mut state = GameState::new(&registry());
+        let mut state = GameState::new();
         state.set_break_target(IVec3::new(1, 2, 3), 1.0, true);
         state.tick(1.0 / 60.0, &World::default());
         let progress = state.break_fraction().unwrap().1;
@@ -254,7 +246,7 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("player.dat");
 
-        let mut state = GameState::new(&registry);
+        let mut state = GameState::new();
         state
             .inventory
             .add(registry.stack("core:stone", 9).unwrap(), &registry);
@@ -290,7 +282,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("player.dat");
-        GameState::new(&registry)
+        GameState::new()
             .save(&path, 1, Vec3::ZERO, 0.0, 0.0, &registry)
             .unwrap();
 
@@ -310,7 +302,10 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("player.dat");
 
-        let mut state = GameState::new(&registry);
+        let mut state = GameState::new();
+        state
+            .inventory
+            .add(registry.stack("core:wooden_pickaxe", 1).unwrap(), &registry);
         let tool = state.selected_tool(&registry);
         let stone = crate::game::drops_for(&pack, &registry, "core:stone", tool)
             .pop()

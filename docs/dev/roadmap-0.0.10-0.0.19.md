@@ -132,29 +132,29 @@ and save/restore the run.
 The full adapted design is in [crafting-system.md](../design/crafting-system.md). This checkpoint is
 the source's "basic crafting" prototype: one station, one grammar, shaped and tagged recipes, a
 known-recipe book, and a small salvage table. Quality, rarity, disciplines, discovery, queues, and
-automation are **not** in 0.0.10.
+automation are **not** in 0.0.10. It is implemented in `0.0.10.3`.
 
-- [ ] Task: Add the universal recipe grammar.
-  - [ ] Subtask: `station`, `tier`, `pattern`, `output`, `cost`, `unlock`, and `discipline` fields.
-  - [ ] Subtask: Shaped, tagged, and hybrid pattern types; Phase 1 uses shaped and tagged.
-  - [ ] Subtask: Stable recipe names, tags, alternatives, validation, and duplicate detection at load.
-- [ ] Task: Add the 2x2 inventory grid and the 3x3 workbench.
-  - [ ] Subtask: Workbench block, right-click opens the 3x3 screen, close returns the grid.
-  - [ ] Subtask: Recipe preview, output slot, `Craft`, and `Craft x10`.
-- [ ] Task: Add the known-recipe book.
-  - [ ] Subtask: Search, craftable/missing state, ingredients, station, tier, and discipline.
-  - [ ] Subtask: One-click craft from the inventory; no glimpsed/unknown persistence yet.
-- [ ] Task: Add Phase 1 tags and blocks.
-  - [ ] Subtask: `wood`, `planks`, `stone`, and `fuel` tags.
-  - [ ] Subtask: `core:planks`, `core:workbench`, and `core:torch` records; torch is a light-emitting cross-quad.
-  - [ ] Subtask: `core:planks` x4, sticks, workbench, torches, eight wooden/stone tools.
-- [ ] Task: Add a static salvage table.
-  - [ ] Subtask: Tools return one material and one stick; workbench and torch returns are fixed.
-  - [ ] Subtask: No reverse-engineering, affix recovery, or quality salvage.
-- [ ] Task: Test the chain.
-  - [ ] Subtask: Wood -> planks -> sticks -> workbench -> wooden pickaxe -> stone tools.
-  - [ ] Subtask: 3x3 recipe rejected by the 2x2 grid; tagged alternatives; full-inventory rollback.
-  - [ ] Subtask: New block ids and the shifted water id.
+- [x] Task: Add the universal recipe grammar.
+  - [x] Subtask: `station`, `tier`, `pattern`, `output`, `cost`, `unlock`, and `discipline` fields.
+  - [x] Subtask: Shaped, tagged, and hybrid pattern types; Phase 1 uses shaped and tagged.
+  - [x] Subtask: Stable recipe names, tags, alternatives, validation, and duplicate detection at load.
+- [x] Task: Add the 2x2 inventory grid and the 3x3 workbench.
+  - [x] Subtask: Workbench block, right-click opens the 3x3 screen, close returns the grid.
+  - [x] Subtask: Recipe preview, output slot, `Craft`, and `Craft x10`.
+- [x] Task: Add the known-recipe book.
+  - [x] Subtask: Search, craftable/missing state, ingredients, station, tier, and discipline.
+  - [x] Subtask: One-click craft from the inventory; no glimpsed/unknown persistence yet.
+- [x] Task: Add Phase 1 tags and blocks.
+  - [x] Subtask: `wood`, `planks`, `stone`, and `fuel` tags.
+  - [x] Subtask: `core:planks`, `core:workbench`, and `core:torch` records; torch is a light-emitting cross-quad.
+  - [x] Subtask: `core:planks` x4, sticks, workbench, torches, eight wooden/stone tools.
+- [x] Task: Add a static salvage table.
+  - [x] Subtask: Tools return one material and one stick; workbench and torch returns are fixed.
+  - [x] Subtask: No reverse-engineering, affix recovery, or quality salvage.
+- [x] Task: Test the chain.
+  - [x] Subtask: Wood -> planks -> sticks -> workbench -> wooden pickaxe -> stone tools.
+  - [x] Subtask: 3x3 recipe rejected by the 2x2 grid; tagged alternatives; full-inventory rollback.
+  - [x] Subtask: New block ids and the shifted water id.
 
 The furnace, campfire, anvil, quality/rarity, discipline XP, discovery, queues, portable stations,
 and automation are Phase 2+; see [crafting-system.md](../design/crafting-system.md#11-later-phases-and-release-mapping).
@@ -732,12 +732,12 @@ These need an ADR or a short decision note before the owning release starts:
 - **Cloud technique.** Raymarch vs froxel, temporal requirements, and quality tiers.
 - **Water model.** Height-field water vs voxel water; flow and tide coupling.
 - **Environment save block.** Versioning, migration, and authority for time/weather/tides.
-- **Crafting item instances.** Side table versus fat stack for quality, rarity, and affixes; when to
-  bump the player save.
-- **Crafting data source.** In-code validated tables for Phase 1, then authored data once the
-  content pipeline exists.
-- **Furnace scope.** Placeholder block in Phase 1, or a real smelting station in Phase 2 with block
-  entities, fuel, and a queue.
+- **Crafting Phase 2 item instances.** Side table versus fat stack for quality, rarity, and
+  affixes; when to bump the player save.
+- **Crafting content pipeline.** Authored recipe files and validation after Phase 1's in-code
+  table.
+- **Furnace implementation.** Block entity, fuel, smelt recipes, and queue design for the Phase 2
+  furnace.
 - **Target hardware.** Minimum GPU, CPU, memory, and resolution for the hero scene.
 - **Multiplayer.** Explicitly out of scope unless a later decision adds it.
 

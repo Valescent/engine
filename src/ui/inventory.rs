@@ -1,4 +1,5 @@
-//! The inventory screen: grid, cursor stack, drag/drop, shift-click, and tooltips.
+//! The inventory and workbench screens: grid, cursor stack, drag/drop,
+//! shift-click, tooltips, and the shared crafting panel.
 
 use egui::{
     Align2, Color32, Context, FontId, Id, LayerId, Order, Rect, RichText, Sense, Stroke,
@@ -6,13 +7,14 @@ use egui::{
 };
 
 use crate::game::{
-    HOTBAR_SLOTS, Inventory, ItemKind, ItemRegistry, ItemStack, OFFHAND_SLOT, TOTAL_SLOTS,
+    HOTBAR_SLOTS, Inventory, ItemKind, ItemRegistry, ItemStack, OFFHAND_SLOT, RecipeBook, Station,
+    TOTAL_SLOTS,
 };
 
 use super::UiState;
 use super::item_icon::draw_stack;
 
-const SLOT_SIZE: f32 = 48.0;
+pub(super) const SLOT_SIZE: f32 = 48.0;
 
 #[allow(
     clippy::too_many_lines,
@@ -23,6 +25,7 @@ pub(super) fn draw(
     state: &mut UiState,
     inventory: &mut Inventory,
     registry: &ItemRegistry,
+    recipes: &RecipeBook,
 ) {
     let screen = ctx.input(egui::InputState::viewport_rect);
     ctx.layer_painter(LayerId::new(Order::Middle, Id::unique("inventory-dim")))
@@ -31,6 +34,11 @@ pub(super) fn draw(
     let mut rects: Vec<(usize, Rect)> = Vec::with_capacity(TOTAL_SLOTS);
     let mut drag_start = None;
     let mut click = None;
+
+    let title = match state.station() {
+        Station::Inventory => "Inventory",
+        Station::Workbench => "Workbench",
+    };
 
     egui::Area::new(Id::unique("inventory"))
         .anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0))
@@ -47,7 +55,7 @@ pub(super) fn draw(
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new("Inventory")
+                            RichText::new(title)
                                 .size(20.0)
                                 .strong()
                                 .color(Color32::WHITE),
@@ -61,14 +69,54 @@ pub(super) fn draw(
                     });
                     ui.add_space(10.0);
 
-                    for row in 0..3 {
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-                            for column in 0..9 {
-                                let index = HOTBAR_SLOTS + row * 9 + column;
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            for row in 0..3 {
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+                                    for column in 0..9 {
+                                        let index = HOTBAR_SLOTS + row * 9 + column;
+                                        view_slot(
+                                            ui,
+                                            index,
+                                            state,
+                                            inventory,
+                                            registry,
+                                            &mut rects,
+                                            &mut drag_start,
+                                            &mut click,
+                                        );
+                                    }
+                                });
+                            }
+
+                            ui.add_space(8.0);
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+                                for index in 0..HOTBAR_SLOTS {
+                                    view_slot(
+                                        ui,
+                                        index,
+                                        state,
+                                        inventory,
+                                        registry,
+                                        &mut rects,
+                                        &mut drag_start,
+                                        &mut click,
+                                    );
+                                }
+                            });
+
+                            ui.add_space(10.0);
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    RichText::new("Offhand")
+                                        .size(12.0)
+                                        .color(Color32::from_rgba_unmultiplied(210, 210, 210, 200)),
+                                );
                                 view_slot(
                                     ui,
-                                    index,
+                                    OFFHAND_SLOT,
                                     state,
                                     inventory,
                                     registry,
@@ -76,84 +124,58 @@ pub(super) fn draw(
                                     &mut drag_start,
                                     &mut click,
                                 );
-                            }
+                            });
+
+                            ui.add_space(10.0);
+                            ui.horizontal(|ui| {
+                                if ui.button("Close [E]").clicked() {
+                                    state.close_requested = true;
+                                }
+                                ui.label(
+                                    RichText::new(format!("{TOTAL_SLOTS} slots"))
+                                        .size(11.0)
+                                        .color(Color32::from_rgba_unmultiplied(180, 180, 180, 170)),
+                                );
+                            });
                         });
-                    }
 
-                    ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-                        for index in 0..HOTBAR_SLOTS {
-                            view_slot(
-                                ui,
-                                index,
-                                state,
-                                inventory,
-                                registry,
-                                &mut rects,
-                                &mut drag_start,
-                                &mut click,
-                            );
-                        }
-                    });
+                        ui.add_space(16.0);
+                        ui.separator();
+                        ui.add_space(8.0);
 
-                    ui.add_space(10.0);
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new("Offhand")
-                                .size(12.0)
-                                .color(Color32::from_rgba_unmultiplied(210, 210, 210, 200)),
-                        );
-                        view_slot(
-                            ui,
-                            OFFHAND_SLOT,
-                            state,
-                            inventory,
-                            registry,
-                            &mut rects,
-                            &mut drag_start,
-                            &mut click,
-                        );
-                    });
-
-                    ui.add_space(10.0);
-                    ui.horizontal(|ui| {
-                        if ui.button("Close [E]").clicked() {
-                            state.close_requested = true;
-                        }
-                        ui.label(
-                            RichText::new(format!("{TOTAL_SLOTS} slots"))
-                                .size(11.0)
-                                .color(Color32::from_rgba_unmultiplied(180, 180, 180, 170)),
-                        );
+                        ui.vertical(|ui| {
+                            super::crafting::draw_panel(ui, state, inventory, registry, recipes);
+                        });
                     });
                 });
         });
 
-    let (left, right, up, down, enter, shift) = ctx.input(|input| {
-        (
-            input.key_pressed(egui::Key::ArrowLeft),
-            input.key_pressed(egui::Key::ArrowRight),
-            input.key_pressed(egui::Key::ArrowUp),
-            input.key_pressed(egui::Key::ArrowDown),
-            input.key_pressed(egui::Key::Enter) || input.key_pressed(egui::Key::Space),
-            input.modifiers.shift,
-        )
-    });
-    if left {
-        state.focused_slot = state.focused_slot.saturating_sub(1);
-    }
-    if right && state.focused_slot < OFFHAND_SLOT {
-        state.focused_slot += 1;
-    }
-    if up && state.focused_slot >= HOTBAR_SLOTS {
-        state.focused_slot -= 9;
-    }
-    if down && state.focused_slot + 9 <= OFFHAND_SLOT {
-        state.focused_slot += 9;
-    }
-    if enter {
-        state.activate(state.focused_slot, inventory, registry, false, shift);
+    let shift = ctx.input(|input| input.modifiers.shift);
+    if !state.search_focused {
+        let (left, right, up, down, enter) = ctx.input(|input| {
+            (
+                input.key_pressed(egui::Key::ArrowLeft),
+                input.key_pressed(egui::Key::ArrowRight),
+                input.key_pressed(egui::Key::ArrowUp),
+                input.key_pressed(egui::Key::ArrowDown),
+                input.key_pressed(egui::Key::Enter) || input.key_pressed(egui::Key::Space),
+            )
+        });
+        if left {
+            state.focused_slot = state.focused_slot.saturating_sub(1);
+        }
+        if right && state.focused_slot < OFFHAND_SLOT {
+            state.focused_slot += 1;
+        }
+        if up && state.focused_slot >= HOTBAR_SLOTS {
+            state.focused_slot -= 9;
+        }
+        if down && state.focused_slot + 9 <= OFFHAND_SLOT {
+            state.focused_slot += 9;
+        }
+        if enter {
+            state.activate(state.focused_slot, inventory, registry, false, shift);
+        }
     }
 
     if let Some(index) = drag_start {
@@ -265,7 +287,12 @@ fn view_slot(
     response.on_hover_ui(|ui| tooltip(ui, stack, registry, holding));
 }
 
-fn tooltip(ui: &mut egui::Ui, stack: Option<ItemStack>, registry: &ItemRegistry, holding: bool) {
+pub(super) fn tooltip(
+    ui: &mut egui::Ui,
+    stack: Option<ItemStack>,
+    registry: &ItemRegistry,
+    holding: bool,
+) {
     if let Some(stack) = stack {
         ui.label(RichText::new(item_label(registry.name(stack.item))).strong());
         match registry.def(stack.item).kind {
@@ -277,14 +304,14 @@ fn tooltip(ui: &mut egui::Ui, stack: Option<ItemStack>, registry: &ItemRegistry,
                 tier,
                 durability: maximum,
             } => {
-                ui.label(format!("{class:?} · tier {tier}"));
+                ui.label(format!("{class:?} - tier {tier}"));
                 ui.label(format!("Durability {}/{maximum}", stack.durability));
             }
             ItemKind::Material => {
                 ui.label("Material");
             }
             ItemKind::Food { nutrition } => {
-                ui.label(format!("Food · {nutrition}"));
+                ui.label(format!("Food - {nutrition}"));
             }
         }
         if stack.count > 1 {
@@ -293,7 +320,7 @@ fn tooltip(ui: &mut egui::Ui, stack: Option<ItemStack>, registry: &ItemRegistry,
         if holding {
             ui.label("Click to place");
         } else {
-            ui.label("Click to pick up · Shift-click to move");
+            ui.label("Click to pick up - Shift-click to move");
         }
     } else {
         ui.label("Empty slot");
@@ -303,6 +330,6 @@ fn tooltip(ui: &mut egui::Ui, stack: Option<ItemStack>, registry: &ItemRegistry,
     }
 }
 
-fn item_label(name: &str) -> String {
+pub(super) fn item_label(name: &str) -> String {
     name.rsplit(':').next().unwrap_or(name).replace('_', " ")
 }

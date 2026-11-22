@@ -171,6 +171,15 @@ green durability bar for tools. Empty slots show their 1-based number.
 Hovering a slot shows its display name, kind, stack count, and tool durability. It also shows
 `Click to pick up · Shift-click to move`, or `Click to place` while holding a stack.
 
+### Crafting
+
+The inventory and workbench share the same panel: a 2x2 or 3x3 grid, an output slot, a search field,
+the known-recipe list, ingredient totals, `Craft` / `Craft x10`, and `Salvage held`. Click a recipe
+to show its details. `WB` marks a recipe that needs a workbench; `OK` marks one the inventory can
+make now. Shift-clicking the output crafts as many as the grid and inventory allow. The recipe
+search field owns the keyboard while focused, so `E`, arrows, and Space do not also drive the
+inventory until focus leaves it.
+
 ## Rendering details
 
 `UiPass` uses `egui_wgpu::Renderer::new` with `RendererOptions::default()`:
@@ -199,31 +208,35 @@ primitives produces no UI draws, and the headless path builds no `UiFrame` at al
   behavior.
 - The windowed smoke run captured a frame with the nine-slot hotbar, selected border, wooden
   pickaxe icon, durability bar, crosshair, and the existing FPS overlay.
-- `ENGINE_UI_INVENTORY=1` opens the inventory on the first frame for repeatable captures. The
-  captured inventory shows the main grid, hotbar row, offhand, selected slot, durability bar,
-  close button, and dimmed world.
+- `ui::tests::a_workbench_recipe_is_rejected_on_the_inventory_screen` and
+  `ui::tests::a_workbench_recipe_crafts_on_the_workbench_screen` pin the station gate.
+- `ui::tests::crafting_output_consumes_the_grid_and_adds_to_inventory` and
+  `game::crafting::tests::a_full_inventory_rolls_back_the_grid_and_output` pin the transaction.
+- `ui::tests::salvaging_the_held_tool_returns_its_materials` pins the salvage path.
+- `ENGINE_UI_INVENTORY=1` opens the inventory on the first frame for repeatable captures.
+  `ENGINE_UI_WORKBENCH=1` opens the 3x3 workbench instead.
 - GPU validation is exercised by `Renderer::new` and the windowed run; the default test suite
   remains headless.
 
 ## Current limitations
 
-- No crafting, pause, death, or settings screen yet. Crafting Phase 1 is scoped for `0.0.10.3`.
+- Crafting Phase 1 is in; no crafting depth, pause, death, or settings screen yet.
 - No container-to-container transfer beyond the hotbar/main quick move.
 - No gamepad navigation or accessibility tree.
 - No UI scale control; egui follows the window scale factor.
-- No text input, clipboard, or link handling; those features are disabled.
+- Recipe search uses egui text input; clipboard and link handling remain disabled.
 - Item icons are flat colours, not the block texture array.
-- The HUD and inventory are not captured in golden terrain images; captures are manual QA, not
-  comparison tests.
+- The HUD, inventory, and crafting panel are not captured in golden terrain images; captures are
+  manual QA, not comparison tests.
 
 ## Next
 
-The next slice is crafting Phase 1 in `0.0.10.3`:
+The next slice is survival in `0.0.10.4`:
 
-- The universal recipe grammar: station, tier, pattern, output, cost, unlock, and discipline.
-- Shaped and tagged recipes with a small `wood`/`planks`/`stone`/`fuel` tag table.
-- A 2x2 grid in the inventory and a 3x3 placed-workbench screen.
-- A known-recipe book with search, craftable/missing state, ingredients, and one-click craft.
-- A static salvage table and the wood-to-stone progression chain.
+- Health, stamina, fall damage, drowning hooks, death, and respawn.
+- Pause and death screens.
+- Spawn safety and the survival HUD.
 
-See [the crafting system](../design/crafting-system.md) for the full design and Phase 2-7 mapping.
+Crafting depth (quality, rarity, item instances, disciplines, discovery, queues, and automation)
+stays in the post-`0.0.19` crafting releases. See
+[the crafting system](../design/crafting-system.md) for that mapping.

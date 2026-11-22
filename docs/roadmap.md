@@ -355,7 +355,7 @@ manual walk-through was replaced by captures and automated tests, so it is not c
 
 ## v0.0.10: Basic mechanics
 
-**Status:** In progress - the `0.0.10.1` gameplay core and the `0.0.10.2` UI slice (HUD and inventory) are implemented.
+**Status:** In progress - the `0.0.10.1` gameplay core, the `0.0.10.2` UI slice (HUD and inventory), and the `0.0.10.3` crafting Phase 1 are implemented.
 
 **Goal:** Turn the v1 terrain demo into a complete first playable loop: break, collect, craft, place, survive, and save.
 
@@ -375,9 +375,9 @@ See [v0.0.10 scope](dev/v0.0.10-scope.md) for the deliverables and acceptance cr
 #### 2. UI and crafting (`0.0.10.2`, `0.0.10.3`)
 - [x] egui foundation, HUD, and UI-first input hook
 - [x] Inventory screen with drag/drop, shift-click, tooltips, and keyboard navigation
-- [ ] Crafting Phase 1: universal recipe grammar, shaped/tagged patterns, 2x2/3x3, workbench, known recipe book, tags, salvage
+- [x] Crafting Phase 1: universal recipe grammar, shaped/tagged patterns, 2x2/3x3, workbench, known recipe book, tags, salvage
 - [ ] Pause and death screens
-- [ ] The wood-to-stone tool progression and crafted tools
+- [x] The wood-to-stone tool progression and crafted tools
 
 See [the crafting system design](design/crafting-system.md) for the full grammar, disciplines,
 stations, quality model, discovery, and the Phase 2-7 mapping. Only Phase 1 is committed to 0.0.10.
@@ -396,6 +396,12 @@ scripted gather-use-save-reopen loop is covered; a 15-second windowed demo run c
 pipelines with no validation errors; the static distance-12 headless run settles at 625 of 625
 ready columns in 470 frames. The manual definition-of-done pass and the full save migration set
 remain open.
+
+**Measured after the `0.0.10.3` crafting slice:** 511 engine library tests and 411 terrain-core
+library tests pass, plus the integration suites. The recipe table validates twelve recipes; shaped,
+tagged, mirrored, station-gated, first-match, direct-craft, grid-craft, full-inventory rollback,
+salvage, and transient-grid return paths are covered headlessly. The terrain golden file and the
+pinned content hashes were regenerated for the three new block records.
 
 **Measured after the `0.0.10.2` UI slice:** 477 engine library tests and 411 terrain-core library
 tests pass; captured windowed frames show the crosshair, nine-slot hotbar, selected border,

@@ -64,6 +64,7 @@ impl App {
                     return;
                 }
                 if code == KeyCode::KeyS && self.modifiers.control_key() {
+                    self.stow_ui_items();
                     self.save_world(false);
                     self.save_game();
                 } else if code == KeyCode::Space {
@@ -202,6 +203,10 @@ impl App {
 
     pub(super) fn place_block(&mut self) {
         if self.demo.is_some() {
+            if self.targets_workbench() {
+                self.open_workbench();
+                return;
+            }
             self.place_demo_block();
             return;
         }

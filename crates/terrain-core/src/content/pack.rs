@@ -179,7 +179,7 @@ mod tests {
     /// Ids are derived from the name sort, so adding the five `§2.6`/`§8.3`
     /// materials renumbers the records that sort after them. Only the stable
     /// names and properties are contract; the numeric ids are runtime state.
-    const V1_IDS: [(&str, BlockId); 18] = [
+    const V1_IDS: [(&str, BlockId); 21] = [
         ("core:air", 0),
         ("core:bedrock", 1),
         ("core:boulder", 2),
@@ -192,12 +192,15 @@ mod tests {
         ("core:leaves", 9),
         ("core:ore_copper", 10),
         ("core:ore_iron", 11),
-        ("core:plant", 12),
-        ("core:sand", 13),
-        ("core:snow", 14),
-        ("core:stone", 15),
-        ("core:water", 16),
-        ("core:wood", 17),
+        ("core:planks", 12),
+        ("core:plant", 13),
+        ("core:sand", 14),
+        ("core:snow", 15),
+        ("core:stone", 16),
+        ("core:torch", 17),
+        ("core:water", 18),
+        ("core:wood", 19),
+        ("core:workbench", 20),
     ];
 
     fn error_parts(error: &TerrainError) -> (&'static str, &'static str) {

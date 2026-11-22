@@ -62,7 +62,7 @@ CI also runs dependency licence and advisory checks, commit message checks, and 
 
 ## Current coverage
 
-The headless suite covers **888 library tests** across `engine` and `terrain-core` (477 engine +
+The headless suite covers **922 library tests** across `engine` and `terrain-core` (511 engine +
 411 terrain-core, 7 ignored), **1** `facade`, **3** `light_preview`, **4** `blend`, **30**
 `terrain_gen`, and **3** `visibility` integration tests. The terrain integration test and its
 goldens live under `crates/terrain-core/tests/`; `light_preview`, `blend`, and `visibility` stay
@@ -135,14 +135,18 @@ cargo run --bin engine
 
 - Hold left mouse on wood: the outline fills and the block breaks after the hardness time.
 - Walk over the drop; the item count increases, and a full inventory leaves the drop on the ground.
-- `1`-`9` select hotbar slots. Slot 1 starts with the temporary wooden pickaxe.
+- `1`-`9` select hotbar slots. The inventory starts empty.
+- Craft planks, sticks, a workbench, and a torch in the 2x2 grid. Place the workbench, right-click it,
+  craft a wooden pickaxe on the 3x3 grid, then mine stone for a stone pickaxe.
+- Shift-craft a stack of wood into planks; confirm the output stops when the inventory fills.
+- Pick up a tool and press `Salvage held`; confirm the static returns.
 - Stone with the wooden pickaxe drops stone; stone by hand breaks without a drop.
 - Right click places the selected block, rejects the player's cell, and consumes one item only on a
   successful edit.
 - `Ctrl+S`, close the window, reopen, and confirm the position, view, inventory, selected slot,
-  dropped items, and block edits survived.
+  dropped items, and block edits survived. Closing the crafting screen should return the grid.
 - Confirm the HUD: crosshair at centre, nine hotbar slots at the bottom, a white selected border,
-  the temporary pickaxe icon and durability bar, and the hold/place prompt when a block is targeted.
+  the selected item icon and durability bar, and the hold/place prompt when a block is targeted.
 - Click and drag over the HUD; the camera must still capture and the block actions must still work,
   because the HUD is non-interactive.
 - Press `E`: the cursor appears, the HUD hides, and the inventory panel opens. Click a stack, then
@@ -151,6 +155,10 @@ cargo run --bin engine
   its tooltip.
 - Press `E` or `Escape` to close the inventory; the cursor should recapture and the HUD return.
   `ENGINE_UI_INVENTORY=1` opens the screen on the first frame for a repeatable capture.
+- In the crafting panel, search for a recipe, select it, and check the ingredient totals and station
+  marker. `Craft` and `Craft x10` consume inventory ingredients; shift-click the output crafts all.
+- Right-click a placed workbench to open the 3x3 screen; `ENGINE_UI_WORKBENCH=1` opens it on the
+  first frame. Close with items in the grid and confirm they return to the inventory.
 - Block faces show the expected texture layers.
 - `Ctrl+S` and closing the window save modified chunks under `world/chunks/`; reopening restores the edits over the generated terrain.
 - `V` toggles vsync without stopping rendering and logs the resulting state.

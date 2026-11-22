@@ -211,13 +211,14 @@ pub struct BlockRecord {
 
 /// The placeholder pack for the ids the pipeline emits (`OPEN(content ids)`).
 ///
-/// Eighteen records: the thirteen blocks the column pipeline, mesher, and
+/// Twenty-one records: the thirteen blocks the column pipeline, mesher, and
 /// lighting currently know about (air, boulder, dirt, grass, lamp, leaves,
 /// copper ore, iron ore, plant, sand, stone, water, wood) plus the five frozen
 /// materials the answered spec names (`§2.6`, `§8.3`): bedrock, clay, gravel,
-/// ice, and snow. They are **not** an authored pack: `hardness` and `drops` are
-/// plausible placeholders, every `record_version` is `1`, and the numbering
-/// follows `A5.1` (sorted by name), not the legacy constants in
+/// ice, and snow, plus the three crafting blocks (`core:planks`,
+/// `core:workbench`, `core:torch`). They are **not** an authored pack: `hardness`
+/// and `drops` are plausible placeholders, every `record_version` is `1`, and
+/// the numbering follows `A5.1` (sorted by name), not the legacy constants in
 /// `pipeline`/`light2`/`mesher2`.
 ///
 /// `core:bedrock` is opaque, collidable, drops nothing, and carries a hardness
@@ -247,13 +248,22 @@ pub fn v1_default() -> ContentPack {
         self_dropping(leaves("core:leaves")),
         self_dropping(opaque("core:ore_copper", 3.0)),
         self_dropping(opaque("core:ore_iron", 3.0)),
+        self_dropping(with_textures(
+            opaque("core:planks", 2.0),
+            FaceTextures::faces("core:wood_top", "core:wood_side", "core:wood_top"),
+        )),
         self_dropping(plant("core:plant")),
         self_dropping(opaque("core:sand", 0.5)),
         self_dropping(opaque("core:snow", 0.2)),
         self_dropping(opaque("core:stone", 1.5)),
+        self_dropping(torch("core:torch")),
         water("core:water"),
         self_dropping(with_textures(
             opaque("core:wood", 2.0),
+            FaceTextures::faces("core:wood_top", "core:wood_side", "core:wood_top"),
+        )),
+        self_dropping(with_textures(
+            opaque("core:workbench", 2.5),
             FaceTextures::faces("core:wood_top", "core:wood_side", "core:wood_top"),
         )),
     ];
@@ -339,6 +349,21 @@ fn plant(name: &str) -> BlockRecord {
         render_layer: RenderLayer::Cutout,
         collision: false,
         replaceable: true,
+        ..opaque(name, 0.0)
+    }
+}
+
+/// Torch: a light-emitting cross-quad with no collision.
+fn torch(name: &str) -> BlockRecord {
+    BlockRecord {
+        opacity: 0,
+        sky_atten: 0,
+        emission: LAMP_EMISSION,
+        render_shape: RenderShape::CrossQuad,
+        render_layer: RenderLayer::Cutout,
+        collision: false,
+        replaceable: false,
+        textures: FaceTextures::uniform("core:lamp"),
         ..opaque(name, 0.0)
     }
 }
