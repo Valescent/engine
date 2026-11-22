@@ -155,9 +155,9 @@ mod params_tests {
         let seventeen_up =
             climate.solve(&cells(0, 0, |_, _| SEA_HEIGHT + 17.0), &table, &params, 3);
         let drop_one = seven_up.temp(cell_x, cell_z) - eight_up.temp(cell_x, cell_z);
-        assert!((drop_one - params.lapse).abs() < 1e-6, "{drop_one}");
+        assert!((drop_one - params.lapse).abs() < 1e-6);
         let drop_ten = seven_up.temp(cell_x, cell_z) - seventeen_up.temp(cell_x, cell_z);
-        assert!((drop_ten - 10.0 * params.lapse).abs() < 1e-6, "{drop_ten}");
+        assert!((drop_ten - 10.0 * params.lapse).abs() < 1e-6);
         assert_eq!(seven_up.clamp_fires(), 0);
         assert_eq!(seventeen_up.clamp_fires(), 0);
 
