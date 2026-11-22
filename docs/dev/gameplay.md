@@ -361,6 +361,8 @@ At zero the fragment shader uses a pale yellow; at one it uses a hot orange, wit
 No new bind group or buffer is needed.
 
 There is no hand model, held-item rendering, crack texture, particle effect, or item label yet.
+The gameplay HUD (crosshair, hotbar, and interaction prompt) is documented in [UI](ui.md); it
+reads the same inventory and never captures gameplay input.
 
 ## Invariants and edge cases
 

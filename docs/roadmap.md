@@ -355,7 +355,7 @@ manual walk-through was replaced by captures and automated tests, so it is not c
 
 ## v0.0.10: Basic mechanics
 
-**Status:** In progress - checkpoint `0.0.10.1` (items, interaction, drops, player save) is implemented.
+**Status:** In progress - the `0.0.10.1` gameplay core and the `0.0.10.2` HUD foundation are implemented.
 
 **Goal:** Turn the v1 terrain demo into a complete first playable loop: break, collect, craft, place, survive, and save.
 
@@ -373,7 +373,8 @@ See [v0.0.10 scope](dev/v0.0.10-scope.md) for the deliverables and acceptance cr
 - [x] Versioned player save for position, view, inventory, hotbar, and dropped items
 
 #### 2. UI and crafting (`0.0.10.2`, `0.0.10.3`)
-- [ ] egui HUD, inventory, crafting, pause, and death screens
+- [x] egui foundation, HUD, and UI-first input hook
+- [ ] Inventory, crafting, pause, and death screens
 - [ ] Shaped and shapeless recipes, 2x2 and 3x3 surfaces, recipe book
 - [ ] Tool durability and the wood-to-stone progression chain
 
@@ -391,6 +392,11 @@ scripted gather-use-save-reopen loop is covered; a 15-second windowed demo run c
 pipelines with no validation errors; the static distance-12 headless run settles at 625 of 625
 ready columns in 470 frames. The manual definition-of-done pass and the full save migration set
 remain open.
+
+**Measured after the `0.0.10.2` HUD foundation:** 471 engine library tests and 411 terrain-core
+library tests pass; a captured windowed frame shows the crosshair, nine-slot hotbar, selected
+border, temporary pickaxe icon, durability bar, and the existing FPS overlay; the HUD captures no
+pointer or keyboard input. The inventory and crafting screens are still open.
 
 ### Definition of Done
 - A new player can spawn, gather wood and stone, craft a tool, place blocks, and survive a fall.

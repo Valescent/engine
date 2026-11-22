@@ -58,7 +58,7 @@ something else; it does not ban the word everywhere.
 | [draw call](architecture.md#rendering-resources) | One draw submission to the GPU. The quad path normally issues two indirect draws (opaque and water), with additional non-indexed draws for meshes above 16,383 quads; the per-chunk fallback issues one per visible mesh. | Current (v0.0.9) | pass |
 | [frame time](debugging.md#logging) | Time to produce one frame, logged as `frame_ms`. | Current | FPS |
 | [FPS](debugging.md#logging) | Frames per second; the reciprocal of frame time. | Current | frame time |
-| [debug overlay](debugging.md#profiling) | On-screen FPS and frame time, toggled with `F3` and refreshed once per second. | Current | HUD |
+| [debug overlay](debugging.md#profiling) | On-screen FPS and frame time, toggled with `F3` and refreshed once per second. | Current | HUD, when you mean the debug text |
 
 ## Gameplay and interaction
 
@@ -73,6 +73,7 @@ something else; it does not ban the word everywhere.
 | [targeted block](v0.0.4-scope.md) | Solid voxel hit by the view ray and outlined before interaction. | Current (v0.0.4) | selected block, when you mean the hotbar |
 | [highlight](v0.0.4-scope.md) | Wireframe cube drawn around the targeted block. | Current (v0.0.4) | selection box |
 | [hotbar](gameplay.md#inventory) | Selected item slot. The demo has nine slots selected with `1`-`9`; the legacy path has five hard-coded block slots selected with `1`-`5`. No inventory screen yet. | Current (0.0.10.1) | inventory, when you mean the selected row |
+| [HUD](ui.md) | The egui crosshair, nine-slot hotbar, item/durability display, and interaction prompt. Non-interactive in `0.0.10.2`. | Current (0.0.10.2) | overlay, when you mean the debug text |
 | [item](gameplay.md#items) | A stable `namespace:name` identity with a kind, stack limit, and optional durability. | Current (0.0.10.1) | block, when you mean an inventory item |
 | [item id](gameplay.md#identity) | In-memory `u16` index derived by sorting item names at load; never saved. | Current (0.0.10.1) | UUID |
 | [stack](gameplay.md#stacks-and-durability) | An item id, count, and durability in one inventory slot or dropped entity. | Current (0.0.10.1) | item, when you mean a count |
