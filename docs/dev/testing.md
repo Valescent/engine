@@ -62,7 +62,7 @@ CI also runs dependency licence and advisory checks, commit message checks, and 
 
 ## Current coverage
 
-The headless suite covers **922 library tests** across `engine` and `terrain-core` (511 engine +
+The headless suite covers **931 library tests** across `engine` and `terrain-core` (520 engine +
 411 terrain-core, 7 ignored), **1** `facade`, **3** `light_preview`, **4** `blend`, **30**
 `terrain_gen`, and **3** `visibility` integration tests. The terrain integration test and its
 goldens live under `crates/terrain-core/tests/`; `light_preview`, `blend`, and `visibility` stay
@@ -87,7 +87,7 @@ with `engine`.
 - Player AABB, gravity, jumping, ground detection, axis order, collision response, and tunnelling limits.
 - DDA ray hits, misses, range limits, tie-break order, and face normals.
 - Placement rejection for occupied cells and player intersection.
-- Gameplay core: sorted item ids, every placeable block has an item, tool stacks, liquid exclusion, inventory merge/fill/overflow/split/move, tool durability breakage, hotbar clamping, break time and tier gates, wrong-class drop rejection, content drop resolution, item gravity and landing, pickup and full-inventory behaviour, despawn, spawn merging, entity record round trips, and the `VPLY` round trip, CRC, corruption, version, oversized-count, and quarantine paths.
+- Gameplay core: sorted item ids, every placeable block has an item, tool stacks, liquid exclusion, inventory merge/fill/overflow/split/move, tool durability breakage, hotbar clamping, break time and tier gates, wrong-class drop rejection, content drop resolution, item gravity and landing, pickup and full-inventory behaviour, despawn, spawn merging, entity record round trips, survival health/stamina/death/spawn, stamina drain and regeneration, and the `VPLY` v2 round trip, v1 upgrade, CRC, corruption, version, oversized-count, and quarantine paths.
 - The scripted gameplay loop: spawn a stone drop from the held tool, pick it up, select the hotbar slot, consume one placeable item, save, reopen, and assert the player and inventory survived.
 - UI: the HUD produces egui shapes headlessly with an empty inventory and a target, and the current capture policy is pinned to non-interactive. Inventory tests cover click pickup/place, right-click split/place-one, shift-click quick move, the drawing pass, and the two-frame `E` open/close suppression.
 - Procedural texture data size and determinism.

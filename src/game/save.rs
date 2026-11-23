@@ -15,11 +15,12 @@ use thiserror::Error;
 use super::entities::EntityRecord;
 use super::inventory::{Inventory, TOTAL_SLOTS};
 use super::item::ItemRegistry;
+use super::survival::{MAX_HEALTH, MAX_STAMINA};
 
 /// Player-save magic.
 pub(crate) const MAGIC: [u8; 4] = *b"VPLY";
 /// Current player-save version.
-pub(crate) const VERSION: u16 = 1;
+pub(crate) const VERSION: u16 = 2;
 const HEADER_BYTES: usize = 20;
 /// Upper bound on dropped entities in one save. A corrupt count must not
 /// trigger a huge allocation.
@@ -49,6 +50,9 @@ pub(crate) struct PlayerSave {
     pub(crate) position: Vec3,
     pub(crate) yaw: f32,
     pub(crate) pitch: f32,
+    pub(crate) health: u16,
+    pub(crate) stamina: u16,
+    pub(crate) spawn: Vec3,
     pub(crate) inventory: Inventory,
     pub(crate) entities: Vec<EntityRecord>,
 }
@@ -62,6 +66,11 @@ impl PlayerSave {
         put_f32(&mut payload, self.position.z);
         put_f32(&mut payload, self.yaw);
         put_f32(&mut payload, self.pitch);
+        put_u16(&mut payload, self.health);
+        put_u16(&mut payload, self.stamina);
+        put_f32(&mut payload, self.spawn.x);
+        put_f32(&mut payload, self.spawn.y);
+        put_f32(&mut payload, self.spawn.z);
         payload.push(u8::try_from(self.inventory.selected_index()).unwrap_or(0));
         put_u16(&mut payload, u16::try_from(TOTAL_SLOTS).unwrap_or(0));
         for index in 0..TOTAL_SLOTS {
@@ -109,7 +118,7 @@ impl PlayerSave {
             return Err(PlayerSaveError::BadMagic);
         }
         let version = u16::from_le_bytes([bytes[4], bytes[5]]);
-        if version != VERSION {
+        if version != 1 && version != VERSION {
             return Err(PlayerSaveError::UnsupportedVersion(version));
         }
         let seed = u64::from_le_bytes(
@@ -134,6 +143,17 @@ impl PlayerSave {
         let position = Vec3::new(reader.f32()?, reader.f32()?, reader.f32()?);
         let yaw = reader.f32()?;
         let pitch = reader.f32()?;
+        let (health, stamina, spawn) = if version == 1 {
+            (MAX_HEALTH, MAX_STAMINA, position)
+        } else {
+            let health = reader.u16()?;
+            let stamina = reader.u16()?;
+            if health > MAX_HEALTH || stamina > MAX_STAMINA {
+                return Err(PlayerSaveError::Malformed);
+            }
+            let spawn = Vec3::new(reader.f32()?, reader.f32()?, reader.f32()?);
+            (health, stamina, spawn)
+        };
         let selected = usize::from(reader.u8()?);
         let slot_count = usize::from(reader.u16()?);
         if slot_count != TOTAL_SLOTS {
@@ -191,6 +211,9 @@ impl PlayerSave {
             position,
             yaw,
             pitch,
+            health,
+            stamina,
+            spawn,
             inventory,
             entities,
         })
@@ -385,6 +408,9 @@ mod tests {
             position: Vec3::new(1.5, 2.0, 3.5),
             yaw: 0.75,
             pitch: -0.25,
+            health: 17,
+            stamina: 80,
+            spawn: Vec3::new(4.0, 5.0, 6.0),
             inventory,
             entities: vec![EntityRecord {
                 id: 7,
@@ -396,6 +422,54 @@ mod tests {
                 age: 1.5,
             }],
         }
+    }
+
+    fn encode_v1(save: &PlayerSave, registry: &ItemRegistry) -> Vec<u8> {
+        let mut payload = Vec::new();
+        put_f32(&mut payload, save.position.x);
+        put_f32(&mut payload, save.position.y);
+        put_f32(&mut payload, save.position.z);
+        put_f32(&mut payload, save.yaw);
+        put_f32(&mut payload, save.pitch);
+        payload.push(u8::try_from(save.inventory.selected_index()).unwrap_or(0));
+        put_u16(&mut payload, u16::try_from(TOTAL_SLOTS).unwrap_or(0));
+        for index in 0..TOTAL_SLOTS {
+            match save.inventory.slot(index) {
+                Some(stack) => {
+                    payload.push(1);
+                    put_str(&mut payload, registry.name(stack.item));
+                    put_u16(&mut payload, stack.count);
+                    put_u16(&mut payload, stack.durability);
+                }
+                None => payload.push(0),
+            }
+        }
+        put_u32(
+            &mut payload,
+            u32::try_from(save.entities.len()).unwrap_or(u32::MAX),
+        );
+        for entity in &save.entities {
+            put_u64(&mut payload, entity.id);
+            put_str(&mut payload, &entity.item);
+            put_u16(&mut payload, entity.count);
+            put_u16(&mut payload, entity.durability);
+            for value in entity.position {
+                put_f32(&mut payload, value);
+            }
+            for value in entity.velocity {
+                put_f32(&mut payload, value);
+            }
+            put_f32(&mut payload, entity.age);
+        }
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&MAGIC);
+        put_u16(&mut bytes, 1);
+        put_u16(&mut bytes, 0);
+        put_u64(&mut bytes, save.seed);
+        put_u32(&mut bytes, crc32(&payload));
+        bytes.extend_from_slice(&payload);
+        bytes
     }
 
     #[test]
@@ -414,8 +488,47 @@ mod tests {
         assert_eq!(decoded.position, save.position);
         assert_eq!(decoded.yaw, save.yaw);
         assert_eq!(decoded.pitch, save.pitch);
+        assert_eq!(decoded.health, save.health);
+        assert_eq!(decoded.stamina, save.stamina);
+        assert_eq!(decoded.spawn, save.spawn);
         assert_eq!(decoded.inventory, save.inventory);
         assert_eq!(decoded.entities, save.entities);
+    }
+
+    #[test]
+    fn a_version_1_save_upgrades_to_full_health_and_the_loaded_position() {
+        let registry = registry();
+        let save = sample(&registry);
+        let bytes = encode_v1(&save, &registry);
+
+        let decoded = PlayerSave::decode(&bytes, &registry).unwrap();
+
+        assert_eq!(decoded.health, MAX_HEALTH);
+        assert_eq!(decoded.stamina, MAX_STAMINA);
+        assert_eq!(decoded.spawn, save.position);
+        assert_eq!(decoded.inventory, save.inventory);
+        assert_eq!(decoded.entities, save.entities);
+    }
+
+    #[test]
+    fn out_of_range_survival_fields_are_rejected() {
+        let registry = registry();
+
+        let mut save = sample(&registry);
+        save.health = MAX_HEALTH + 1;
+        let bytes = save.encode(&registry);
+        assert!(matches!(
+            PlayerSave::decode(&bytes, &registry),
+            Err(PlayerSaveError::Malformed)
+        ));
+
+        let mut save = sample(&registry);
+        save.stamina = MAX_STAMINA + 1;
+        let bytes = save.encode(&registry);
+        assert!(matches!(
+            PlayerSave::decode(&bytes, &registry),
+            Err(PlayerSaveError::Malformed)
+        ));
     }
 
     #[test]
@@ -456,6 +569,11 @@ mod tests {
         for value in [0.0_f32; 5] {
             put_f32(&mut payload, value);
         }
+        put_u16(&mut payload, MAX_HEALTH);
+        put_u16(&mut payload, MAX_STAMINA);
+        for value in [0.0_f32; 3] {
+            put_f32(&mut payload, value);
+        }
         payload.push(0);
         put_u16(
             &mut payload,
@@ -487,6 +605,8 @@ mod tests {
 
         let loaded = PlayerSave::load(&path, &registry).unwrap().unwrap();
         assert_eq!(loaded.seed, 42);
+        assert_eq!(loaded.health, 17);
+        assert_eq!(loaded.stamina, 80);
         assert_eq!(loaded.inventory.slot(0).unwrap().count, 12);
 
         let bad = quarantine(&path).unwrap();
