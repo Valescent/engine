@@ -48,6 +48,13 @@ impl App {
             return;
         };
 
+        if self.death_pending {
+            if event.state == ElementState::Pressed && code == KeyCode::KeyR {
+                self.respawn_player();
+            }
+            return;
+        }
+
         match event.state {
             ElementState::Pressed => {
                 if event.repeat {

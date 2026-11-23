@@ -1,12 +1,12 @@
 # Gameplay core
 
 **Status:** `0.0.10.1` items and save, `0.0.10.2` UI, `0.0.10.3` crafting Phase 1, and the
-`0.0.10.4.1` survival state plus `VPLY` version 2 are implemented. Damage, death/respawn, the
-survival HUD, audio, and the full acceptance pass remain.
+`0.0.10.4` survival state, damage, death/respawn, sprint, and `VPLY` version 2 are implemented. The
+survival HUD, pause/death screens, audio, and the full acceptance pass remain.
 
 **Scope:** The headless gameplay state and the v1 demo wiring: items, inventory, tools, breaking,
-drops, item entities, survival state, the fixed tick, and the player save. It does not cover the UI
-layer, recipes, damage sources, audio, creatures, or the legacy chunk world's interaction path.
+drops, item entities, survival and damage, the fixed tick, and the player save. It does not cover
+the survival UI, recipes, audio, creatures, or the legacy chunk world's interaction path.
 
 This page is the detailed reference. The release plan is
 [0.0.10-0.0.19](roadmap-0.0.10-0.0.19.md), the milestone scope is [v0.0.10](v0.0.10-scope.md), the
@@ -34,7 +34,9 @@ or write a player save.
 | `src/game/tools.rs` | Tool classes, tiers, break rules, speed multipliers, and the drop gate. |
 | `src/game/drops.rs` | The content-pack drop table resolved through the item registry. |
 | `src/game/entities.rs` | Dropped-item entities, spawn merging, physics, pickup, spatial hash, despawn, and save records. |
-| `src/game/survival.rs` | Health, stamina, death flag, spawn point, and the fixed-tick stamina drain/regeneration. |
+| `src/game/environment.rs` | The solid, water, lava, and fire queries survival needs. |
+| `src/game/spawn.rs` | The nearest-safe respawn search over a column ring. |
+| `src/game/survival.rs` | Health, stamina, air, death flag, spawn point, and the fixed-tick stamina and hazard timers. |
 | `src/game/save.rs` | The `VPLY` envelope, CRC32, validation, atomic write, and quarantine. |
 | `src/game/state.rs` | `GameState`: inventory, survival, entities, break progress, fixed tick, and save/load. |
 | `src/app/game.rs` | The only world-aware glue: target names, hardness, break completion, drops, placement, and save paths. |
@@ -172,17 +174,27 @@ see [the crafting design](../design/crafting-system.md).
 
 ## Survival
 
-`game::survival::Survival` carries health (`0..=20`), stamina (`0..=100`), a death flag, and the
-respawn point. It is part of `GameState` and advances stamina on the fixed 60 Hz step: sprinting
-drains 20 points per second, and idle regeneration restores 15 per second.
+`game::survival::Survival` carries health (`0..=20`), stamina (`0..=100`), remaining air, a death
+flag, and the respawn point. It is part of `GameState` and advances on the fixed 60 Hz step.
 
-Health, stamina, and the spawn point are stored in `VPLY` version 2. A version 1 file loads with
-full health and stamina and uses the saved player position as the spawn point; the next save writes
-version 2.
+- **Sprint and jump.** Holding `Shift` while moving requests sprint speed (`6.3 m/s` instead of
+  `4.5`). Sprinting drains 20 stamina per second, idle regeneration restores 15, and a jump costs
+  5. A jump or sprint is refused at zero stamina.
+- **Fall damage.** The player tracks the highest point of the current fall. Landing after more than
+  three blocks deals one point per extra block. Water landings and debug flight are safe.
+- **Drowning.** The eye cell is probed for water. Air lasts 15 seconds; once empty, the player takes
+  one damage per second. Leaving water refills air.
+- **Lava and fire hooks.** `EnvironmentProbe` exposes `is_lava` and `is_fire`. Lava deals four damage
+  every 0.5 seconds; fire deals one per second. The placeholder content pack has neither block yet.
+- **Death and respawn.** At zero health the game reports death once, releases the cursor, and freezes
+  gameplay. `R` revives at the nearest safe cell: two non-solid, non-water spaces above a solid
+  floor, searched in rings around the stored spawn point. The inventory is kept.
+- **Persistence.** Health, stamina, and the spawn point are stored in `VPLY` version 2. A version 1
+  file loads with full health and stamina and uses the saved player position as the spawn point; the
+  next save writes version 2.
 
-Damage sources, the death/respawn flow, and the survival HUD land in the rest of `0.0.10.4`. Until
-then `GameState::tick` advances stamina with sprinting off, and the state is persisted but not
-shown.
+The survival HUD, damage flash, and the pause/death screens land in `0.0.10.4.3`. The current death
+path uses a log message and the `R` key.
 
 ## Tools, hardness, and breaks
 
@@ -499,7 +511,9 @@ quit/reopen persistence. The full manual pass belongs to `0.0.10.6`.
 | `src/game/tools.rs` | Break rules, speed, and the drop gate. |
 | `src/game/drops.rs` | Content-pack drop resolution. |
 | `src/game/entities.rs` | Spawn, merge, physics, pickup, despawn, and records. |
-| `src/game/survival.rs` | Health, stamina, spawn point, and stamina tick. |
+| `src/game/environment.rs` | Solid, water, lava, and fire survival queries. |
+| `src/game/spawn.rs` | Safe respawn search. |
+| `src/game/survival.rs` | Health, stamina, air, spawn point, stamina tick, and hazard timers. |
 | `src/game/save.rs` | `VPLY` encoding, validation, atomic write, and quarantine. |
 | `src/game/state.rs` | Fixed tick, break progress, and save/load. |
 | `src/app/game.rs` | Demo target resolution, break completion, placement, and save paths. |

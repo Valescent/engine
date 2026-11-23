@@ -6,6 +6,8 @@ pub(crate) const PLAYER_WIDTH: f32 = 0.6;
 pub(crate) const PLAYER_HEIGHT: f32 = 1.8;
 pub(crate) const EYE_HEIGHT: f32 = 1.62;
 pub(crate) const WALK_SPEED: f32 = 4.5;
+/// Sprinting speed while stamina remains.
+pub(crate) const SPRINT_SPEED: f32 = 6.3;
 pub(crate) const GRAVITY: f32 = 24.0;
 pub(crate) const JUMP_VELOCITY: f32 = 8.0;
 /// Horizontal and vertical speed while the debug fly toggle is on.
@@ -58,6 +60,8 @@ pub(crate) struct Player {
     pub(crate) on_ground: bool,
     /// Debug fly: no gravity, no collision, `Space` up and `Ctrl` down.
     pub(crate) flying: bool,
+    fall_peak: f32,
+    fall_distance: f32,
 }
 
 /// One frame of walking input.
@@ -68,6 +72,8 @@ pub(crate) struct PlayerInput {
     pub(crate) jump: bool,
     /// `Ctrl` while flying: descend. Ignored on foot.
     pub(crate) descend: bool,
+    /// Request the sprint speed multiplier.
+    pub(crate) sprint: bool,
     pub(crate) yaw: f32,
 }
 
@@ -78,7 +84,24 @@ impl Player {
             velocity: Vec3::ZERO,
             on_ground: false,
             flying: false,
+            fall_peak: position.y,
+            fall_distance: 0.0,
         }
+    }
+
+    /// Resets motion and fall tracking at a respawn point.
+    pub(crate) fn respawn(&mut self, position: Vec3) {
+        self.position = position;
+        self.velocity = Vec3::ZERO;
+        self.on_ground = false;
+        self.flying = false;
+        self.fall_peak = position.y;
+        self.fall_distance = 0.0;
+    }
+
+    /// Takes the distance of the last completed fall, if any.
+    pub(crate) fn take_fall_distance(&mut self) -> f32 {
+        std::mem::take(&mut self.fall_distance)
     }
 
     /// Toggles debug flight. Leaving it restores gravity and collision; entering
@@ -87,6 +110,8 @@ impl Player {
         self.flying = !self.flying;
         self.velocity = Vec3::ZERO;
         self.on_ground = false;
+        self.fall_distance = 0.0;
+        self.fall_peak = self.position.y;
     }
 
     pub(crate) fn eye_position(&self) -> Vec3 {
@@ -114,11 +139,18 @@ impl Player {
             return;
         }
 
+        let was_on_ground = self.on_ground;
         let (yaw_sin, yaw_cos) = input.yaw.sin_cos();
         let forward = Vec3::new(yaw_sin, 0.0, -yaw_cos);
         let right = Vec3::new(yaw_cos, 0.0, yaw_sin);
         let direction = (forward * input.forward + right * input.right).normalize_or_zero();
-        let speed = if self.flying { FLY_SPEED } else { WALK_SPEED };
+        let speed = if self.flying {
+            FLY_SPEED
+        } else if input.sprint && direction.length_squared() > 0.0 {
+            SPRINT_SPEED
+        } else {
+            WALK_SPEED
+        };
         self.velocity.x = direction.x * speed;
         self.velocity.z = direction.z * speed;
 
@@ -129,6 +161,8 @@ impl Player {
             self.velocity.y = (up - down) * FLY_SPEED;
             self.position += self.velocity * delta;
             self.on_ground = false;
+            self.fall_distance = 0.0;
+            self.fall_peak = self.position.y;
             return;
         }
 
@@ -148,6 +182,15 @@ impl Player {
                 self.position = before;
                 self.velocity[axis] = 0.0;
             }
+        }
+
+        if self.on_ground {
+            if !was_on_ground {
+                self.fall_distance = (self.fall_peak - self.position.y).max(0.0);
+            }
+            self.fall_peak = self.position.y;
+        } else {
+            self.fall_peak = self.fall_peak.max(self.position.y);
         }
     }
 
@@ -238,6 +281,7 @@ mod tests {
             right: 0.0,
             jump,
             descend: false,
+            sprint: false,
             yaw: 0.0,
         }
     }
@@ -291,6 +335,7 @@ mod tests {
             right: 1.0,
             jump: false,
             descend: false,
+            sprint: false,
             yaw: 0.0,
         };
         let ready = |position: Vec3| position.x < 31.0;
@@ -394,6 +439,7 @@ mod tests {
                 right: 0.0,
                 jump: false,
                 descend: false,
+                sprint: false,
                 yaw: std::f32::consts::FRAC_PI_2,
             },
             1.0,
@@ -420,6 +466,7 @@ mod tests {
                 right: 0.0,
                 jump: false,
                 descend: false,
+                sprint: false,
                 yaw: std::f32::consts::FRAC_PI_2,
             },
             1.0,
@@ -461,6 +508,7 @@ mod tests {
                 right: 1.0,
                 jump: false,
                 descend: false,
+                sprint: false,
                 yaw: std::f32::consts::FRAC_PI_2,
             },
             1.0,
@@ -471,5 +519,34 @@ mod tests {
         assert_eq!(player.velocity.x, 0.0);
         assert_eq!(player.velocity.z, 0.0);
         assert!(!player.aabb().intersects_block(IVec3::new(1, 1, 0)));
+    }
+
+    #[test]
+    fn sprinting_moves_faster_than_walking() {
+        let world = world_with(&[]);
+        let mut walking = Player::new(Vec3::ZERO);
+        let mut sprinting = Player::new(Vec3::ZERO);
+        let mut walk_input = no_input(false);
+        walk_input.forward = 1.0;
+        let mut sprint_input = walk_input;
+        sprint_input.sprint = true;
+
+        walking.update(&world, walk_input, 0.1);
+        sprinting.update(&world, sprint_input, 0.1);
+
+        assert!(sprinting.position.z.abs() > walking.position.z.abs());
+    }
+
+    #[test]
+    fn a_landing_reports_the_fall_distance() {
+        let world = world_with(&[IVec3::new(0, 0, 0)]);
+        let mut player = Player::new(Vec3::new(0.5, 5.0, 0.5));
+
+        for _ in 0..240 {
+            player.update(&world, no_input(false), 1.0 / 60.0);
+        }
+
+        assert!(player.on_ground);
+        assert!(player.take_fall_distance() > 3.0);
     }
 }

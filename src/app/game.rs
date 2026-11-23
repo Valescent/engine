@@ -9,14 +9,45 @@ use std::path::{Path, PathBuf};
 use glam::{IVec3, Vec3};
 use tracing::{debug, info, warn};
 
-use crate::game::{ItemKind, break_seconds, drops_for, quarantine};
+use crate::block::Block;
+use crate::content;
+use crate::demo::DemoRuntime;
+use crate::game::{
+    EnvironmentProbe, ItemKind, break_seconds, drops_for, fall_damage, find_safe_spawn, quarantine,
+};
 use crate::player::BlockSource;
-use crate::world::WORLD_DIRECTORY;
+use crate::world::{WORLD_DIRECTORY, World};
 
 use super::App;
 use super::input::place_position;
 
 const PLAYER_SAVE: &str = "player.dat";
+
+/// The block queries the live demo or legacy world answers for survival.
+struct AppEnvironment<'a> {
+    demo: Option<&'a DemoRuntime>,
+    world: &'a World,
+    pack: &'a content::ContentPack,
+}
+
+impl EnvironmentProbe for AppEnvironment<'_> {
+    fn is_solid(&self, cell: IVec3) -> bool {
+        match self.demo {
+            Some(demo) => demo.is_solid(cell),
+            None => self.world.is_solid(cell),
+        }
+    }
+
+    fn is_water(&self, cell: IVec3) -> bool {
+        match self.demo {
+            Some(demo) => demo
+                .block_at(cell)
+                .and_then(|id| self.pack.name(id))
+                .is_some_and(|name| name == "core:water"),
+            None => self.world.block(cell) == Block::Water,
+        }
+    }
+}
 
 impl App {
     /// The player save path for the live world.
@@ -42,6 +73,10 @@ impl App {
                 self.camera.set_yaw(loaded.yaw);
                 self.camera.set_pitch(loaded.pitch);
                 self.has_player_save = true;
+                if self.game.survival.is_dead() {
+                    self.death_pending = true;
+                    self.release_cursor();
+                }
                 info!(?path, "player restored");
             }
             Ok(None) => {}
@@ -89,6 +124,15 @@ impl App {
         self.game.cancel_break();
     }
 
+    /// The live world's survival probe.
+    fn environment(&self) -> AppEnvironment<'_> {
+        AppEnvironment {
+            demo: self.demo.as_ref(),
+            world: &self.world,
+            pack: &self.pack,
+        }
+    }
+
     /// Advances the fixed tick and applies the block that finished breaking.
     pub(super) fn tick_game(&mut self, delta: f32) {
         if self.demo.is_some() {
@@ -96,6 +140,28 @@ impl App {
         } else {
             self.game.set_break_target(IVec3::ZERO, 0.0, false);
         }
+        let (head_in_water, in_lava, on_fire, feet_in_water) = {
+            let probe = self.environment();
+            let head = self.player.eye_position().floor().as_ivec3();
+            let feet = self.player.position.floor().as_ivec3();
+            (
+                probe.is_water(head),
+                probe.is_lava(feet),
+                probe.is_fire(feet),
+                probe.is_water(feet),
+            )
+        };
+        self.game.set_environment(head_in_water, in_lava, on_fire);
+
+        let fall = self.player.take_fall_distance();
+        if fall > 0.0 && !feet_in_water {
+            let damage = fall_damage(fall);
+            if damage > 0 {
+                self.game.damage(damage);
+                debug!(fall, damage, "fall damage");
+            }
+        }
+
         let source: &dyn BlockSource = match &self.demo {
             Some(demo) => demo,
             None => &self.world,
@@ -108,6 +174,36 @@ impl App {
         if picked > 0 {
             debug!(picked, "picked up items");
         }
+        if self.game.take_death() {
+            self.on_death();
+        }
+    }
+
+    fn on_death(&mut self) {
+        if self.death_pending {
+            return;
+        }
+        self.death_pending = true;
+        self.end_break();
+        self.release_cursor();
+        self.pressed.clear();
+        warn!("player died");
+    }
+
+    /// Revives at the nearest safe respawn point.
+    pub(super) fn respawn_player(&mut self) {
+        let origin = self.game.survival.spawn();
+        let safe = {
+            let probe = self.environment();
+            find_safe_spawn(&probe, origin)
+        };
+        self.game.survival.set_spawn(safe);
+        let spawn = self.game.respawn();
+        self.player.respawn(spawn);
+        self.camera.set_position(self.player.eye_position());
+        self.death_pending = false;
+        self.capture_cursor();
+        info!(?spawn, "player respawned");
     }
 
     fn step_break_target(&mut self) {
@@ -253,4 +349,26 @@ fn spread_velocity(cell: IVec3) -> Vec3 {
     let x = f32::from((seed & 0xFF) as u8) / 255.0 - 0.5;
     let z = f32::from(((seed >> 8) & 0xFF) as u8) / 255.0 - 0.5;
     Vec3::new(x * 1.2, 2.5, z * 1.2)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_legacy_probe_reads_water_and_solidity() {
+        let mut world = World::default();
+        world.set_block(IVec3::ZERO, Block::Water);
+        let pack = crate::content::v1_default();
+        let probe = AppEnvironment {
+            demo: None,
+            world: &world,
+            pack: &pack,
+        };
+
+        assert!(probe.is_water(IVec3::ZERO));
+        assert!(!probe.is_solid(IVec3::ZERO));
+        assert!(!probe.is_lava(IVec3::ZERO));
+        assert!(!probe.is_fire(IVec3::ZERO));
+    }
 }

@@ -334,6 +334,7 @@ mod tests {
             right: 0.0,
             jump: false,
             descend: false,
+            sprint: false,
             yaw: 0.0,
         };
         for _ in 0..120 {
