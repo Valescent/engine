@@ -171,15 +171,15 @@ review-sized PR breakdown is in [the 0.0.10.4-0.0.11 plan](plan-0.0.10.4-0.0.11.
 
 - [x] Task: Add the health, stamina, and spawn state.
   - [x] Subtask: Health, stamina, death flag, spawn point, and stamina drain/regeneration.
-  - [ ] Subtask: Sprint/jump costs and the movement wiring land with damage and the UI.
+  - [x] Subtask: Sprint/jump costs, sprint speed, and the movement wiring.
 - [x] Task: Add the `VPLY` version 2 save.
   - [x] Subtask: Save health, stamina, and the spawn point; keep a version 1 decode path.
-- [ ] Task: Add environmental damage.
-  - [ ] Subtask: Fall damage, drowning, and lava/fire hooks through an environment probe.
+- [x] Task: Add environmental damage.
+  - [x] Subtask: Fall damage, drowning, and lava/fire hooks through an environment probe.
   - [ ] Subtask: Damage feedback, screen effects, and audio hooks.
-- [ ] Task: Add death, respawn, and spawn safety.
-  - [ ] Subtask: Death event, respawn at the world spawn, and spawn search.
-  - [ ] Subtask: Never spawn inside a solid or flooded cell. A bed item is deferred.
+- [x] Task: Add death, respawn, and spawn safety.
+  - [x] Subtask: Death event, respawn at the world spawn, and safe-spawn search.
+  - [x] Subtask: Never spawn inside a solid or flooded cell. A bed item is deferred.
 - [ ] Task: Add the survival HUD and overlays.
   - [ ] Subtask: Health and stamina bars, damage flash, pause screen, and death screen.
   - [ ] Subtask: `Escape` opens pause when no inventory or station screen is open.

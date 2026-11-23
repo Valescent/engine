@@ -127,6 +127,7 @@ mod tests {
             right: 0.0,
             jump: false,
             descend: false,
+            sprint: false,
             yaw: std::f32::consts::FRAC_PI_4,
         };
 
@@ -212,6 +213,7 @@ mod tests {
             right: 1.0,
             jump: false,
             descend: false,
+            sprint: false,
             yaw: std::f32::consts::FRAC_PI_4,
         };
         let frames = 600_u32;

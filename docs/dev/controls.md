@@ -94,6 +94,9 @@ the v0.0.4 click-to-break behaviour until the demo becomes the default.
 | `1`-`9` | Select a hotbar slot | Current (demo) |
 | `E` | Open or close the inventory | Current (demo) |
 | `Escape` | Close the inventory if open, otherwise release the cursor | Current (demo) |
+| `Shift` while moving | Sprint while stamina remains | Current (demo) |
+| `Space` | Jump; costs 5 stamina | Current (demo) |
+| `R` | Respawn after death | Current (demo) |
 | Arrow keys | Move the inventory focus | Current (demo) |
 | `Enter` / `Space` | Activate the focused inventory slot | Current (demo) |
 | Left click | Pick up, place, or swap a stack while the inventory is open | Current (demo) |
@@ -159,6 +162,17 @@ the v0.0.4 click-to-break behaviour until the demo becomes the default.
 - Hovering a slot shows its name, kind, count, and durability.
 - If the inventory is full, a held stack keeps the screen open rather than being destroyed.
 
+## Survival (0.0.10.4, demo)
+
+- Holding `Shift` while moving sprints at `6.3 m/s` and drains stamina at 20 per second.
+- Jumping costs 5 stamina. A jump or sprint is refused at zero stamina.
+- Falling more than three blocks deals one damage per extra block. Water landings are safe.
+- The eye cell is probed for water. Air lasts 15 seconds, then the player takes one damage per
+  second. Lava and fire hooks use the same environment probe.
+- At zero health gameplay freezes, the cursor releases, and `R` respawns at the nearest safe cell.
+  The inventory is kept.
+- The health/stamina HUD and the pause/death screens land later in `0.0.10.4`.
+
 ## Crafting (0.0.10.3)
 
 - The inventory screen gains a 2x2 crafting grid and output slot.
@@ -198,11 +212,11 @@ the v0.0.4 click-to-break behaviour until the demo becomes the default.
 
 | Action | Status |
 |---|---|
-| Sprint | No binding. Walk speed is fixed. |
-| Crouch | No binding. |
+| Sprint | `Shift` while moving; drains stamina. |
+| Crouch / sneak | No binding. |
 | Mouse-wheel hotbar | No binding. `1`-`9` select in the demo; `1`-`5` in the legacy path. |
 | Inventory (`E`), drop (`Q`) | `E` opens the inventory. `Q` is planned; no drop binding yet. |
-| Pause / menu | No binding. `Escape` releases the cursor and cancels a break. |
+| Pause / menu | `Escape` releases the cursor and cancels a break; the pause screen is planned for `0.0.10.4`. |
 | Gamepad | No input support today; not scheduled. |
 
 ## Terrain demo

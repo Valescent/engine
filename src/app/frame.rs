@@ -7,14 +7,13 @@ use std::time::{Duration, Instant};
 use glam::{IVec2, Vec2, Vec3};
 use tracing::{debug, error, info, warn};
 use winit::dpi::PhysicalSize;
-use winit::keyboard::KeyCode;
 
 use crate::demo::DemoRuntime;
 use crate::frustum::Frustum;
 use crate::mesh::Lod;
 use crate::mesher::{MeshKind, MeshPool, MeshQueue, Priority, collect_finished};
 use crate::metrics;
-use crate::player::{Player, PlayerInput};
+use crate::player::Player;
 use crate::renderer::{FrameStats, Renderer, RendererError, TerrainSection};
 use crate::streaming::Streaming;
 use crate::voxel::build_highlight_mesh;
@@ -22,7 +21,6 @@ use crate::world::{CHUNK_COLUMN, ChunkCoord};
 use crate::world_io::{insert_generated_chunk, release_column_tracked, save_directory};
 
 use super::App;
-use super::input::axis;
 
 const MAX_FRAME_DELTA: Duration = Duration::from_millis(100);
 const FRAME_LOG_INTERVAL: Duration = Duration::from_secs(1);
@@ -416,44 +414,6 @@ impl App {
     }
 
     #[allow(clippy::cast_precision_loss)]
-    /// Builds this frame's movement input and advances the player against
-    /// whichever block source is live: the demo patch, or the legacy world.
-    fn step_player(&mut self, delta_seconds: f32) {
-        let forward_axis = axis(
-            self.pressed.contains(&KeyCode::KeyW),
-            self.pressed.contains(&KeyCode::KeyS),
-        );
-        let right_axis = axis(
-            self.pressed.contains(&KeyCode::KeyD),
-            self.pressed.contains(&KeyCode::KeyA),
-        );
-        let jump_pressed = std::mem::take(&mut self.jump_requested);
-        let input = PlayerInput {
-            forward: forward_axis,
-            right: right_axis,
-            jump: if self.player.flying {
-                self.pressed.contains(&KeyCode::Space)
-            } else {
-                jump_pressed
-            },
-            descend: self.player.flying && self.modifiers.control_key(),
-            yaw: self.camera.yaw(),
-        };
-        profiling::scope!("player update");
-        let streaming = self.streaming.as_ref();
-        let demo = self.demo.as_ref();
-        let ready = |position: Vec3| match demo {
-            Some(demo) => demo.is_ready(position),
-            None => streaming.is_none_or(|streaming| streaming.aabb_ready(position)),
-        };
-        let source: &dyn crate::player::BlockSource = match &self.demo {
-            Some(demo) => demo,
-            None => &self.world,
-        };
-        self.player
-            .update_guarded(source, input, delta_seconds, &ready);
-    }
-
     #[allow(clippy::cast_precision_loss, clippy::too_many_lines)]
     pub(super) fn redraw(&mut self) {
         if self.occluded {
@@ -472,7 +432,7 @@ impl App {
         let player = Streaming::column_at(self.player.position);
         let player_column = (player.x, player.y);
         self.tick_demo(player_column);
-        if self.focused {
+        if self.focused && !self.death_pending {
             let delta_seconds = elapsed.min(MAX_FRAME_DELTA).as_secs_f32();
             self.step_player(delta_seconds);
             self.tick_game(delta_seconds);

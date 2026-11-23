@@ -74,7 +74,7 @@ src/
 | `src/app/game.rs` | The v1 gameplay glue: target names and hardness, hold-to-break, block removal and drops, placement rules, pickup upload, and the player save/load paths. |
 | `src/app/ui.rs` | The egui/winit bridge: event forwarding, the UI-first capture decision, `take_egui_input`, `run_pass`, platform output, tessellation, `UiFrame` construction, and inventory open/close. |
 | `src/app/frame.rs` | Per-frame work: tick and redraw order, frame delta and timing accumulation, `FrameAccumulator`, overlay text and stats, resize, mesh request/upload and column streaming, and the demo-to-renderer upload adapter. |
-| `src/game/` | The headless gameplay core: item identity and stacks, inventory and hotbar, tool classes and break rules, drop tables, item entities, survival state, the `VPLY` save, and the fixed-tick `GameState`. It names no `winit` or `wgpu` type. |
+| `src/game/` | The headless gameplay core: item identity and stacks, inventory and hotbar, tool classes and break rules, drop tables, item entities, survival state, environment probes, damage and respawn, the `VPLY` save, and the fixed-tick `GameState`. It names no `winit` or `wgpu` type. |
 | `src/ui/` | The UI state and screens: `UiState`, pointer/keyboard ownership, crosshair, nine-slot hotbar, item colours, counts, durability, interaction prompt, and the inventory grid with drag/drop, shift-click, tooltips, and keyboard focus. See [UI](ui.md). |
 | `src/demo/mod.rs` | `DemoRuntime`, the demo's one app-facing seam: it owns the patch, ring, save worker, repair prompt, pending rebuild, and edit queue, and exposes `open`, `tick`, `edit`, `save`, `shutdown`, `repair`, `stats`, and the read-only overlay/upload accessors. Also `DemoFrame`, `DemoStats`, shared constants, and the runtime tests. |
 | `src/demo/patch.rs` | `TerrainDemo` state, resident columns, block access and collision, light/mesh installation, LOD selection, and the light table. |
@@ -172,8 +172,9 @@ player's `BlockSource`, and the content pack.
 tick, and the `VPLY` player save. It names no `winit` or `wgpu` type. `App` holds a cached
 `ContentPack`, an `ItemRegistry`, a `GameState`, and a `break_held` flag. `src/app/game.rs` is the
 only world-aware glue: it resolves a raycast to a stable block name and hardness, drives the break
-target, applies the completed edit through `DemoRuntime::edit`, spawns drops, places items, and
-loads or saves the player file. The renderer reads only the entity list and the break fraction.
+target, applies the completed edit through `DemoRuntime::edit`, spawns drops, places items, probes
+survival hazards, respawns the player, and loads or saves the player file. The renderer reads only
+the entity list and the break fraction.
 See [Gameplay core](gameplay.md) for the item table, break rules, save layout, and edge cases.
 
 `0.0.10.3` implements crafting Phase 1 in `game/recipe/`, `game/crafting.rs`, and

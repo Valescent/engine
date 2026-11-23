@@ -6,6 +6,7 @@ mod frame;
 mod game;
 mod hierarchy;
 mod input;
+mod movement;
 mod ui;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -140,6 +141,8 @@ pub(crate) struct App {
     /// Inventory, break progress, drops, and the fixed tick.
     pub(crate) game: GameState,
     pub(crate) break_held: bool,
+    /// True after survival health reaches zero until the player respawns.
+    pub(crate) death_pending: bool,
     /// egui state shared by the winit adapter and the renderer upload.
     pub(crate) egui_ctx: egui::Context,
     pub(crate) egui_state: Option<egui_winit::State>,
@@ -249,6 +252,7 @@ impl App {
             recipes,
             game,
             break_held: false,
+            death_pending: false,
             egui_ctx,
             egui_state: None,
             ui,

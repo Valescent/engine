@@ -28,6 +28,10 @@ struct BreakTarget {
 }
 
 /// Everything the player owns and the world simulates between saves.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "sprint, water, lava, fire, and death-report state are independent survival flags"
+)]
 #[derive(Clone, Debug, Default)]
 pub(crate) struct GameState {
     pub(crate) inventory: Inventory,
@@ -37,6 +41,11 @@ pub(crate) struct GameState {
     break_elapsed: f32,
     completed_break: Option<IVec3>,
     accumulator: f32,
+    sprinting: bool,
+    head_in_water: bool,
+    in_lava: bool,
+    on_fire: bool,
+    death_reported: bool,
 }
 
 /// Where a loaded save puts the player.
@@ -57,6 +66,44 @@ impl GameState {
             survival: Survival::new(spawn),
             ..Self::default()
         }
+    }
+
+    /// Sets whether sprinting is held for the next fixed tick.
+    pub(crate) fn set_sprinting(&mut self, sprinting: bool) {
+        self.sprinting = sprinting;
+    }
+
+    /// Sets the environment samples for the next fixed tick.
+    pub(crate) fn set_environment(&mut self, head_in_water: bool, in_lava: bool, on_fire: bool) {
+        self.head_in_water = head_in_water;
+        self.in_lava = in_lava;
+        self.on_fire = on_fire;
+    }
+
+    /// Applies survival damage.
+    pub(crate) fn damage(&mut self, amount: u16) -> bool {
+        self.survival.damage(amount)
+    }
+
+    /// Reports a death once, until the next respawn.
+    pub(crate) fn take_death(&mut self) -> bool {
+        if self.survival.is_dead() && !self.death_reported {
+            self.death_reported = true;
+            return true;
+        }
+        false
+    }
+
+    /// Revives the player at the stored spawn point and returns it.
+    pub(crate) fn respawn(&mut self) -> Vec3 {
+        self.survival.revive();
+        self.death_reported = false;
+        self.sprinting = false;
+        self.head_in_water = false;
+        self.in_lava = false;
+        self.on_fire = false;
+        self.cancel_break();
+        self.survival.spawn()
     }
 
     /// Sets the block the player is currently holding the break button on.
@@ -114,7 +161,16 @@ impl GameState {
         while self.accumulator >= TICK_SECONDS {
             self.accumulator -= TICK_SECONDS;
             self.entities.tick(world, TICK_SECONDS);
-            self.survival.tick(TICK_SECONDS, false);
+            self.survival.tick(TICK_SECONDS, self.sprinting);
+            let damage = self.survival.tick_environment(
+                TICK_SECONDS,
+                self.head_in_water,
+                self.in_lava,
+                self.on_fire,
+            );
+            if damage > 0 {
+                self.survival.damage(damage);
+            }
             if let Some(target) = self.break_target {
                 self.break_elapsed += TICK_SECONDS;
                 if self.break_elapsed >= target.total {
@@ -191,6 +247,11 @@ impl GameState {
         }
         self.inventory = save.inventory;
         self.survival = Survival::from_parts(save.health, save.stamina, save.spawn);
+        self.death_reported = false;
+        self.sprinting = false;
+        self.head_in_water = false;
+        self.in_lava = false;
+        self.on_fire = false;
         self.entities = EntityStore::from_records(save.entities, registry);
         Ok(Some(LoadedGame {
             position: save.position,
@@ -217,6 +278,20 @@ mod tests {
         let state = GameState::new(Vec3::ZERO);
         assert!(state.inventory.selected().is_none());
         assert_eq!(state.inventory.iter().count(), 0);
+    }
+
+    #[test]
+    fn damage_reports_death_once_and_respawn_revives_at_the_spawn() {
+        let spawn = Vec3::new(1.0, 2.0, 3.0);
+        let mut state = GameState::new(spawn);
+
+        state.damage(u16::MAX);
+        assert!(state.take_death());
+        assert!(!state.take_death());
+
+        assert_eq!(state.respawn(), spawn);
+        assert!(!state.survival.is_dead());
+        assert_eq!(state.survival.health(), 20);
     }
 
     #[test]
