@@ -241,7 +241,7 @@ All integers are little-endian.
 | Offset | Width | Field |
 |---|---|---|
 | `0..4` | 4 | magic `"VPLY"` |
-| `4..6` | 2 | `format_version: u16` (currently `1`) |
+| `4..6` | 2 | `format_version: u16` (currently `2`) |
 | `6..8` | 2 | reserved, zero |
 | `8..16` | 8 | `seed: u64` |
 | `16..20` | 4 | `crc32` over the payload |
@@ -257,11 +257,18 @@ header itself is not covered: magic, version, and seed are parsed before the pay
 | 1 | 12 | player feet position: `f32 x`, `f32 y`, `f32 z` |
 | 2 | 4 | view yaw, radians |
 | 3 | 4 | view pitch, radians |
-| 4 | 1 | selected hotbar slot (`0..8`) |
-| 5 | 2 | slot count (must be `37`) |
-| 6 | variable | 37 slot records |
-| 7 | 4 | dropped-entity count (`u32`, at most `4,096`) |
-| 8 | variable | entity records |
+| 4 | 2 | health (`u16`, `0..=20`) |
+| 5 | 2 | stamina (`u16`, `0..=100`) |
+| 6 | 12 | respawn point: `f32 x`, `f32 y`, `f32 z` |
+| 7 | 1 | selected hotbar slot (`0..8`) |
+| 8 | 2 | slot count (must be `37`) |
+| 9 | variable | 37 slot records |
+| 10 | 4 | dropped-entity count (`u32`, at most `4,096`) |
+| 11 | variable | entity records |
+
+Version 1 had no health, stamina, or spawn fields. A version 1 payload is read as full health, full
+stamina, and a spawn point equal to the saved player position; it is written back as version 2 on
+the next save.
 
 A slot record is:
 
@@ -295,14 +302,15 @@ unknown name as `UnknownItem`.
 `PlayerSave::decode` checks, in order:
 
 1. At least 20 bytes and the `VPLY` magic.
-2. Version exactly `1`; anything else is `UnsupportedVersion`.
+2. Version `1` or `2`; anything else is `UnsupportedVersion`.
 3. The payload CRC.
-4. A slot count of exactly `37`.
-5. Presence bytes of `0` or `1`.
-6. Every present item name resolves in the registry.
-7. Every float is finite.
-8. An entity count of at most `4,096`, checked before the vector is allocated.
-9. No trailing payload bytes.
+4. For version 2, health in `0..=20` and stamina in `0..=100`.
+5. A slot count of exactly `37`.
+6. Presence bytes of `0` or `1`.
+7. Every present item name resolves in the registry.
+8. Every float is finite.
+9. An entity count of at most `4,096`, checked before the vector is allocated.
+10. No trailing payload bytes.
 
 The reserved header bytes are ignored. The caller treats a seed mismatch as another world and does
 not load the file; that is not a format error.
@@ -320,13 +328,9 @@ starts a fresh run. It never applies a partial file.
 
 ### Versioning
 
-`VERSION` is `1` today. The release ships no older player format, so there is no migration function
-yet; an unknown version is rejected and quarantined. The slot count and field order are part of the
-version.
-
-The `0.0.10.4` checkpoint plans version 2: health, stamina, and the spawn point. That change adds a
-`decode_v1` path before the current decoder, so existing player files load once and are written as
-v2 on the next save. The implementation stays v1 until that PR lands.
+`VERSION` is `2`. Version 1 files are accepted and upgraded in memory: health and stamina start
+full, and the spawn point is the saved player position. The next write stores version 2. Unknown
+versions are rejected and quarantined. The slot count and field order are part of the version.
 
 ## Implementation status
 
@@ -341,7 +345,7 @@ The format above is complete; this table is about code, not design. No open form
 | Engine wiring | `TERRAIN_DEMO=1` opens `world/terrain-demo`, layers saved sections over generation by `baseline_hash`, replays recovered journal frames newer than the header revision, saves those sections, then advances the header | Streaming/LOD world integration |
 | Migration | Header version 1 upgrades to version 2 on open; `MigrationState::InProgress`, `migration.journal` records/resume, section canonicalisation, `terrain-gen migrate --world <dir>`, and the `migration-report-<date>.json` bundle are implemented | A decoder for a genuine older section record format |
 | `world-repair` | `SectionStore::repair` implements restore-backup, quarantine, and salvage; `terrain-gen repair --world <dir> --section <cx,cz,sy> --action restore\|quarantine\|salvage` is the CLI; `TERRAIN_DEMO=1` shows an in-app prompt with `R`/`Q`/`S` or left/middle/right click and resumes saves after the choice | - |
-| Player save (`VPLY`) | Version 1 header and payload, CRC32, file/directory fsync, atomic rename, quarantine, 4,096-entity cap | Version 2 with health, stamina, spawn point, and `decode_v1` planned for `0.0.10.4` |
+| Player save (`VPLY`) | Version 2 header and payload with health, stamina, and spawn point; version 1 decode path; CRC32, file/directory fsync, atomic rename, quarantine, 4,096-entity cap | Migration and corruption coverage lands in `0.0.10.6` |
 
 `save::SectionStore` writes and reads section files with write-temp, fsync, verify, rotation to
 `.bak`, and a directory fsync where the platform supports one (Windows has none). Opening promotes a

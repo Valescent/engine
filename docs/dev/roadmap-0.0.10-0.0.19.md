@@ -169,9 +169,11 @@ and automation are Phase 2+; see [crafting-system.md](../design/crafting-system.
 Health, stamina, and the spawn point are persisted in `VPLY` version 2 in this checkpoint. The
 review-sized PR breakdown is in [the 0.0.10.4-0.0.11 plan](plan-0.0.10.4-0.0.11.md).
 
-- [ ] Task: Add health and stamina.
-  - [ ] Subtask: Health, stamina, sprint/jump costs, regeneration, and the damage clamps.
-  - [ ] Subtask: `VPLY` version 2 adds health, stamina, and the spawn point, with a `decode_v1` path.
+- [x] Task: Add the health, stamina, and spawn state.
+  - [x] Subtask: Health, stamina, death flag, spawn point, and stamina drain/regeneration.
+  - [ ] Subtask: Sprint/jump costs and the movement wiring land with damage and the UI.
+- [x] Task: Add the `VPLY` version 2 save.
+  - [x] Subtask: Save health, stamina, and the spawn point; keep a version 1 decode path.
 - [ ] Task: Add environmental damage.
   - [ ] Subtask: Fall damage, drowning, and lava/fire hooks through an environment probe.
   - [ ] Subtask: Damage feedback, screen effects, and audio hooks.

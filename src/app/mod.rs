@@ -193,7 +193,7 @@ impl App {
         let pack = crate::content::v1_default();
         let items = ItemRegistry::builtin(&pack);
         let recipes = RecipeBook::builtin(&items).expect("the built-in recipe table is valid");
-        let game = GameState::new();
+        let game = GameState::new(spawn);
         let egui_ctx = egui::Context::default();
         egui_ctx.set_visuals(egui::Visuals::dark());
         let mut ui = UiState::new();

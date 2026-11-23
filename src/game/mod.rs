@@ -12,6 +12,7 @@ mod item;
 mod recipe;
 mod save;
 mod state;
+mod survival;
 mod tools;
 
 pub(crate) use crafting::{

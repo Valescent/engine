@@ -9,6 +9,7 @@ use super::entities::EntityStore;
 use super::inventory::Inventory;
 use super::item::ItemRegistry;
 use super::save::{PlayerSave, PlayerSaveError};
+use super::survival::Survival;
 use super::tools::Tool;
 use crate::player::BlockSource;
 
@@ -30,6 +31,7 @@ struct BreakTarget {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct GameState {
     pub(crate) inventory: Inventory,
+    pub(crate) survival: Survival,
     pub(crate) entities: EntityStore,
     break_target: Option<BreakTarget>,
     break_elapsed: f32,
@@ -46,12 +48,15 @@ pub(crate) struct LoadedGame {
 }
 
 impl GameState {
-    /// Creates a new run with an empty inventory.
+    /// Creates a new run with an empty inventory and full survival state.
     ///
-    /// The wood-to-stone chain now starts by hand: punch a tree, craft planks
-    /// and sticks, place a workbench, and make the first wooden pickaxe.
-    pub(crate) fn new() -> Self {
-        Self::default()
+    /// The wood-to-stone chain starts by hand: punch a tree, craft planks and
+    /// sticks, place a workbench, and make the first wooden pickaxe.
+    pub(crate) fn new(spawn: Vec3) -> Self {
+        Self {
+            survival: Survival::new(spawn),
+            ..Self::default()
+        }
     }
 
     /// Sets the block the player is currently holding the break button on.
@@ -109,6 +114,7 @@ impl GameState {
         while self.accumulator >= TICK_SECONDS {
             self.accumulator -= TICK_SECONDS;
             self.entities.tick(world, TICK_SECONDS);
+            self.survival.tick(TICK_SECONDS, false);
             if let Some(target) = self.break_target {
                 self.break_elapsed += TICK_SECONDS;
                 if self.break_elapsed >= target.total {
@@ -154,6 +160,9 @@ impl GameState {
             position,
             yaw,
             pitch,
+            health: self.survival.health(),
+            stamina: self.survival.stamina(),
+            spawn: self.survival.spawn(),
             inventory: self.inventory.clone(),
             entities: self.entities.records(registry),
         };
@@ -181,6 +190,7 @@ impl GameState {
             return Ok(None);
         }
         self.inventory = save.inventory;
+        self.survival = Survival::from_parts(save.health, save.stamina, save.spawn);
         self.entities = EntityStore::from_records(save.entities, registry);
         Ok(Some(LoadedGame {
             position: save.position,
@@ -204,14 +214,14 @@ mod tests {
 
     #[test]
     fn a_new_run_starts_with_an_empty_inventory() {
-        let state = GameState::new();
+        let state = GameState::new(Vec3::ZERO);
         assert!(state.inventory.selected().is_none());
         assert_eq!(state.inventory.iter().count(), 0);
     }
 
     #[test]
     fn a_break_completes_on_the_fixed_tick() {
-        let mut state = GameState::new();
+        let mut state = GameState::new(Vec3::ZERO);
         let cell = IVec3::new(1, 2, 3);
         state.set_break_target(cell, 0.1, true);
 
@@ -225,7 +235,7 @@ mod tests {
 
     #[test]
     fn releasing_or_changing_the_target_cancels_progress() {
-        let mut state = GameState::new();
+        let mut state = GameState::new(Vec3::ZERO);
         state.set_break_target(IVec3::new(1, 2, 3), 1.0, true);
         state.tick(1.0 / 60.0, &World::default());
         let progress = state.break_fraction().unwrap().1;
@@ -246,7 +256,7 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("player.dat");
 
-        let mut state = GameState::new();
+        let mut state = GameState::new(Vec3::ZERO);
         state
             .inventory
             .add(registry.stack("core:stone", 9).unwrap(), &registry);
@@ -282,7 +292,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("player.dat");
-        GameState::new()
+        GameState::new(Vec3::ZERO)
             .save(&path, 1, Vec3::ZERO, 0.0, 0.0, &registry)
             .unwrap();
 
@@ -302,7 +312,7 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("player.dat");
 
-        let mut state = GameState::new();
+        let mut state = GameState::new(Vec3::ZERO);
         state
             .inventory
             .add(registry.stack("core:wooden_pickaxe", 1).unwrap(), &registry);

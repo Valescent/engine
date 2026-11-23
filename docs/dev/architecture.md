@@ -74,7 +74,7 @@ src/
 | `src/app/game.rs` | The v1 gameplay glue: target names and hardness, hold-to-break, block removal and drops, placement rules, pickup upload, and the player save/load paths. |
 | `src/app/ui.rs` | The egui/winit bridge: event forwarding, the UI-first capture decision, `take_egui_input`, `run_pass`, platform output, tessellation, `UiFrame` construction, and inventory open/close. |
 | `src/app/frame.rs` | Per-frame work: tick and redraw order, frame delta and timing accumulation, `FrameAccumulator`, overlay text and stats, resize, mesh request/upload and column streaming, and the demo-to-renderer upload adapter. |
-| `src/game/` | The headless gameplay core: item identity and stacks, inventory and hotbar, tool classes and break rules, drop tables, item entities, the `VPLY` save, and the fixed-tick `GameState`. It names no `winit` or `wgpu` type. |
+| `src/game/` | The headless gameplay core: item identity and stacks, inventory and hotbar, tool classes and break rules, drop tables, item entities, survival state, the `VPLY` save, and the fixed-tick `GameState`. It names no `winit` or `wgpu` type. |
 | `src/ui/` | The UI state and screens: `UiState`, pointer/keyboard ownership, crosshair, nine-slot hotbar, item colours, counts, durability, interaction prompt, and the inventory grid with drag/drop, shift-click, tooltips, and keyboard focus. See [UI](ui.md). |
 | `src/demo/mod.rs` | `DemoRuntime`, the demo's one app-facing seam: it owns the patch, ring, save worker, repair prompt, pending rebuild, and edit queue, and exposes `open`, `tick`, `edit`, `save`, `shutdown`, `repair`, `stats`, and the read-only overlay/upload accessors. Also `DemoFrame`, `DemoStats`, shared constants, and the runtime tests. |
 | `src/demo/patch.rs` | `TerrainDemo` state, resident columns, block access and collision, light/mesh installation, LOD selection, and the light table. |
@@ -184,7 +184,7 @@ crafting panel. The full grammar and later phases are in
 
 ## Ownership
 
-- `App` owns the window handle, renderer, world, player, camera, sky clock, selected block, input state, mesh queue, worker pool, hierarchy selection and uploaded-section set, horizon bins, frame timing, one `Option<DemoRuntime>`, the cached content pack, the item registry, the compiled recipe book, the `GameState` (inventory, item entities, break progress, and the fixed tick), and the egui context, winit adapter, and `UiState`.
+- `App` owns the window handle, renderer, world, player, camera, sky clock, selected block, input state, mesh queue, worker pool, hierarchy selection and uploaded-section set, horizon bins, frame timing, one `Option<DemoRuntime>`, the cached content pack, the item registry, the compiled recipe book, the `GameState` (inventory, survival, item entities, break progress, and the fixed tick), and the egui context, winit adapter, and `UiState`.
 - `UiState` owns the open station, cursor stack, focused slot, transient crafting grid, recipe search and selection, and the last craft error. Closing returns the grid and cursor to the inventory.
 - `DemoRuntime` owns the v1 patch, column ring and workers, save worker, repair prompt, pending rebuild, and edit queue. It returns a `DemoFrame` instead of holding the renderer.
 - `Renderer` owns the `wgpu` instance, surface, device, queue, surface configuration, chunk and highlight pipelines, camera uniform, the quad-pool renderer, the per-chunk fallback buffers and origin uniforms, the block texture array, the depth attachment, and the egui textures, buffers, and color-only UI pass.

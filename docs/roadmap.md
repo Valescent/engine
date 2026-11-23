@@ -405,6 +405,10 @@ tagged, mirrored, station-gated, first-match, direct-craft, grid-craft, full-inv
 salvage, and transient-grid return paths are covered headlessly. The terrain golden file and the
 pinned content hashes were regenerated for the three new block records.
 
+**Measured after the `0.0.10.4.1` survival state:** 520 engine library tests and 411 terrain-core
+library tests pass. `VPLY` version 2 round-trips health, stamina, and the spawn point and accepts
+version 1 files. The survival state covers damage, death, revive, stamina drain, and regeneration.
+
 **Measured after the `0.0.10.2` UI slice:** 477 engine library tests and 411 terrain-core library
 tests pass; captured windowed frames show the crosshair, nine-slot hotbar, selected border,
 temporary pickaxe icon, durability bar, existing FPS overlay, and the full inventory screen with

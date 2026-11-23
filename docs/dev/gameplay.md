@@ -1,11 +1,12 @@
 # Gameplay core
 
-**Status:** `0.0.10.1` items and save, `0.0.10.2` UI, and `0.0.10.3` crafting Phase 1 are
-implemented. Survival, audio, and the full acceptance pass are later 0.0.10 checkpoints.
+**Status:** `0.0.10.1` items and save, `0.0.10.2` UI, `0.0.10.3` crafting Phase 1, and the
+`0.0.10.4.1` survival state plus `VPLY` version 2 are implemented. Damage, death/respawn, the
+survival HUD, audio, and the full acceptance pass remain.
 
 **Scope:** The headless gameplay state and the v1 demo wiring: items, inventory, tools, breaking,
-drops, item entities, the fixed tick, and the player save. It does not cover the UI layer, recipes,
-health, audio, creatures, or the legacy chunk world's interaction path.
+drops, item entities, survival state, the fixed tick, and the player save. It does not cover the UI
+layer, recipes, damage sources, audio, creatures, or the legacy chunk world's interaction path.
 
 This page is the detailed reference. The release plan is
 [0.0.10-0.0.19](roadmap-0.0.10-0.0.19.md), the milestone scope is [v0.0.10](v0.0.10-scope.md), the
@@ -33,8 +34,9 @@ or write a player save.
 | `src/game/tools.rs` | Tool classes, tiers, break rules, speed multipliers, and the drop gate. |
 | `src/game/drops.rs` | The content-pack drop table resolved through the item registry. |
 | `src/game/entities.rs` | Dropped-item entities, spawn merging, physics, pickup, spatial hash, despawn, and save records. |
+| `src/game/survival.rs` | Health, stamina, death flag, spawn point, and the fixed-tick stamina drain/regeneration. |
 | `src/game/save.rs` | The `VPLY` envelope, CRC32, validation, atomic write, and quarantine. |
-| `src/game/state.rs` | `GameState`: inventory, entities, break progress, fixed tick, and save/load. |
+| `src/game/state.rs` | `GameState`: inventory, survival, entities, break progress, fixed tick, and save/load. |
 | `src/app/game.rs` | The only world-aware glue: target names, hardness, break completion, drops, placement, and save paths. |
 | `src/renderer/items.rs` | The placeholder dropped-item cube pass. |
 | `src/highlight.wgsl` | The block outline, tinted by break progress. |
@@ -167,6 +169,20 @@ Quality, rarity, sub-rarity, affixes, catalysts, discipline XP, station upgrades
 ruins/boss recipes, reverse-engineering, queues, portable stations, and automation are **not** in
 Phase 1. They need the item-instance side table, a player-save version, and their own releases;
 see [the crafting design](../design/crafting-system.md).
+
+## Survival
+
+`game::survival::Survival` carries health (`0..=20`), stamina (`0..=100`), a death flag, and the
+respawn point. It is part of `GameState` and advances stamina on the fixed 60 Hz step: sprinting
+drains 20 points per second, and idle regeneration restores 15 per second.
+
+Health, stamina, and the spawn point are stored in `VPLY` version 2. A version 1 file loads with
+full health and stamina and uses the saved player position as the spawn point; the next save writes
+version 2.
+
+Damage sources, the death/respawn flow, and the survival HUD land in the rest of `0.0.10.4`. Until
+then `GameState::tick` advances stamina with sprinting off, and the state is persisted but not
+shown.
 
 ## Tools, hardness, and breaks
 
@@ -367,6 +383,9 @@ It is written on `Ctrl+S` and on window close. `Ctrl+S` flushes the terrain jour
 save worker alive, so later edits still queue. Closing joins the worker and then writes the player
 file. Stress scenes and headless runs skip both loading and saving.
 
+The current player format is `VPLY` version 2: position, view, health, stamina, spawn point,
+inventory, selected slot, and dropped entities. Version 1 is accepted and upgraded in memory.
+
 On load:
 
 - a missing file is normal;
@@ -466,9 +485,10 @@ quit/reopen persistence. The full manual pass belongs to `0.0.10.6`.
 - **`0.0.10.3`** added crafting Phase 1: the universal grammar, shaped/tagged recipes, the 2x2
   inventory grid, 3x3 workbench, known recipe book, tags, salvage, and the wood-to-stone chain. It
   added `core:planks`, `core:workbench`, and `core:torch`; the furnace is Phase 2.
-- **`0.0.10.4`** adds health, stamina, fall damage, drowning hooks, death, and respawn.
-- **`0.0.10.5`** adds kira audio, the first sounds, settings, and keybinds.
-- **`0.0.10.6`** adds save migrations, the full acceptance run, docs, changelog, and the release.
+- **`0.0.10.4`** adds the survival state and `VPLY` version 2, then fall damage, drowning hooks,
+  death, respawn, the survival HUD, and pause/death screens.
+- **`0.0.10.5`** adds kira audio, the first sounds, the settings screen, and remappable keybinds.
+- **`0.0.10.6`** adds save hardening, the full acceptance run, docs, changelog, and the release.
 
 ## File reference
 
@@ -479,6 +499,7 @@ quit/reopen persistence. The full manual pass belongs to `0.0.10.6`.
 | `src/game/tools.rs` | Break rules, speed, and the drop gate. |
 | `src/game/drops.rs` | Content-pack drop resolution. |
 | `src/game/entities.rs` | Spawn, merge, physics, pickup, despawn, and records. |
+| `src/game/survival.rs` | Health, stamina, spawn point, and stamina tick. |
 | `src/game/save.rs` | `VPLY` encoding, validation, atomic write, and quarantine. |
 | `src/game/state.rs` | Fixed tick, break progress, and save/load. |
 | `src/app/game.rs` | Demo target resolution, break completion, placement, and save paths. |
