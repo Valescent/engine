@@ -17,7 +17,7 @@ Keyboard and mouse bindings for the current engine and the scoped milestones. Se
 | Day/night debug key (`T`) | Current (v0.0.6) |
 | Unlit debug shading (`F4`) | Current (v0.0.6) |
 | Debug fly (`F`) | Current (debug) |
-| Remappable bindings | Planned, no milestone |
+| Remappable bindings | Planned (`0.0.10.5`) |
 
 ## Bindings by milestone
 
@@ -224,12 +224,16 @@ light/mesh rebuilds are automatic. See [Terrain v1 runtime](terrain-v1.md).
 
 - Current bindings are hardcoded to physical key codes and mouse buttons. Physical key codes
   keep WASD in the same positions across keyboard layouts.
-- Planned: an action map and config layer will make bindings remappable. No milestone is
-  assigned yet; see [Configuration](configuration.md) for the planned file.
+- Planned for `0.0.10.5`: an action map and config layer will make bindings remappable. See
+  [the 0.0.10.4-0.0.11 plan](plan-0.0.10.4-0.0.11.md) and [Configuration](configuration.md) for
+  the planned file.
 - Until the action map lands, changing a binding means changing code. The tables above are the
   supported defaults.
 
 ## Later milestones
 
+- `0.0.10.4`: health and stamina bars, sprint and jump stamina costs, pause on `Escape`, and the
+  death/respawn overlay.
+- `0.0.10.5`: kira audio, the settings screen, and remappable bindings.
 - v0.0.6 onward: `Lamp` and `Water` are not on the hotbar. Water has its own transparent mesh
   pass and cannot be placed from the hotbar.

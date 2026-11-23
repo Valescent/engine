@@ -54,6 +54,7 @@
 
 - [Architecture overview](dev/architecture.md)
 - [Gameplay core](dev/gameplay.md)
+- [0.0.10.4-0.0.11 plan](dev/plan-0.0.10.4-0.0.11.md)
 - [UI](dev/ui.md)
 - [Terrain v1 runtime](dev/terrain-v1.md)
 - [Terrain tools](dev/terrain-tools.md)

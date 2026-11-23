@@ -7,7 +7,8 @@ environment variables.
 | Area | Status |
 |---|---|
 | Runtime `config.toml` | Current (v0.0.7); render distance range extended in v0.0.8 |
-| Remappable bindings | Planned, no milestone |
+| Runtime `settings.toml` | Planned (`0.0.10.5`): volumes, FOV, sensitivity, vsync, keybinds |
+| Remappable bindings | Planned (`0.0.10.5`) |
 | Render distance | Current (v0.0.8) |
 | Environment variables | Current |
 | Compile-time constants | Current |
@@ -90,7 +91,8 @@ render_distance_chunks = 12
 - The render distance sets the streaming ring, the camera far plane
   (`(render_distance + 2) * 32` metres), and the fog range (`0.7 * render_distance * 32` to
   `render_distance * 32` metres). See the [v0.0.8 spec](../specs/v0.0.8.md).
-- Remappable bindings are still planned with no milestone.
+- Remappable bindings and the `settings.toml` screen are planned for `0.0.10.5`. See
+  [the 0.0.10.4-0.0.11 plan](plan-0.0.10.4-0.0.11.md).
 
 ### Paths
 

@@ -361,7 +361,9 @@ manual walk-through was replaced by captures and automated tests, so it is not c
 
 **Summary:** Terrain becomes a game. Blocks take time and the right tool, drops become items, items live in an inventory, recipes turn them into tools, and the player and the run persist.
 
-See [v0.0.10 scope](dev/v0.0.10-scope.md) for the deliverables and acceptance criteria.
+See [v0.0.10 scope](dev/v0.0.10-scope.md) for the deliverables and acceptance criteria. The
+remaining checkpoints are broken into review-sized PRs in
+[the 0.0.10.4-0.0.11 plan](dev/plan-0.0.10.4-0.0.11.md).
 
 ### Milestones
 
@@ -383,11 +385,11 @@ See [the crafting system design](design/crafting-system.md) for the full grammar
 stations, quality model, discovery, and the Phase 2-7 mapping. Only Phase 1 is committed to 0.0.10.
 
 #### 3. Survival and presentation (`0.0.10.4`, `0.0.10.5`)
-- [ ] Health, stamina, fall damage, drowning hooks, death, and respawn
-- [ ] kira audio, placeholder sounds, settings, and keybinds
+- [ ] Health, stamina, fall damage, drowning hooks, death, respawn, and survival UI
+- [ ] kira audio, placeholder sounds, settings screen, and remappable keybinds
 
 #### 4. Persistence and acceptance (`0.0.10.6`)
-- [ ] Save migrations and corruption tests
+- [ ] `VPLY` v2 hardening, migration, and corruption tests
 - [ ] Scripted gather-craft-place-damage-respawn-save run
 - [ ] Manual acceptance, docs, changelog, version bump, and release PR
 

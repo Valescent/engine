@@ -320,9 +320,13 @@ starts a fresh run. It never applies a partial file.
 
 ### Versioning
 
-`VERSION` is `1`. The release ships no older player format, so there is no migration function yet;
-an unknown version is rejected and quarantined. The slot count and field order are part of the
-version. A future change adds a new version and a `decode_v1` path before the current decoder.
+`VERSION` is `1` today. The release ships no older player format, so there is no migration function
+yet; an unknown version is rejected and quarantined. The slot count and field order are part of the
+version.
+
+The `0.0.10.4` checkpoint plans version 2: health, stamina, and the spawn point. That change adds a
+`decode_v1` path before the current decoder, so existing player files load once and are written as
+v2 on the next save. The implementation stays v1 until that PR lands.
 
 ## Implementation status
 
@@ -337,7 +341,7 @@ The format above is complete; this table is about code, not design. No open form
 | Engine wiring | `TERRAIN_DEMO=1` opens `world/terrain-demo`, layers saved sections over generation by `baseline_hash`, replays recovered journal frames newer than the header revision, saves those sections, then advances the header | Streaming/LOD world integration |
 | Migration | Header version 1 upgrades to version 2 on open; `MigrationState::InProgress`, `migration.journal` records/resume, section canonicalisation, `terrain-gen migrate --world <dir>`, and the `migration-report-<date>.json` bundle are implemented | A decoder for a genuine older section record format |
 | `world-repair` | `SectionStore::repair` implements restore-backup, quarantine, and salvage; `terrain-gen repair --world <dir> --section <cx,cz,sy> --action restore\|quarantine\|salvage` is the CLI; `TERRAIN_DEMO=1` shows an in-app prompt with `R`/`Q`/`S` or left/middle/right click and resumes saves after the choice | - |
-| Player save (`VPLY`) | Version 1 header and payload, CRC32, file/directory fsync, atomic rename, quarantine, 4,096-entity cap | Version migration |
+| Player save (`VPLY`) | Version 1 header and payload, CRC32, file/directory fsync, atomic rename, quarantine, 4,096-entity cap | Version 2 with health, stamina, spawn point, and `decode_v1` planned for `0.0.10.4` |
 
 `save::SectionStore` writes and reads section files with write-temp, fsync, verify, rotation to
 `.bak`, and a directory fsync where the platform supports one (Windows has none). Opening promotes a

@@ -50,8 +50,9 @@ This is **pre-alpha**. The current world is a walkable, editable, procedurally g
 ## Reference
 
 - [Architecture overview](dev/architecture.md) — module ownership and the frame flow.
-- [Crafting system](design/crafting-system.md) — recipe grammar, phases, and the 0.0.10.3 slice.
-- [Engine architecture notes](dev/research/engine-architecture.md) — the source optimization map.
+- [Crafting system](design/crafting-system.md) - recipe grammar, phases, and the 0.0.10.3 slice.
+- [0.0.10.4-0.0.11 plan](dev/plan-0.0.10.4-0.0.11.md) - PR-sized breakdown for survival, audio, acceptance, and the look milestone.
+- [Engine architecture notes](dev/research/engine-architecture.md) - the source optimization map.
 - [Coordinates](dev/coordinates.md) — axes, units, and voxel addresses.
 - [Controls](dev/controls.md) - current bindings and the planned ones.
 - [FAQ and troubleshooting](faq.md) - common questions and a symptom-first index.
@@ -79,7 +80,7 @@ This is **pre-alpha**. The current world is a walkable, editable, procedurally g
 
 ### Basic mechanics
 
-The v1 terrain demo becomes a playable loop: hold-to-break with hardness and tool tiers, item drops and pickup, an inventory and hotbar, crafting, health and stamina, and a versioned player save. The items, HUD, inventory, and crafting Phase 1 are on `main`; survival and audio follow.
+The v1 terrain demo becomes a playable loop: hold-to-break with hardness and tool tiers, item drops and pickup, an inventory and hotbar, crafting, health and stamina, and a versioned player save. The items, HUD, inventory, and crafting Phase 1 are on `main`; survival and audio follow ([plan](dev/plan-0.0.10.4-0.0.11.md)).
 
 [Read the v0.0.10 scope](dev/v0.0.10-scope.md) · [Read the gameplay core](dev/gameplay.md)
 

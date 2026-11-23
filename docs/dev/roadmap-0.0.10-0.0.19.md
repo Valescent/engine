@@ -83,8 +83,13 @@ and save/restore the run.
 - A new player can spawn, gather wood/stone, craft a tool, place blocks, and survive a fall.
 - Breaking respects block hardness and tool tier; placement rejects occupied or unsupported cells.
 - Inventory, hotbar, crafting, health, stamina, and respawn work without the debug overlay.
-- The run survives quit/reopen with inventory, player state, and edits intact.
+- The run saves and reloads the inventory, player state, dropped items, and terrain edits.
+- A settings screen persists volumes, FOV, sensitivity, vsync, and keybinds.
+- Interaction, damage, and ambience have placeholder audio.
 - UI, audio, fixed-tick state, and the save-format bump are documented.
+
+The review-sized PR breakdown for the remaining checkpoints is in
+[the 0.0.10.4-0.0.11 plan](plan-0.0.10.4-0.0.11.md).
 
 ### 0.0.10.1 Interaction and the break/place loop
 
@@ -161,36 +166,51 @@ and automation are Phase 2+; see [crafting-system.md](../design/crafting-system.
 
 ### 0.0.10.4 Player state and survival
 
+Health, stamina, and the spawn point are persisted in `VPLY` version 2 in this checkpoint. The
+review-sized PR breakdown is in [the 0.0.10.4-0.0.11 plan](plan-0.0.10.4-0.0.11.md).
+
 - [ ] Task: Add health and stamina.
-  - [ ] Subtask: Damage sources, invulnerability window, and death/respawn.
-  - [ ] Subtask: Sprint/jump stamina costs and regeneration.
+  - [ ] Subtask: Health, stamina, sprint/jump costs, regeneration, and the damage clamps.
+  - [ ] Subtask: `VPLY` version 2 adds health, stamina, and the spawn point, with a `decode_v1` path.
 - [ ] Task: Add environmental damage.
-  - [ ] Subtask: Fall damage, drowning, and lava/fire hooks.
-  - [ ] Subtask: Damage feedback, screen effects, and audio.
-- [ ] Task: Add respawn and spawn safety.
-  - [ ] Subtask: Bed/spawn-point item and respawn search.
-  - [ ] Subtask: Never spawn inside a solid or flooded cell.
+  - [ ] Subtask: Fall damage, drowning, and lava/fire hooks through an environment probe.
+  - [ ] Subtask: Damage feedback, screen effects, and audio hooks.
+- [ ] Task: Add death, respawn, and spawn safety.
+  - [ ] Subtask: Death event, respawn at the world spawn, and spawn search.
+  - [ ] Subtask: Never spawn inside a solid or flooded cell. A bed item is deferred.
+- [ ] Task: Add the survival HUD and overlays.
+  - [ ] Subtask: Health and stamina bars, damage flash, pause screen, and death screen.
+  - [ ] Subtask: `Escape` opens pause when no inventory or station screen is open.
 
-### 0.0.10.5 UI, audio, and settings
+### 0.0.10.5 Audio and settings
 
-- [ ] Task: Choose and integrate the UI layer (ADR).
-- [ ] Task: Choose and integrate the audio backend (ADR).
-- [ ] Task: Build the first HUD.
-  - [ ] Subtask: Crosshair, hotbar, health/stamina, selected item, interaction prompt.
-  - [ ] Subtask: Loading, pause, death, and repair overlays.
-- [ ] Task: Build the first settings screen.
-  - [ ] Subtask: Render distance, FOV, sensitivity, volume, vsync, and keybinds.
-- [ ] Task: Add the first ambience and interaction sounds.
+The UI layer and first HUD landed in `0.0.10.2`. This checkpoint is audio, settings, keybinds, and
+the remaining overlays. See [the plan](plan-0.0.10.4-0.0.11.md).
+
+- [ ] Task: Add the kira audio backend.
+  - [ ] Subtask: Mixer buses, synthesized placeholder buffers, and a null backend for headless runs.
+  - [ ] Subtask: Break, place, pickup, craft, hit, death, and footstep events.
+- [ ] Task: Build the settings model and screen.
+  - [ ] Subtask: Render distance, FOV, sensitivity, master/music/sfx volume, and vsync.
+  - [ ] Subtask: Apply render distance on resume; apply the other settings immediately.
+- [ ] Task: Add remappable bindings.
+  - [ ] Subtask: Action map, key-name parser, conflict detection, defaults, and persistence.
+  - [ ] Subtask: Rebind UI and restart coverage.
+- [ ] Task: Add ambience and surface footsteps.
+  - [ ] Subtask: Wind and water ambience, surface footsteps, and basic positional block sounds.
 
 ### 0.0.10.6 Persistence and acceptance
 
-- [ ] Task: Bump the world/player save format.
-  - [ ] Subtask: Save inventory, hotbar, health, stamina, spawn point, and dropped items.
-  - [ ] Subtask: Add migration and corruption tests.
+`VPLY` version 2 lands in `0.0.10.4`; this checkpoint hardens it and closes the release. See
+[the plan](plan-0.0.10.4-0.0.11.md).
+
+- [ ] Task: Harden the player save.
+  - [ ] Subtask: Truncation, corruption, bounds, unknown items, and v1 migration tests.
 - [ ] Task: Add the headless gameplay test.
   - [ ] Subtask: Scripted gather -> craft -> place -> damage -> respawn -> save/reopen.
 - [ ] Task: Run the manual acceptance loop.
 - [ ] Task: Update the changelog, controls, and configuration docs.
+- [ ] Task: Cut the `v0.0.10` release.
 
 **Release gate:** the full loop works, saves, reloads, and is covered by headless tests.
 
@@ -200,6 +220,10 @@ and automation are Phase 2+; see [crafting-system.md](../design/crafting-system.
 
 **Goal:** Prove the visual target on one hero scene and choose the terrain scale before the rest of
 the simulation is built. This is the look milestone, not the GI milestone.
+
+The proposed PR order for this milestone is in
+[the 0.0.10.4-0.0.11 plan](plan-0.0.10.4-0.0.11.md). Its prop and lighting detail stays provisional
+until the visual brief and scale ADR land.
 
 **Definition of Done:**
 
@@ -724,8 +748,6 @@ them as a separate product-roadmap decision, not as implied commitments of the c
 
 These need an ADR or a short decision note before the owning release starts:
 
-- **UI stack.** Immediate mode or retained; keyboard/gamepad/mouse routing.
-- **Audio backend.** Mixer, positional audio, streaming music, and platform support.
 - **Entity runtime.** Custom minimal ECS or a crate; activation tiers and save format.
 - **Terrain scale.** 1 m, 0.5 m, or dual-scale micro-voxels; memory and content budget.
 - **Lighting path.** Shadows + AO + fog baseline; when GI becomes worth its cost.
@@ -740,6 +762,9 @@ These need an ADR or a short decision note before the owning release starts:
   furnace.
 - **Target hardware.** Minimum GPU, CPU, memory, and resolution for the hero scene.
 - **Multiplayer.** Explicitly out of scope unless a later decision adds it.
+
+The 0.0.10.4-0.0.10.5 choices (save timing, death inventory, settings storage, audio CI, pause
+semantics, keybind scope) are recorded in [the 0.0.10.4-0.0.11 plan](plan-0.0.10.4-0.0.11.md).
 
 ## Relationship to 1.0
 
