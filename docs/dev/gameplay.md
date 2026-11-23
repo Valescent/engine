@@ -1,12 +1,12 @@
 # Gameplay core
 
-**Status:** `0.0.10.1` items and save, `0.0.10.2` UI, `0.0.10.3` crafting Phase 1, and the
-`0.0.10.4` survival state, damage, death/respawn, sprint, and `VPLY` version 2 are implemented. The
-survival HUD, pause/death screens, audio, and the full acceptance pass remain.
+**Status:** `0.0.10.1` items and save, `0.0.10.2` UI, `0.0.10.3` crafting Phase 1, and
+`0.0.10.4` survival, damage, death/respawn, the survival HUD, pause/death screens, and `VPLY`
+version 2 are implemented. Audio, settings, and the full acceptance pass remain.
 
 **Scope:** The headless gameplay state and the v1 demo wiring: items, inventory, tools, breaking,
-drops, item entities, survival and damage, the fixed tick, and the player save. It does not cover
-the survival UI, recipes, audio, creatures, or the legacy chunk world's interaction path.
+drops, item entities, survival and damage, the fixed tick, the survival UI, and the player save. It
+does not cover recipes, audio, creatures, or the legacy chunk world's interaction path.
 
 This page is the detailed reference. The release plan is
 [0.0.10-0.0.19](roadmap-0.0.10-0.0.19.md), the milestone scope is [v0.0.10](v0.0.10-scope.md), the
@@ -193,8 +193,10 @@ flag, and the respawn point. It is part of `GameState` and advances on the fixed
   file loads with full health and stamina and uses the saved player position as the spawn point; the
   next save writes version 2.
 
-The survival HUD, damage flash, and the pause/death screens land in `0.0.10.4.3`. The current death
-path uses a log message and the `R` key.
+The survival HUD shows health, stamina, and air when it is below full, plus a short red damage
+flash. The pause screen opens on `Escape` and offers Resume and Save & Quit. The death screen offers
+Respawn (`R`/`Enter`) and Save & Quit. Pause freezes player movement, the fixed tick, and the sky;
+mesh streaming may continue.
 
 ## Tools, hardness, and breaks
 

@@ -7,9 +7,9 @@ checkpoints; `v0.0.10` is the next three-part release.
 
 **Baseline:** `0.0.10.1` items and save, `0.0.10.2` HUD and inventory, and `0.0.10.3` crafting
 Phase 1 are on `main`. The package is still `0.0.9` and no `v0.0.10` tag exists. The current headless
-suite is 532 engine and 411 terrain-core library tests.
+suite is 536 engine and 411 terrain-core library tests.
 
-**Progress:** 4.1 and 4.2 are implemented. 4.3 onward remain.
+**Progress:** 4.1, 4.2, and 4.3 are implemented. 5.1 onward remain.
 
 See [v0.0.10 scope](v0.0.10-scope.md), [the 0.0.10-0.0.19 roadmap](roadmap-0.0.10-0.0.19.md), and
 [the release roadmap](../roadmap.md) for the commitments this plan expands.

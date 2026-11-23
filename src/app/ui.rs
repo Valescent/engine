@@ -32,6 +32,18 @@ impl App {
         self.ui.open_workbench(self.game.inventory.selected_index());
     }
 
+    /// Opens the pause screen on the demo path.
+    pub(super) fn open_pause(&mut self) {
+        if self.death_pending || self.ui.any_screen_open() {
+            return;
+        }
+        self.end_break();
+        self.release_cursor();
+        self.pressed.clear();
+        self.jump_requested = false;
+        self.ui.open_pause();
+    }
+
     /// Closes the inventory or workbench, returning held and grid items first.
     pub(super) fn close_inventory(&mut self) {
         if let Some(held) = self.ui.take_held()
@@ -88,9 +100,17 @@ impl App {
         let inventory = &mut self.game.inventory;
         let registry = &self.items;
         let recipes = &self.recipes;
+        let survival = &self.game.survival;
         let ui = &mut self.ui;
         let output = self.egui_ctx.run_pass(raw_input, |ctx| {
-            ui.draw(ctx, inventory, registry, recipes, target.as_deref());
+            ui.draw(
+                ctx,
+                inventory,
+                registry,
+                recipes,
+                survival,
+                target.as_deref(),
+            );
         });
 
         let egui::FullOutput {
@@ -112,6 +132,15 @@ impl App {
         };
         if self.ui.take_close_requested() {
             self.close_inventory();
+        }
+        if self.ui.take_quit_requested() {
+            self.quit_requested = true;
+        }
+        if self.ui.take_resume_requested() {
+            self.capture_cursor();
+        }
+        if self.ui.take_respawn_requested() {
+            self.respawn_player();
         }
         Some(UiFrame {
             textures_delta,

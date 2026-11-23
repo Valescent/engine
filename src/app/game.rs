@@ -73,8 +73,10 @@ impl App {
                 self.camera.set_yaw(loaded.yaw);
                 self.camera.set_pitch(loaded.pitch);
                 self.has_player_save = true;
+                self.last_health = self.game.survival.health();
                 if self.game.survival.is_dead() {
                     self.death_pending = true;
+                    self.ui.open_death();
                     self.release_cursor();
                 }
                 info!(?path, "player restored");
@@ -174,6 +176,11 @@ impl App {
         if picked > 0 {
             debug!(picked, "picked up items");
         }
+        let health = self.game.survival.health();
+        if health < self.last_health {
+            self.ui.flash_damage();
+        }
+        self.last_health = health;
         if self.game.take_death() {
             self.on_death();
         }
@@ -187,6 +194,7 @@ impl App {
         self.end_break();
         self.release_cursor();
         self.pressed.clear();
+        self.ui.open_death();
         warn!("player died");
     }
 
@@ -202,6 +210,8 @@ impl App {
         self.player.respawn(spawn);
         self.camera.set_position(self.player.eye_position());
         self.death_pending = false;
+        self.last_health = self.game.survival.health();
+        self.ui.close_death();
         self.capture_cursor();
         info!(?spawn, "player respawned");
     }

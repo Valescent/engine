@@ -143,6 +143,10 @@ pub(crate) struct App {
     pub(crate) break_held: bool,
     /// True after survival health reaches zero until the player respawns.
     pub(crate) death_pending: bool,
+    /// Set by the pause or death screen to save and exit on the next wait.
+    pub(crate) quit_requested: bool,
+    /// Last observed health, for the damage flash.
+    pub(crate) last_health: u16,
     /// egui state shared by the winit adapter and the renderer upload.
     pub(crate) egui_ctx: egui::Context,
     pub(crate) egui_state: Option<egui_winit::State>,
@@ -253,6 +257,8 @@ impl App {
             game,
             break_held: false,
             death_pending: false,
+            quit_requested: false,
+            last_health: crate::game::MAX_HEALTH,
             egui_ctx,
             egui_state: None,
             ui,
@@ -477,6 +483,18 @@ impl ApplicationHandler for App {
         }
         self.last_frame = Instant::now();
         window.request_redraw();
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if !self.quit_requested {
+            return;
+        }
+        self.quit_requested = false;
+        self.stow_ui_items();
+        self.save_world(true);
+        self.save_game();
+        self.release_cursor();
+        event_loop.exit();
     }
 
     fn window_event(
