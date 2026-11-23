@@ -10,7 +10,7 @@ pub(crate) const MAX_HEALTH: u16 = 20;
 /// Maximum stamina. Stamina is an integer from 0 to 100.
 pub(crate) const MAX_STAMINA: u16 = 100;
 /// Seconds of air before drowning damage starts.
-const MAX_AIR: f32 = 15.0;
+pub(crate) const MAX_AIR: f32 = 15.0;
 /// Damage per second after the air runs out.
 const DROWN_DAMAGE: u16 = 1;
 /// Lava damage interval in seconds.

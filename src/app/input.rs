@@ -83,9 +83,11 @@ impl App {
                 } else if code == KeyCode::Escape {
                     if self.ui.inventory_open() {
                         self.close_inventory();
+                    } else if self.ui.pause_open() {
+                        self.ui.request_resume();
+                        self.capture_cursor();
                     } else {
-                        self.end_break();
-                        self.release_cursor();
+                        self.open_pause();
                     }
                 } else if code == KeyCode::KeyV {
                     self.toggle_vsync();

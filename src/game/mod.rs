@@ -29,5 +29,5 @@ pub(crate) use recipe::{CompiledRecipe, RecipeBook, Station, display_name};
 pub(crate) use save::quarantine;
 pub(crate) use spawn::find_safe_spawn;
 pub(crate) use state::GameState;
-pub(crate) use survival::fall_damage;
+pub(crate) use survival::{MAX_AIR, MAX_HEALTH, MAX_STAMINA, Survival, fall_damage};
 pub(crate) use tools::break_seconds;

@@ -93,7 +93,7 @@ the v0.0.4 click-to-break behaviour until the demo becomes the default.
 | Right mouse | Place the selected item in the adjacent cell | Current (demo) |
 | `1`-`9` | Select a hotbar slot | Current (demo) |
 | `E` | Open or close the inventory | Current (demo) |
-| `Escape` | Close the inventory if open, otherwise release the cursor | Current (demo) |
+| `Escape` | Close the inventory if open; otherwise open the pause screen | Current (demo) |
 | `Shift` while moving | Sprint while stamina remains | Current (demo) |
 | `Space` | Jump; costs 5 stamina | Current (demo) |
 | `R` | Respawn after death | Current (demo) |
@@ -139,11 +139,11 @@ the v0.0.4 click-to-break behaviour until the demo becomes the default.
 - A small crosshair sits at the centre of the screen.
 - The nine-slot hotbar is anchored at the bottom centre. Empty slots show their number; occupied
   slots show a flat-colour placeholder icon, the stack count, and a green durability bar for tools.
-- When a demo block is targeted, a prompt above the hotbar reads `Hold left: break the targeted
-  block | Right: place`.
+- When a demo block is targeted, a prompt above the survival bars reads `Hold left: break the
+  targeted block | Right: place`.
 - The existing `F3` bitmap overlay still shows FPS and frame time. The HUD does not duplicate it.
-- Health, stamina, hunger, and oxygen bars are not drawn yet; they arrive with survival in
-  `0.0.10.4`.
+- Health, stamina, and air bars are drawn above the hotbar, with a short red damage flash. Health and
+  stamina persist in `VPLY` version 2.
 - The HUD is non-interactive. It does not capture clicks or keys, so the gameplay bindings above
   continue to work.
 
@@ -171,7 +171,10 @@ the v0.0.4 click-to-break behaviour until the demo becomes the default.
   second. Lava and fire hooks use the same environment probe.
 - At zero health gameplay freezes, the cursor releases, and `R` respawns at the nearest safe cell.
   The inventory is kept.
-- The health/stamina HUD and the pause/death screens land later in `0.0.10.4`.
+- The HUD shows health, stamina, and air below full, with a short damage flash.
+- `Escape` opens the pause screen with Resume and Save & Quit. Pause freezes movement, the fixed
+  tick, and the sky; `Escape` or Resume returns to play.
+- The death screen offers Respawn (`R`/`Enter`) and Save & Quit.
 
 ## Crafting (0.0.10.3)
 
@@ -216,7 +219,7 @@ the v0.0.4 click-to-break behaviour until the demo becomes the default.
 | Crouch / sneak | No binding. |
 | Mouse-wheel hotbar | No binding. `1`-`9` select in the demo; `1`-`5` in the legacy path. |
 | Inventory (`E`), drop (`Q`) | `E` opens the inventory. `Q` is planned; no drop binding yet. |
-| Pause / menu | `Escape` releases the cursor and cancels a break; the pause screen is planned for `0.0.10.4`. |
+| Pause / menu | `Escape` opens the pause screen; Resume or `Escape` returns to play. |
 | Gamepad | No input support today; not scheduled. |
 
 ## Terrain demo
@@ -246,8 +249,8 @@ light/mesh rebuilds are automatic. See [Terrain v1 runtime](terrain-v1.md).
 
 ## Later milestones
 
-- `0.0.10.4`: health and stamina bars, sprint and jump stamina costs, pause on `Escape`, and the
-  death/respawn overlay.
+- `0.0.10.4`: health and stamina bars, sprint and jump stamina costs, pause on `Escape`, the death
+  overlay, fall damage, drowning, and safe respawn are implemented.
 - `0.0.10.5`: kira audio, the settings screen, and remappable bindings.
 - v0.0.6 onward: `Lamp` and `Water` are not on the hotbar. Water has its own transparent mesh
   pass and cannot be placed from the hotbar.

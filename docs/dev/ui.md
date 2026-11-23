@@ -10,9 +10,11 @@ ownership.
 | Area | Status |
 |---|---|
 | HUD foundation | Current (`0.0.10.2`) |
+| Survival HUD and damage flash | Current (`0.0.10.4`) |
 | Inventory screen | Current (`0.0.10.2`) |
-| Crafting screen | Planned (`0.0.10.3`) |
-| Pause, death, settings | Planned (`0.0.10.4`-`0.0.10.5`) |
+| Crafting screen | Current (`0.0.10.3`) |
+| Pause and death screens | Current (`0.0.10.4`) |
+| Settings screen | Planned (`0.0.10.5`) |
 
 ## Stack
 
@@ -101,7 +103,9 @@ The HUD is drawn with `egui` layers and anchored areas, not a panel, so the worl
 |---|---|---|
 | Crosshair | Screen centre | Four short white segments with a dark shadow and a 3 px gap |
 | Hotbar | Bottom centre, 14 px above the edge | Nine 46 px slots, 4 px apart |
-| Interaction prompt | Above the hotbar | `Hold left: break the targeted block | Right: place` when a demo target exists |
+| Survival bars | Above the hotbar | 220 px health and stamina bars, plus air below full |
+| Damage flash | Full screen | A short red tint whose alpha decays over about a third of a second |
+| Interaction prompt | Above the survival bars | `Hold left: break the targeted block | Right: place` when a demo target exists |
 
 Each hotbar slot shows:
 
@@ -111,9 +115,19 @@ Each hotbar slot shows:
 - The stack count at the bottom-right when it is above one.
 - A green durability bar at the bottom for a tool.
 
-The HUD does not show health, stamina, hunger, or oxygen yet. Those arrive with survival in
-`0.0.10.4`. The existing bitmap debug overlay (`F3`) remains separate and is drawn in the scene
-pass before the egui pass.
+The HUD shows health (`0..20`), stamina (`0..100`), and air when it is below full. The damage flash is
+presentation only; the fixed tick owns the health value.
+
+## Pause and death
+
+`Escape` opens the pause overlay when no inventory or station screen is open. It dims the world,
+releases the cursor, and shows `Resume [Esc]` and `Save & Quit`. Pause freezes player movement, the
+fixed tick, and the sky; mesh streaming may continue.
+
+The death overlay opens at zero health. It shows `Respawn [R]` and `Save & Quit`; `R` or `Enter`
+also respawns. Respawn uses the safe-spawn search, keeps the inventory, and captures the cursor.
+Both overlays own the pointer and keyboard. The existing bitmap debug overlay (`F3`) remains
+separate and is drawn in the scene pass before the egui pass.
 
 ## Inventory
 
@@ -206,6 +220,9 @@ primitives produces no UI draws, and the headless path builds no `UiFrame` at al
   window.
 - `ui::tests::the_opening_key_is_suppressed_and_the_next_press_closes` pins the two-frame `E`
   behavior.
+- `ui::tests::pause_and_death_screens_draw_headlessly`,
+  `pause_captures_input_and_requests_resume`, and `death_screen_requests_respawn` pin the overlay
+  capture and request flags.
 - The windowed smoke run captured a frame with the nine-slot hotbar, selected border, wooden
   pickaxe icon, durability bar, crosshair, and the existing FPS overlay.
 - `ui::tests::a_workbench_recipe_is_rejected_on_the_inventory_screen` and
@@ -220,22 +237,23 @@ primitives produces no UI draws, and the headless path builds no `UiFrame` at al
 
 ## Current limitations
 
-- Crafting Phase 1 is in; no crafting depth, pause, death, or settings screen yet.
+- Crafting Phase 1 and the survival HUD/pause/death screens are in; no crafting depth or settings
+  screen yet.
 - No container-to-container transfer beyond the hotbar/main quick move.
 - No gamepad navigation or accessibility tree.
 - No UI scale control; egui follows the window scale factor.
 - Recipe search uses egui text input; clipboard and link handling remain disabled.
 - Item icons are flat colours, not the block texture array.
-- The HUD, inventory, and crafting panel are not captured in golden terrain images; captures are
-  manual QA, not comparison tests.
+- The HUD, inventory, crafting, pause, and death screens are not captured in golden terrain images;
+  captures are manual QA, not comparison tests.
 
 ## Next
 
-The next slice is survival in `0.0.10.4`:
+The next slice is audio and settings in `0.0.10.5`:
 
-- Health, stamina, fall damage, drowning hooks, death, and respawn.
-- Pause and death screens.
-- Spawn safety and the survival HUD.
+- The kira mixer, placeholder sounds, and the first ambience.
+- The settings screen for volumes, FOV, sensitivity, vsync, and render distance.
+- Remappable keybinds and persistence.
 
 Crafting depth (quality, rarity, item instances, disciplines, discovery, queues, and automation)
 stays in the post-`0.0.19` crafting releases. See

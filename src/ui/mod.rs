@@ -4,15 +4,18 @@
 //! what is drawn and which screen owns the pointer or keyboard.
 
 mod crafting;
+mod death;
 mod hud;
 mod inventory;
 mod item_icon;
+mod pause;
 
 use egui::{Context, Key};
 
 use crate::game::{
     CraftError, CraftGrid, HOTBAR_SLOTS, Inventory, ItemRegistry, ItemStack, OFFHAND_SLOT,
-    RecipeBook, Station, craft_all_from_grid, craft_direct_all, craft_once_from_grid, salvage_held,
+    RecipeBook, Station, Survival, craft_all_from_grid, craft_direct_all, craft_once_from_grid,
+    salvage_held,
 };
 
 /// The current UI state.
@@ -34,6 +37,12 @@ pub(crate) struct UiState {
     selected_recipe: Option<usize>,
     craft_error: Option<CraftError>,
     search_focused: bool,
+    pause_open: bool,
+    death_open: bool,
+    resume_requested: bool,
+    quit_requested: bool,
+    respawn_requested: bool,
+    damage_flash: f32,
 }
 
 impl UiState {
@@ -48,8 +57,20 @@ impl UiState {
         inventory: &mut Inventory,
         registry: &ItemRegistry,
         recipes: &RecipeBook,
+        survival: &Survival,
         target: Option<&str>,
     ) {
+        let delta = ctx.input(|input| input.stable_dt).clamp(0.0, 0.1);
+        self.damage_flash = (self.damage_flash - delta * 3.0).max(0.0);
+
+        if self.death_open() {
+            death::draw(ctx, self);
+            return;
+        }
+        if self.pause_open() {
+            pause::draw(ctx, self);
+            return;
+        }
         if self.inventory_open {
             if self.suppress_close_key {
                 self.suppress_close_key = false;
@@ -68,6 +89,8 @@ impl UiState {
                     inventory,
                     registry,
                     target,
+                    survival,
+                    damage_flash: self.damage_flash,
                 },
             );
         }
@@ -112,6 +135,82 @@ impl UiState {
 
     pub(crate) fn inventory_open(&self) -> bool {
         self.inventory_open
+    }
+
+    /// Whether the pause screen is open.
+    pub(crate) fn pause_open(&self) -> bool {
+        self.pause_open
+    }
+
+    /// Whether the death screen is open.
+    pub(crate) fn death_open(&self) -> bool {
+        self.death_open
+    }
+
+    /// Whether any blocking screen owns the pointer and keyboard.
+    pub(crate) fn any_screen_open(&self) -> bool {
+        self.inventory_open || self.pause_open || self.death_open
+    }
+
+    /// Opens the pause screen.
+    pub(crate) fn open_pause(&mut self) {
+        self.pause_open = true;
+        self.death_open = false;
+        self.close_requested = false;
+        self.suppress_close_key = true;
+        self.resume_requested = false;
+        self.dragging = false;
+    }
+
+    /// Leaves the pause screen without capturing the cursor; the app does that.
+    pub(crate) fn request_resume(&mut self) {
+        self.pause_open = false;
+        self.resume_requested = true;
+        self.suppress_close_key = false;
+    }
+
+    /// Takes the pending resume request.
+    pub(crate) fn take_resume_requested(&mut self) -> bool {
+        std::mem::take(&mut self.resume_requested)
+    }
+
+    /// Takes the pending save-and-quit request.
+    pub(crate) fn take_quit_requested(&mut self) -> bool {
+        std::mem::take(&mut self.quit_requested)
+    }
+
+    /// Opens the death screen.
+    pub(crate) fn open_death(&mut self) {
+        self.death_open = true;
+        self.pause_open = false;
+        self.inventory_open = false;
+        self.close_requested = false;
+        self.held = None;
+        self.dragging = false;
+        self.craft = CraftGrid::default();
+        self.respawn_requested = false;
+    }
+
+    /// Closes the death screen after a respawn.
+    pub(crate) fn close_death(&mut self) {
+        self.death_open = false;
+        self.respawn_requested = false;
+    }
+
+    /// Requests a respawn from the death screen.
+    pub(crate) fn request_respawn(&mut self) {
+        self.respawn_requested = true;
+        self.death_open = false;
+    }
+
+    /// Takes the pending respawn request.
+    pub(crate) fn take_respawn_requested(&mut self) -> bool {
+        std::mem::take(&mut self.respawn_requested)
+    }
+
+    /// Starts the damage flash.
+    pub(crate) fn flash_damage(&mut self) {
+        self.damage_flash = 1.0;
     }
 
     /// The open station, or the inventory when the screen is closed.
@@ -164,11 +263,11 @@ impl UiState {
     }
 
     pub(crate) fn captures_pointer(&self) -> bool {
-        self.inventory_open
+        self.any_screen_open()
     }
 
     pub(crate) fn captures_keyboard(&self) -> bool {
-        self.inventory_open
+        self.any_screen_open()
     }
 
     fn pick_up(&mut self, index: usize, inventory: &mut Inventory) {
@@ -451,8 +550,16 @@ mod tests {
     ) {
         let ctx = Context::default();
         let recipes = RecipeBook::builtin(registry).expect("the built-in recipes are valid");
+        let survival = Survival::new(glam::Vec3::ZERO);
         let mut output = ctx.run_pass(input, |ctx| {
-            state.draw(ctx, inventory, registry, &recipes, Some("core:stone"));
+            state.draw(
+                ctx,
+                inventory,
+                registry,
+                &recipes,
+                &survival,
+                Some("core:stone"),
+            );
         });
         assert_ne!(output.shapes.len(), 0);
         output.textures_delta.clear();
@@ -709,5 +816,59 @@ mod tests {
         assert!(state.held.is_none());
         assert_eq!(inventory.count(registry.id("core:stone").unwrap()), 1);
         assert_eq!(inventory.count(registry.id("core:stick").unwrap()), 1);
+    }
+
+    #[test]
+    fn pause_captures_input_and_requests_resume() {
+        let mut state = UiState::new();
+        state.open_pause();
+
+        assert!(state.pause_open());
+        assert!(state.captures_pointer());
+        assert!(state.captures_keyboard());
+
+        state.request_resume();
+        assert!(!state.pause_open());
+        assert!(state.take_resume_requested());
+        assert!(!state.captures_pointer());
+    }
+
+    #[test]
+    fn death_screen_requests_respawn() {
+        let mut state = UiState::new();
+        state.open_death();
+
+        assert!(state.death_open());
+        assert!(state.captures_keyboard());
+
+        state.request_respawn();
+        assert!(!state.death_open());
+        assert!(state.take_respawn_requested());
+    }
+
+    #[test]
+    fn the_pause_quit_request_is_taken_once() {
+        let mut state = UiState::new();
+        state.open_pause();
+        state.quit_requested = true;
+
+        assert!(state.take_quit_requested());
+        assert!(!state.take_quit_requested());
+    }
+
+    #[test]
+    fn pause_and_death_screens_draw_headlessly() {
+        let registry = registry();
+        let mut inventory = Inventory::new();
+        let mut state = UiState::new();
+
+        state.open_pause();
+        draw(&mut state, &mut inventory, &registry);
+        assert!(state.pause_open());
+
+        state.request_resume();
+        state.open_death();
+        draw(&mut state, &mut inventory, &registry);
+        assert!(state.death_open());
     }
 }

@@ -166,8 +166,9 @@ and automation are Phase 2+; see [crafting-system.md](../design/crafting-system.
 
 ### 0.0.10.4 Player state and survival
 
-Health, stamina, and the spawn point are persisted in `VPLY` version 2 in this checkpoint. The
-review-sized PR breakdown is in [the 0.0.10.4-0.0.11 plan](plan-0.0.10.4-0.0.11.md).
+Health, stamina, and the spawn point are persisted in `VPLY` version 2 in this checkpoint. It is
+implemented. The review-sized PR breakdown is in
+[the 0.0.10.4-0.0.11 plan](plan-0.0.10.4-0.0.11.md).
 
 - [x] Task: Add the health, stamina, and spawn state.
   - [x] Subtask: Health, stamina, death flag, spawn point, and stamina drain/regeneration.
@@ -180,9 +181,9 @@ review-sized PR breakdown is in [the 0.0.10.4-0.0.11 plan](plan-0.0.10.4-0.0.11.
 - [x] Task: Add death, respawn, and spawn safety.
   - [x] Subtask: Death event, respawn at the world spawn, and safe-spawn search.
   - [x] Subtask: Never spawn inside a solid or flooded cell. A bed item is deferred.
-- [ ] Task: Add the survival HUD and overlays.
-  - [ ] Subtask: Health and stamina bars, damage flash, pause screen, and death screen.
-  - [ ] Subtask: `Escape` opens pause when no inventory or station screen is open.
+- [x] Task: Add the survival HUD and overlays.
+  - [x] Subtask: Health and stamina bars, damage flash, pause screen, and death screen.
+  - [x] Subtask: `Escape` opens pause when no inventory or station screen is open.
 
 ### 0.0.10.5 Audio and settings
 

@@ -432,7 +432,7 @@ impl App {
         let player = Streaming::column_at(self.player.position);
         let player_column = (player.x, player.y);
         self.tick_demo(player_column);
-        if self.focused && !self.death_pending {
+        if self.focused && !self.death_pending && !self.ui.pause_open() {
             let delta_seconds = elapsed.min(MAX_FRAME_DELTA).as_secs_f32();
             self.step_player(delta_seconds);
             self.tick_game(delta_seconds);

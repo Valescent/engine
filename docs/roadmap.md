@@ -355,7 +355,7 @@ manual walk-through was replaced by captures and automated tests, so it is not c
 
 ## v0.0.10: Basic mechanics
 
-**Status:** In progress - the `0.0.10.1` gameplay core, the `0.0.10.2` UI slice (HUD and inventory), and the `0.0.10.3` crafting Phase 1 are implemented.
+**Status:** In progress - the `0.0.10.1` gameplay core, the `0.0.10.2` UI slice (HUD and inventory), the `0.0.10.3` crafting Phase 1, and the `0.0.10.4` survival slice are implemented.
 
 **Goal:** Turn the v1 terrain demo into a complete first playable loop: break, collect, craft, place, survive, and save.
 
@@ -385,7 +385,7 @@ See [the crafting system design](design/crafting-system.md) for the full grammar
 stations, quality model, discovery, and the Phase 2-7 mapping. Only Phase 1 is committed to 0.0.10.
 
 #### 3. Survival and presentation (`0.0.10.4`, `0.0.10.5`)
-- [ ] Health, stamina, fall damage, drowning hooks, death, respawn, and survival UI
+- [x] Health, stamina, fall damage, drowning hooks, death, respawn, and survival UI
 - [ ] kira audio, placeholder sounds, settings screen, and remappable keybinds
 
 #### 4. Persistence and acceptance (`0.0.10.6`)
@@ -404,6 +404,10 @@ library tests pass, plus the integration suites. The recipe table validates twel
 tagged, mirrored, station-gated, first-match, direct-craft, grid-craft, full-inventory rollback,
 salvage, and transient-grid return paths are covered headlessly. The terrain golden file and the
 pinned content hashes were regenerated for the three new block records.
+
+**Measured after the `0.0.10.4.3` survival UI:** 536 engine library tests and 411 terrain-core
+library tests pass. The HUD health/stamina/air bars, damage flash, pause and death screens, resume,
+respawn, and save-and-quit paths are covered headlessly.
 
 **Measured after the `0.0.10.4.2` survival damage:** 532 engine library tests and 411 terrain-core
 library tests pass. Fall damage, drowning intervals, lava/fire hooks, sprint and jump stamina,
